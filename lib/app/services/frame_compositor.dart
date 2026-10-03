@@ -40,7 +40,8 @@ class FrameCompositor {
     }
   }
 
-  /// Places [src] into [w]x[h] canvas with [bgArgb], cover-fit.
+  /// Places [src] into [w]x[h] canvas with [bgArgb], contain-fit
+  /// (full photo visible; letterbox/pillarbox with background).
   static img.Image placeOnCanvas({
     required img.Image src,
     required int w,
@@ -57,12 +58,17 @@ class FrameCompositor {
       color: img.ColorRgba8(r, g, b, a == 0 ? 255 : a),
     );
 
-    final scale = (w / src.width > h / src.height)
+    final scale = (w / src.width < h / src.height)
         ? w / src.width
         : h / src.height;
-    final nw = (src.width * scale).round();
-    final nh = (src.height * scale).round();
-    final resized = img.copyResize(src, width: nw, height: nh);
+    final nw = (src.width * scale).round().clamp(1, w * 2);
+    final nh = (src.height * scale).round().clamp(1, h * 2);
+    final resized = img.copyResize(
+      src,
+      width: nw,
+      height: nh,
+      interpolation: img.Interpolation.linear,
+    );
     final dx = ((w - nw) / 2).round();
     final dy = ((h - nh) / 2).round();
     img.compositeImage(canvas, resized, dstX: dx, dstY: dy);

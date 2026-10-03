@@ -113,7 +113,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                 if (bytes != null) {
                                   return Image.memory(
                                     bytes,
-                                    fit: BoxFit.cover,
+                                    fit: BoxFit.contain,
                                     gaplessPlayback: true,
                                     filterQuality: FilterQuality.low,
                                   );
@@ -121,7 +121,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                 if (project.photos.isNotEmpty) {
                                   return Image.file(
                                     File(project.photos.first.path),
-                                    fit: BoxFit.cover,
+                                    fit: BoxFit.contain,
                                     gaplessPlayback: true,
                                   );
                                 }

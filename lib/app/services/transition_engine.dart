@@ -341,7 +341,12 @@ class TransitionEngine {
     return Uint8List.fromList(img.encodeJpg(image, quality: quality));
   }
 
-  static img.Image? decode(Uint8List bytes) => img.decodeImage(bytes);
+  static img.Image? decode(Uint8List bytes) {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return null;
+    // Apply EXIF orientation so phone photos show upright and full.
+    return img.bakeOrientation(decoded);
+  }
 
   static img.Image coverCrop(img.Image src, int w, int h) {
     final scale = math.max(w / src.width, h / src.height);
