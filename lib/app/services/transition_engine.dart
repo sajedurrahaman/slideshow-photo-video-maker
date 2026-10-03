@@ -18,6 +18,7 @@ class TransitionEngine {
     int gridCols = 12,
     int gridRows = 20,
     bool reverseDiagonal = false,
+    bool topToBottom = false,
   }) {
     final p = progress.clamp(0.0, 1.0);
     final a = _ensureSameSize(from, to.width, to.height);
@@ -32,9 +33,11 @@ class TransitionEngine {
       case SlideTransitionType.filterColor:
         return _crossfade(a, b, p);
       case SlideTransitionType.erase:
-        return _wipe(a, b, p, horizontal: true);
+        // Native MaskBitmap3D.eraseDraw (EFFECT.Erase) — soft-edge L→R wipe.
+        return _softEraseWipe(a, b, p);
       case SlideTransitionType.eraseSlide:
-        return _wipe(a, b, p, horizontal: false);
+        // Erase_Slide: same wipe direction family, hard edge (no feather).
+        return _wipe(a, b, p, horizontal: true);
       case SlideTransitionType.pixelEffect:
         return _diamondDissolve(
           a,
@@ -43,6 +46,7 @@ class TransitionEngine {
           cols: gridCols,
           rows: gridRows,
           reverseDiagonal: reverseDiagonal,
+          topToBottom: topToBottom,
         );
       case SlideTransitionType.bar:
       case SlideTransitionType.jalousie:
@@ -67,6 +71,9 @@ class TransitionEngine {
         return _wipe(a, b, p, horizontal: false, curved: true);
       case SlideTransitionType.tiltDrift:
         return _tiltDrift(a, b, p);
+      case SlideTransitionType.whole3dTb:
+        // Native drawRollWhole3D vertical (TB/BT) — CPU perspective approx.
+        return _whole3dTb(a, b, p);
     }
   }
 
@@ -115,8 +122,41 @@ class TransitionEngine {
     return out;
   }
 
-  /// Diamond/pixel dissolve: cells grow from a corner diagonally
-  /// (matches UI DiamondClipper — bottom-left → top-right by default).
+  /// Native Erase: full new image, keep old from wipeX→right, soft feather band
+  /// of width ≈ VIDEO_WIDTH/8 before the wipe line (LinearGradient-like blend).
+  static img.Image _softEraseWipe(img.Image oldImg, img.Image newImg, double progress) {
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image.from(newImg);
+    final wipeX = (w * progress).round().clamp(0, w);
+    final feather = math.max(1, w ~/ 8);
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        if (x >= wipeX) {
+          final c = oldImg.getPixel(x, y);
+          out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        } else if (wipeX > 0 && x >= wipeX - feather) {
+          // Soft edge: old fades out toward wipe line (transparent→opaque on old).
+          final t = ((wipeX - x) / feather).clamp(0.0, 1.0);
+          final oc = oldImg.getPixel(x, y);
+          final nc = newImg.getPixel(x, y);
+          out.setPixelRgba(
+            x,
+            y,
+            (oc.r * t + nc.r * (1 - t)).round(),
+            (oc.g * t + nc.g * (1 - t)).round(),
+            (oc.b * t + nc.b * (1 - t)).round(),
+            255,
+          );
+        }
+        // else: already new image from Image.from(newImg)
+      }
+    }
+    return out;
+  }
+
+  /// Diamond/pixel dissolve: cells grow from a corner / edge.
   static img.Image _diamondDissolve(
     img.Image a,
     img.Image b,
@@ -124,19 +164,23 @@ class TransitionEngine {
     int cols = 12,
     int rows = 20,
     bool reverseDiagonal = false,
+    bool topToBottom = false,
   }) {
     final out = img.Image(width: a.width, height: a.height, numChannels: 4);
     final cw = a.width / cols;
     final ch = a.height / rows;
     final maxD = (cols + rows - 2).toDouble().clamp(1, 9999);
+    final rowMax = math.max(1, rows - 1).toDouble();
 
     for (var y = 0; y < a.height; y++) {
       for (var x = 0; x < a.width; x++) {
         final c = (x / cw).floor().clamp(0, cols - 1);
         final r = (y / ch).floor().clamp(0, rows - 1);
-        final delay = reverseDiagonal
-            ? ((cols - 1 - c) + r) / maxD
-            : (c + (rows - 1 - r)) / maxD;
+        final delay = topToBottom
+            ? r / rowMax // top rows first → bottom
+            : reverseDiagonal
+                ? ((cols - 1 - c) + r) / maxD
+                : (c + (rows - 1 - r)) / maxD;
         final cellP = ((t - delay * 0.6) / 0.4).clamp(0.0, 1.0);
 
         var useB = false;
@@ -283,6 +327,87 @@ class TransitionEngine {
         }
       }
     }
+    return out;
+  }
+
+  /// Whole3D_TB approx (native Camera.rotateX fold).
+  /// Old face bottom-aligned + foreshorten; new face top-aligned + grow.
+  static img.Image _whole3dTb(img.Image oldImg, img.Image newImg, double p) {
+    if (p <= 0.001) return img.Image.from(oldImg);
+    if (p >= 0.999) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image(width: w, height: h, numChannels: 4);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        out.setPixelRgba(x, y, 0, 0, 0, 255);
+      }
+    }
+
+    final angle = p * (math.pi / 2); // 0° → 90°
+    final cosA = math.cos(angle).clamp(0.02, 1.0); // outgoing scale
+    final sinA = math.sin(angle).clamp(0.02, 1.0); // incoming scale
+    const persp = 0.55;
+
+    void blitFace({
+      required img.Image src,
+      required int y0,
+      required int faceH,
+      required double shade,
+      required bool taperTop, // true = narrow at top (far edge)
+      required double edgeOn, // 0 flat … 1 edge-on → more taper
+    }) {
+      if (faceH < 1) return;
+      for (var y = y0; y < y0 + faceH && y < h; y++) {
+        if (y < 0) continue;
+        final v = ((y - y0) / faceH).clamp(0.0, 1.0);
+        final sy = (v * (h - 1)).round().clamp(0, h - 1);
+        final far = taperTop ? (1.0 - v) : v;
+        final taper = 1.0 - far * persp * edgeOn;
+        final drawW = (w * taper).clamp(1.0, w.toDouble());
+        final x0 = ((w - drawW) / 2).round();
+        final x1 = (x0 + drawW).round().clamp(x0 + 1, w);
+        final span = (x1 - x0).clamp(1, w);
+        for (var x = x0; x < x1; x++) {
+          if (x < 0 || x >= w) continue;
+          final u = ((x - x0) / span).clamp(0.0, 1.0);
+          final sx = (u * (w - 1)).round().clamp(0, w - 1);
+          final c = src.getPixel(sx, sy);
+          out.setPixelRgba(
+            x,
+            y,
+            (c.r.toInt() * shade).round().clamp(0, 255),
+            (c.g.toInt() * shade).round().clamp(0, 255),
+            (c.b.toInt() * shade).round().clamp(0, 255),
+            255,
+          );
+        }
+      }
+    }
+
+    // Outgoing (old): bottom-aligned, folds back (top becomes trapezoid).
+    final oldH = (h * cosA).round().clamp(1, h);
+    blitFace(
+      src: oldImg,
+      y0: h - oldH,
+      faceH: oldH,
+      shade: 0.62 + 0.38 * cosA,
+      taperTop: true,
+      edgeOn: math.sin(angle),
+    );
+
+    // Incoming (new): top-aligned, swings forward from top.
+    final newH = (h * sinA).round().clamp(1, h);
+    blitFace(
+      src: newImg,
+      y0: 0,
+      faceH: newH,
+      shade: 0.62 + 0.38 * sinA,
+      taperTop: true,
+      edgeOn: math.cos(angle),
+    );
+
     return out;
   }
 

@@ -331,6 +331,7 @@ class SlideshowProject extends ChangeNotifier {
           gridCols: option.gridCols,
           gridRows: option.gridRows,
           reverseDiagonal: option.reverseDiagonal,
+          topToBottom: option.topToBottom,
         );
         await pushFrame(blended);
       }
@@ -565,6 +566,7 @@ class SlideshowProject extends ChangeNotifier {
             gridCols: option.gridCols,
             gridRows: option.gridRows,
             reverseDiagonal: option.reverseDiagonal,
+            topToBottom: option.topToBottom,
           );
           await writeFrame(blended);
           processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);

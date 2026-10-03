@@ -21,6 +21,8 @@ enum SlideTransitionType {
   jalousie,
   zoomIn,
   zoomOut,
+  /// Native Whole3D_TB / Whole3D_BT — vertical 3D fold on X axis.
+  whole3dTb,
 }
 
 class SlideTheme {
@@ -49,6 +51,8 @@ class SlideTransitionOption {
   final int gridCols;
   final int gridRows;
   final bool reverseDiagonal;
+  /// If true, diamonds reveal top → bottom (ignores diagonal flags).
+  final bool topToBottom;
 
   const SlideTransitionOption({
     required this.id,
@@ -57,6 +61,7 @@ class SlideTransitionOption {
     this.gridCols = 12,
     this.gridRows = 20,
     this.reverseDiagonal = false,
+    this.topToBottom = false,
   });
 
   bool get isNone => type == SlideTransitionType.none;
@@ -64,20 +69,23 @@ class SlideTransitionOption {
   /// Serial: None → slide_01 … slide_08 (do not reorder).
   static const List<SlideTransitionOption> all = [
     SlideTransitionOption(id: 'none', type: SlideTransitionType.none),
+    // Blue mark: same dissolve green used to show (dense reverse diagonal).
     SlideTransitionOption(
       id: 'slide_01',
       assetPath: 'assets/images/editor/transitions/slide_01.png',
       type: SlideTransitionType.pixelEffect,
-      gridCols: 12,
-      gridRows: 20,
+      gridCols: 16,
+      gridRows: 26,
+      reverseDiagonal: true,
     ),
+    // Green mark: same diamond style, but top → bottom.
     SlideTransitionOption(
       id: 'slide_02',
       assetPath: 'assets/images/editor/transitions/slide_02.png',
       type: SlideTransitionType.pixelEffect,
       gridCols: 16,
       gridRows: 26,
-      reverseDiagonal: true,
+      topToBottom: true,
     ),
     SlideTransitionOption(
       id: 'slide_03',
@@ -87,7 +95,7 @@ class SlideTransitionOption {
     SlideTransitionOption(
       id: 'slide_04',
       assetPath: 'assets/images/editor/transitions/slide_04.png',
-      type: SlideTransitionType.flipPageRight,
+      type: SlideTransitionType.whole3dTb,
     ),
     SlideTransitionOption(
       id: 'slide_05',
