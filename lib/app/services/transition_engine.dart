@@ -72,8 +72,11 @@ class TransitionEngine {
       case SlideTransitionType.tiltDrift:
         return _tiltDrift(a, b, p);
       case SlideTransitionType.whole3dTb:
-        // Native drawRollWhole3D vertical (TB/BT) — CPU perspective approx.
-        return _whole3dTb(a, b, p);
+        // Native drawRollWhole3D vertical TB — new swings in from top.
+        return _whole3dFold(a, b, p, bottomToTop: false);
+      case SlideTransitionType.whole3dBt:
+        // Exact opposite of TB — new swings in from bottom.
+        return _whole3dFold(a, b, p, bottomToTop: true);
     }
   }
 
@@ -330,9 +333,14 @@ class TransitionEngine {
     return out;
   }
 
-  /// Whole3D_TB approx (native Camera.rotateX fold).
-  /// Old face bottom-aligned + foreshorten; new face top-aligned + grow.
-  static img.Image _whole3dTb(img.Image oldImg, img.Image newImg, double p) {
+  /// Whole3D vertical fold (native Camera.rotateX).
+  /// [bottomToTop] false = TB (green): new from top; true = BT (blue): opposite.
+  static img.Image _whole3dFold(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    required bool bottomToTop,
+  }) {
     if (p <= 0.001) return img.Image.from(oldImg);
     if (p >= 0.999) return img.Image.from(newImg);
 
@@ -355,8 +363,8 @@ class TransitionEngine {
       required int y0,
       required int faceH,
       required double shade,
-      required bool taperTop, // true = narrow at top (far edge)
-      required double edgeOn, // 0 flat … 1 edge-on → more taper
+      required bool taperTop,
+      required double edgeOn,
     }) {
       if (faceH < 1) return;
       for (var y = y0; y < y0 + faceH && y < h; y++) {
@@ -386,27 +394,46 @@ class TransitionEngine {
       }
     }
 
-    // Outgoing (old): bottom-aligned, folds back (top becomes trapezoid).
     final oldH = (h * cosA).round().clamp(1, h);
-    blitFace(
-      src: oldImg,
-      y0: h - oldH,
-      faceH: oldH,
-      shade: 0.62 + 0.38 * cosA,
-      taperTop: true,
-      edgeOn: math.sin(angle),
-    );
-
-    // Incoming (new): top-aligned, swings forward from top.
     final newH = (h * sinA).round().clamp(1, h);
-    blitFace(
-      src: newImg,
-      y0: 0,
-      faceH: newH,
-      shade: 0.62 + 0.38 * sinA,
-      taperTop: true,
-      edgeOn: math.cos(angle),
-    );
+
+    if (!bottomToTop) {
+      // TB (green): old bottom-aligned; new from top.
+      blitFace(
+        src: oldImg,
+        y0: h - oldH,
+        faceH: oldH,
+        shade: 0.62 + 0.38 * cosA,
+        taperTop: true,
+        edgeOn: math.sin(angle),
+      );
+      blitFace(
+        src: newImg,
+        y0: 0,
+        faceH: newH,
+        shade: 0.62 + 0.38 * sinA,
+        taperTop: true,
+        edgeOn: math.cos(angle),
+      );
+    } else {
+      // BT (blue): exact opposite — old top-aligned; new from bottom.
+      blitFace(
+        src: oldImg,
+        y0: 0,
+        faceH: oldH,
+        shade: 0.62 + 0.38 * cosA,
+        taperTop: false, // far edge at bottom
+        edgeOn: math.sin(angle),
+      );
+      blitFace(
+        src: newImg,
+        y0: h - newH,
+        faceH: newH,
+        shade: 0.62 + 0.38 * sinA,
+        taperTop: false,
+        edgeOn: math.cos(angle),
+      );
+    }
 
     return out;
   }

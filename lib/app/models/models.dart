@@ -21,8 +21,10 @@ enum SlideTransitionType {
   jalousie,
   zoomIn,
   zoomOut,
-  /// Native Whole3D_TB / Whole3D_BT — vertical 3D fold on X axis.
+  /// Native Whole3D_TB — vertical 3D fold (new from top).
   whole3dTb,
+  /// Native Whole3D_BT — opposite of TB (new from bottom).
+  whole3dBt,
 }
 
 class SlideTheme {
@@ -100,7 +102,7 @@ class SlideTransitionOption {
     SlideTransitionOption(
       id: 'slide_05',
       assetPath: 'assets/images/editor/transitions/slide_05.png',
-      type: SlideTransitionType.tiltDrift,
+      type: SlideTransitionType.whole3dBt,
     ),
     SlideTransitionOption(
       id: 'slide_06',
