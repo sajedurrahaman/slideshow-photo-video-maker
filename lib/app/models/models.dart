@@ -6,13 +6,25 @@ enum SlideTransitionType {
   erase,
   eraseSlide,
   pixelEffect,
+
+  /// Random mosaic / scattered square dissolve (slide_11 icon).
+  pixelScatter,
+
+  /// Ordered solid grid-cell dissolve (slide_12 icon).
+  pixelGrid,
   bar,
   crossMerge,
   rectZoomIn,
   rectZoomOut,
+
+  /// Concentric center Rect_Zoom_In (NEW border-in, shrinking OLD hole).
+  rectZoomCenter,
   crossShutter,
   rowSplit,
   colSplit,
+
+  /// slide_07: Row_Split + Col_Split together — 4 OLD panes, center cross NEW.
+  rowColSplit,
   flipPageRight,
   dipToColor,
   filterColor,
@@ -21,8 +33,10 @@ enum SlideTransitionType {
   jalousie,
   zoomIn,
   zoomOut,
+
   /// Native Whole3D_TB — vertical 3D fold (new from top).
   whole3dTb,
+
   /// Native Whole3D_BT — opposite of TB (new from bottom).
   whole3dBt,
 }
@@ -53,8 +67,13 @@ class SlideTransitionOption {
   final int gridCols;
   final int gridRows;
   final bool reverseDiagonal;
+
   /// If true, diamonds reveal top → bottom (ignores diagonal flags).
   final bool topToBottom;
+
+  /// rowColSplit hinge (0–1). Icon/green-circle ≈ bottom-right.
+  final double pivotNx;
+  final double pivotNy;
 
   const SlideTransitionOption({
     required this.id,
@@ -64,11 +83,13 @@ class SlideTransitionOption {
     this.gridRows = 20,
     this.reverseDiagonal = false,
     this.topToBottom = false,
+    this.pivotNx = 0.5,
+    this.pivotNy = 0.5,
   });
 
   bool get isNone => type == SlideTransitionType.none;
 
-  /// Serial: None → slide_01 … slide_08 (do not reorder).
+  /// Serial picker order: None → slide_01 … (do not reorder casually).
   static const List<SlideTransitionOption> all = [
     SlideTransitionOption(id: 'none', type: SlideTransitionType.none),
     // Blue mark: same dissolve green used to show (dense reverse diagonal).
@@ -104,20 +125,53 @@ class SlideTransitionOption {
       assetPath: 'assets/images/editor/transitions/slide_05.png',
       type: SlideTransitionType.whole3dBt,
     ),
+    // Nested square bottom-right → NEW expands from BR over OLD.
     SlideTransitionOption(
       id: 'slide_06',
       assetPath: 'assets/images/editor/transitions/slide_06.png',
       type: SlideTransitionType.rectZoomIn,
     ),
+    // Concentric nested squares (center iris) — previous center Rect_Zoom_In.
+    SlideTransitionOption(
+      id: 'slide_09',
+      assetPath: 'assets/images/editor/transitions/slide_09.png',
+      type: SlideTransitionType.rectZoomCenter,
+    ),
+    // 4-pane grid icon — splits meet at bottom-right hinge (green circle).
     SlideTransitionOption(
       id: 'slide_07',
       assetPath: 'assets/images/editor/transitions/slide_07.png',
-      type: SlideTransitionType.crossMerge,
+      type: SlideTransitionType.rowColSplit,
+      pivotNx: 0.72,
+      pivotNy: 0.68,
     ),
+    // Vertical columns — wipe right → left.
     SlideTransitionOption(
       id: 'slide_08',
       assetPath: 'assets/images/editor/transitions/slide_08.png',
       type: SlideTransitionType.jalousie,
+    ),
+    // Horizontal bars / blinds — wipe top → bottom.
+    SlideTransitionOption(
+      id: 'slide_10',
+      assetPath: 'assets/images/editor/transitions/slide_10.png',
+      type: SlideTransitionType.bar,
+    ),
+    // Scattered square mosaic dissolve.
+    SlideTransitionOption(
+      id: 'slide_11',
+      assetPath: 'assets/images/editor/transitions/slide_11.png',
+      type: SlideTransitionType.pixelScatter,
+      gridCols: 22,
+      gridRows: 22,
+    ),
+    // Uniform grid cells — slice + BR→TL mosaic (native ClipCraft).
+    SlideTransitionOption(
+      id: 'slide_12',
+      assetPath: 'assets/images/editor/transitions/slide_12.png',
+      type: SlideTransitionType.pixelGrid,
+      gridCols: 8,
+      gridRows: 8,
     ),
   ];
 }

@@ -19,6 +19,8 @@ class TransitionEngine {
     int gridRows = 20,
     bool reverseDiagonal = false,
     bool topToBottom = false,
+    double pivotNx = 0.5,
+    double pivotNy = 0.5,
   }) {
     final p = progress.clamp(0.0, 1.0);
     final a = _ensureSameSize(from, to.width, to.height);
@@ -48,17 +50,35 @@ class TransitionEngine {
           reverseDiagonal: reverseDiagonal,
           topToBottom: topToBottom,
         );
+      case SlideTransitionType.pixelScatter:
+        // Scattered mosaic squares (slide_11 icon).
+        return _randomPixelDissolve(a, b, p, cols: gridCols, rows: gridRows);
+      case SlideTransitionType.pixelGrid:
+        // Uniform grid cells (slide_12 icon) — solid squares, diagonal order.
+        return _gridDissolve(a, b, p, cols: gridCols, rows: gridRows);
       case SlideTransitionType.bar:
+        // Horizontal blinds (top → bottom within each row strip).
+        return _blinds(a, b, p, verticalStrips: false, rightToLeft: false);
       case SlideTransitionType.jalousie:
-        return _blinds(a, b, p, horizontal: true);
+        // Icon: vertical columns — wipe right → left (not top → bottom).
+        return _blinds(a, b, p, verticalStrips: true, rightToLeft: true);
       case SlideTransitionType.crossMerge:
         return _crossMerge(a, b, p);
+      case SlideTransitionType.rowColSplit:
+        // Hinge at (pivotNx, pivotNy) — lines start together then split apart.
+        return _rowColSplit(a, b, p, pivotNx: pivotNx, pivotNy: pivotNy);
       case SlideTransitionType.rectZoomIn:
+        // Green-mark / slide_06: NEW expands from bottom-right over OLD.
+        return _cornerExpandBr(a, b, p);
+      case SlideTransitionType.rectZoomCenter:
       case SlideTransitionType.zoomIn:
-        return _zoom(a, b, p, zoomIn: true);
+        // Concentric icon / slide_09: NEW from border inward; center hole = shrinking OLD.
+        return _rectZoom(a, b, p, zoomIn: true);
       case SlideTransitionType.rectZoomOut:
+        // Center NEW rect grows; OLD zooms out behind.
+        return _rectZoom(a, b, p, zoomIn: false);
       case SlideTransitionType.zoomOut:
-        return _zoom(a, b, p, zoomIn: false);
+        return _rectZoom(a, b, p, zoomIn: false);
       case SlideTransitionType.crossShutter:
         return _crossShutter(a, b, p);
       case SlideTransitionType.rowSplit:
@@ -82,7 +102,12 @@ class TransitionEngine {
 
   static img.Image _ensureSameSize(img.Image src, int w, int h) {
     if (src.width == w && src.height == h) return src;
-    return img.copyResize(src, width: w, height: h, interpolation: img.Interpolation.linear);
+    return img.copyResize(
+      src,
+      width: w,
+      height: h,
+      interpolation: img.Interpolation.linear,
+    );
   }
 
   static img.Image _crossfade(img.Image a, img.Image b, double p) {
@@ -104,7 +129,13 @@ class TransitionEngine {
     return out;
   }
 
-  static img.Image _wipe(img.Image a, img.Image b, double p, {required bool horizontal, bool curved = false}) {
+  static img.Image _wipe(
+    img.Image a,
+    img.Image b,
+    double p, {
+    required bool horizontal,
+    bool curved = false,
+  }) {
     final out = img.Image(width: a.width, height: a.height, numChannels: 4);
     for (var y = 0; y < a.height; y++) {
       for (var x = 0; x < a.width; x++) {
@@ -127,7 +158,11 @@ class TransitionEngine {
 
   /// Native Erase: full new image, keep old from wipeX→right, soft feather band
   /// of width ≈ VIDEO_WIDTH/8 before the wipe line (LinearGradient-like blend).
-  static img.Image _softEraseWipe(img.Image oldImg, img.Image newImg, double progress) {
+  static img.Image _softEraseWipe(
+    img.Image oldImg,
+    img.Image newImg,
+    double progress,
+  ) {
     final w = oldImg.width;
     final h = oldImg.height;
     final out = img.Image.from(newImg);
@@ -180,10 +215,11 @@ class TransitionEngine {
         final c = (x / cw).floor().clamp(0, cols - 1);
         final r = (y / ch).floor().clamp(0, rows - 1);
         final delay = topToBottom
-            ? r / rowMax // top rows first → bottom
+            ? r /
+                  rowMax // top rows first → bottom
             : reverseDiagonal
-                ? ((cols - 1 - c) + r) / maxD
-                : (c + (rows - 1 - r)) / maxD;
+            ? ((cols - 1 - c) + r) / maxD
+            : (c + (rows - 1 - r)) / maxD;
         final cellP = ((t - delay * 0.6) / 0.4).clamp(0.0, 1.0);
 
         var useB = false;
@@ -196,6 +232,87 @@ class TransitionEngine {
           useB = ((x - cx).abs() / hw) + ((y - cy).abs() / hh) <= 1.0;
         }
 
+        final px = useB ? b.getPixel(x, y) : a.getPixel(x, y);
+        out.setPixelRgba(x, y, px.r.toInt(), px.g.toInt(), px.b.toInt(), 255);
+      }
+    }
+    return out;
+  }
+
+  /// Random mosaic dissolve — cells flip in pseudo-random order.
+  static img.Image _randomPixelDissolve(
+    img.Image a,
+    img.Image b,
+    double t, {
+    int cols = 22,
+    int rows = 22,
+  }) {
+    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final cw = a.width / cols;
+    final ch = a.height / rows;
+
+    for (var y = 0; y < a.height; y++) {
+      for (var x = 0; x < a.width; x++) {
+        final c = (x / cw).floor().clamp(0, cols - 1);
+        final r = (y / ch).floor().clamp(0, rows - 1);
+        // Deterministic 0..1 threshold per cell (stable across frames).
+        final hash =
+            ((c * 73856093) ^ (r * 19349663) ^ (c * r * 83492791)) & 0x7fffffff;
+        final thresh = (hash % 10000) / 10000.0;
+        final useB = t >= thresh;
+        final px = useB ? b.getPixel(x, y) : a.getPixel(x, y);
+        out.setPixelRgba(x, y, px.r.toInt(), px.g.toInt(), px.b.toInt(), 255);
+      }
+    }
+    return out;
+  }
+
+  /// Grid mosaic (slide_12) — matches native ClipCraft preview/video:
+  /// 1) Image slices into a grid with dark gaps
+  /// 2) Solid cells flip OLD→NEW from bottom-right → top-left
+  /// 3) Gaps close at the end
+  static img.Image _gridDissolve(
+    img.Image a,
+    img.Image b,
+    double t, {
+    int cols = 8,
+    int rows = 8,
+  }) {
+    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final cw = a.width / cols;
+    final ch = a.height / rows;
+    final maxD = (cols + rows - 2).toDouble().clamp(1, 9999);
+
+    // Gap opens quickly, stays through mid, closes at end.
+    final gapOpen = (t / 0.18).clamp(0.0, 1.0);
+    final gapClose = t > 0.82 ? (1.0 - (t - 0.82) / 0.18).clamp(0.0, 1.0) : 1.0;
+    final gapFrac = 0.14 * gapOpen * gapClose; // inset as fraction of cell
+    final gapX = cw * gapFrac * 0.5;
+    final gapY = ch * gapFrac * 0.5;
+
+    // Flip wave starts after initial slice; BR cells first.
+    final revealT = ((t - 0.12) / 0.78).clamp(0.0, 1.0);
+
+    for (var y = 0; y < a.height; y++) {
+      for (var x = 0; x < a.width; x++) {
+        final c = (x / cw).floor().clamp(0, cols - 1);
+        final r = (y / ch).floor().clamp(0, rows - 1);
+        final cellLeft = c * cw;
+        final cellTop = r * ch;
+
+        // Dark gutter between tiles (native sliced-grid look).
+        if (gapX > 0.5 &&
+            (x < cellLeft + gapX ||
+                x >= cellLeft + cw - gapX ||
+                y < cellTop + gapY ||
+                y >= cellTop + ch - gapY)) {
+          out.setPixelRgba(x, y, 12, 16, 28, 255);
+          continue;
+        }
+
+        // Bottom-right → top-left stagger (matches reference video).
+        final delay = ((cols - 1 - c) + (rows - 1 - r)) / maxD;
+        final useB = revealT >= (delay * 0.88);
         final px = useB ? b.getPixel(x, y) : a.getPixel(x, y);
         out.setPixelRgba(
           x,
@@ -210,59 +327,244 @@ class TransitionEngine {
     return out;
   }
 
-  static img.Image _blinds(img.Image a, img.Image b, double p, {required bool horizontal}) {
+  /// Blinds / jalousie.
+  /// [verticalStrips] true = columns (slide_08 icon); false = horizontal rows.
+  /// [rightToLeft] wipe + stagger from the right.
+  static img.Image _blinds(
+    img.Image a,
+    img.Image b,
+    double p, {
+    required bool verticalStrips,
+    bool rightToLeft = false,
+  }) {
     final out = img.Image(width: a.width, height: a.height, numChannels: 4);
-    const strips = 10;
+    const strips = 8;
+    final stripSize = (verticalStrips ? a.width : a.height) / strips;
+
     for (var y = 0; y < a.height; y++) {
       for (var x = 0; x < a.width; x++) {
-        final strip = horizontal ? (y * strips ~/ a.height) : (x * strips ~/ a.width);
-        final local = horizontal
-            ? ((y % (a.height / strips)) / (a.height / strips))
-            : ((x % (a.width / strips)) / (a.width / strips));
-        final open = (p * 1.2 - strip * 0.03).clamp(0.0, 1.0);
-        final useB = local < open;
-        final c = useB ? b.getPixel(x, y) : a.getPixel(x, y);
+        final along = verticalStrips ? x : y;
+        final strip = (along / stripSize).floor().clamp(0, strips - 1);
+        final inStrip = (along - strip * stripSize) / stripSize;
+        final local = (verticalStrips && rightToLeft)
+            ? (1.0 - inStrip)
+            : inStrip;
+        final order = (verticalStrips && rightToLeft)
+            ? (strips - 1 - strip)
+            : strip;
+        final open = (p * 1.25 - order * 0.04).clamp(0.0, 1.0);
+        final c = (local < open) ? b.getPixel(x, y) : a.getPixel(x, y);
         out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
       }
     }
     return out;
   }
 
-  static img.Image _crossMerge(img.Image a, img.Image b, double p) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
-    final midX = a.width / 2;
-    final midY = a.height / 2;
-    final spreadX = midX * p;
-    final spreadY = midY * p;
-    for (var y = 0; y < a.height; y++) {
-      for (var x = 0; x < a.width; x++) {
-        final inCross = (x - midX).abs() < spreadX || (y - midY).abs() < spreadY;
-        final c = inCross ? b.getPixel(x, y) : a.getPixel(x, y);
+  /// Native Cross_Merge (MaskBitmap3D.barDraw) — matches reference video.
+  ///
+  /// 1) NEW full underneath
+  /// 2) OLD drawn on top with 4 growing corner holes (DST_OUT)
+  /// → corners reveal NEW; center “+” of OLD shrinks until gone
+  ///
+  /// Native size ≈ W * (0.025 * frame + 0.1), frame 0…21
+  static img.Image _crossMerge(img.Image oldImg, img.Image newImg, double p) {
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image.from(newImg);
+
+    final i = p * 21.0;
+    // Grow until corners meet past center (full cover).
+    var cw = (w * (0.025 * i + 0.1)).round();
+    var ch = (h * (0.025 * i + 0.1)).round();
+    // Ease last stretch so p→1 clears remaining OLD +
+    if (p > 0.85) {
+      final t = ((p - 0.85) / 0.15).clamp(0.0, 1.0);
+      cw = (cw + ((w / 2 + 2) - cw) * t).round();
+      ch = (ch + ((h / 2 + 2) - ch) * t).round();
+    }
+    cw = cw.clamp(0, w);
+    ch = ch.clamp(0, h);
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final inTl = x < cw && y < ch;
+        final inTr = x >= w - cw && y < ch;
+        final inBl = x < cw && y >= h - ch;
+        final inBr = x >= w - cw && y >= h - ch;
+        if (inTl || inTr || inBl || inBr) {
+          continue; // hole → NEW already in [out]
+        }
+        final c = oldImg.getPixel(x, y);
         out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
       }
     }
     return out;
   }
 
-  static img.Image _zoom(img.Image a, img.Image b, double p, {required bool zoomIn}) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
-    final scale = zoomIn ? (1.0 + p) : (2.0 - p);
-    final cx = a.width / 2.0;
-    final cy = a.height / 2.0;
-    for (var y = 0; y < a.height; y++) {
-      for (var x = 0; x < a.width; x++) {
-        final sx = ((x - cx) / scale + cx).round().clamp(0, a.width - 1);
-        final sy = ((y - cy) / scale + cy).round().clamp(0, a.height - 1);
-        final fromA = a.getPixel(sx, sy);
-        final toB = b.getPixel(x, y);
-        out.setPixelRgba(
-          x,
-          y,
-          _lerp(fromA.r.toInt(), toB.r.toInt(), p),
-          _lerp(fromA.g.toInt(), toB.g.toInt(), p),
-          _lerp(fromA.b.toInt(), toB.b.toInt(), p),
-          255,
-        );
+  /// Row + Col split with hinge at [pivotNx],[pivotNy] (0–1).
+  /// At p=0 both seams sit on the hinge (green-circle meet point);
+  /// as p→1 seams move to the four edges → NEW fills the expanding “+”.
+  static img.Image _rowColSplit(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    double pivotNx = 0.5,
+    double pivotNy = 0.5,
+  }) {
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image.from(newImg);
+
+    final px = (pivotNx.clamp(0.05, 0.95) * w);
+    final py = (pivotNy.clamp(0.05, 0.95) * h);
+
+    // Seams start together at hinge, then move apart to edges.
+    final leftEdge = (px * (1.0 - p)).round().clamp(0, w);
+    final rightEdge = (px + (w - px) * p).round().clamp(0, w);
+    final topEdge = (py * (1.0 - p)).round().clamp(0, h);
+    final bottomEdge = (py + (h - py) * p).round().clamp(0, h);
+
+    final slideXL = (px - leftEdge).round().clamp(0, w); // = px * p
+    final slideXR = (rightEdge - px).round().clamp(0, w); // = (w-px) * p
+    final slideYT = (py - topEdge).round().clamp(0, h);
+    final slideYB = (bottomEdge - py).round().clamp(0, h);
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final inVGap = x >= leftEdge && x < rightEdge;
+        final inHGap = y >= topEdge && y < bottomEdge;
+        if (inVGap || inHGap) continue; // NEW “+” around hinge
+
+        late final int sx;
+        late final int sy;
+        if (x < leftEdge && y < topEdge) {
+          sx = (x + slideXL).clamp(0, w - 1);
+          sy = (y + slideYT).clamp(0, h - 1);
+        } else if (x >= rightEdge && y < topEdge) {
+          sx = (x - slideXR).clamp(0, w - 1);
+          sy = (y + slideYT).clamp(0, h - 1);
+        } else if (x < leftEdge && y >= bottomEdge) {
+          sx = (x + slideXL).clamp(0, w - 1);
+          sy = (y - slideYB).clamp(0, h - 1);
+        } else {
+          sx = (x - slideXR).clamp(0, w - 1);
+          sy = (y - slideYB).clamp(0, h - 1);
+        }
+        final c = oldImg.getPixel(sx, sy);
+        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+      }
+    }
+    return out;
+  }
+
+  /// slide_06 / Zoom_In icon: NEW expands from bottom-right over OLD.
+  /// Mid-frame = small NEW square flush BR + L-shaped OLD (matches icon).
+  static img.Image _cornerExpandBr(
+    img.Image oldImg,
+    img.Image newImg,
+    double p,
+  ) {
+    final w = oldImg.width;
+    final h = oldImg.height;
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final out = img.Image.from(oldImg);
+    final rw = math.max(1, (w * p).round());
+    final rh = math.max(1, (h * p).round());
+    final left = w - rw;
+    final top = h - rh;
+
+    for (var y = top; y < h; y++) {
+      for (var x = left; x < w; x++) {
+        // Scale full NEW into the growing BR rect (picture-in-picture expand).
+        final u = (x - left) / rw;
+        final v = (y - top) / rh;
+        final sx = (u * (w - 1)).round().clamp(0, w - 1);
+        final sy = (v * (h - 1)).round().clamp(0, h - 1);
+        final c = newImg.getPixel(sx, sy);
+        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+      }
+    }
+    return out;
+  }
+
+  /// Native center Rect_Zoom_In / Rect_Zoom_Out.
+  /// In: NEW fills outside, center hole shows OLD shrinking (scale 1→0.7).
+  /// Out: OLD zooms out behind, center NEW rect grows 0→full.
+  static img.Image _rectZoom(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    required bool zoomIn,
+  }) {
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final cx = w / 2.0;
+    final cy = h / 2.0;
+    final out = img.Image(width: w, height: h, numChannels: 4);
+
+    if (zoomIn) {
+      // Native Rect_Zoom_In: scaleFactor = 1 - 0.014*i; hole ≈ (1-p)
+      final scale = (1.0 - 0.3 * p).clamp(0.2, 1.0);
+      final holeW = (w * (1.0 - p)).round().clamp(0, w);
+      final holeH = (h * (1.0 - p)).round().clamp(0, h);
+      final left = (w - holeW) ~/ 2;
+      final top = (h - holeH) ~/ 2;
+
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          final inHole =
+              holeW > 0 &&
+              holeH > 0 &&
+              x >= left &&
+              x < left + holeW &&
+              y >= top &&
+              y < top + holeH;
+          if (inHole) {
+            final sx = ((x - cx) / scale + cx).round().clamp(0, w - 1);
+            final sy = ((y - cy) / scale + cy).round().clamp(0, h - 1);
+            final c = oldImg.getPixel(sx, sy);
+            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          } else {
+            final c = newImg.getPixel(x, y);
+            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          }
+        }
+      }
+    } else {
+      // Native Rect_Zoom_Out: old scale 1+0.014*i; center NEW mask grows.
+      final scale = 1.0 + 0.3 * p;
+      final rw = (w * p).round().clamp(0, w);
+      final rh = (h * p).round().clamp(0, h);
+      final left = (w - rw) ~/ 2;
+      final top = (h - rh) ~/ 2;
+
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          final inRect =
+              rw > 0 &&
+              rh > 0 &&
+              x >= left &&
+              x < left + rw &&
+              y >= top &&
+              y < top + rh;
+          if (inRect) {
+            final c = newImg.getPixel(x, y);
+            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          } else {
+            final sx = ((x - cx) / scale + cx).round().clamp(0, w - 1);
+            final sy = ((y - cy) / scale + cy).round().clamp(0, h - 1);
+            final c = oldImg.getPixel(sx, sy);
+            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          }
+        }
       }
     }
     return out;
@@ -286,9 +588,16 @@ class TransitionEngine {
     return out;
   }
 
-  static img.Image _split(img.Image a, img.Image b, double p, {required bool rows}) {
+  static img.Image _split(
+    img.Image a,
+    img.Image b,
+    double p, {
+    required bool rows,
+  }) {
     final out = img.Image(width: a.width, height: a.height, numChannels: 4);
-    final offset = rows ? (a.height * p / 2).round() : (a.width * p / 2).round();
+    final offset = rows
+        ? (a.height * p / 2).round()
+        : (a.width * p / 2).round();
     for (var y = 0; y < a.height; y++) {
       for (var x = 0; x < a.width; x++) {
         img.Pixel c;
@@ -487,7 +796,8 @@ class TransitionEngine {
     return out;
   }
 
-  static int _lerp(int a, int b, double t) => (a + (b - a) * t).round().clamp(0, 255);
+  static int _lerp(int a, int b, double t) =>
+      (a + (b - a) * t).round().clamp(0, 255);
 
   static Uint8List encodeJpeg(img.Image image, {int quality = 85}) {
     return Uint8List.fromList(img.encodeJpg(image, quality: quality));
@@ -504,7 +814,12 @@ class TransitionEngine {
     final scale = math.max(w / src.width, h / src.height);
     final rw = math.max(1, (src.width * scale).round());
     final rh = math.max(1, (src.height * scale).round());
-    final resized = img.copyResize(src, width: rw, height: rh, interpolation: img.Interpolation.linear);
+    final resized = img.copyResize(
+      src,
+      width: rw,
+      height: rh,
+      interpolation: img.Interpolation.linear,
+    );
     final x = ((rw - w) / 2).round().clamp(0, math.max(0, rw - w)).toInt();
     final y = ((rh - h) / 2).round().clamp(0, math.max(0, rh - h)).toInt();
     return img.copyCrop(resized, x: x, y: y, width: w, height: h);
