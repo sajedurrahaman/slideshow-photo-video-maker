@@ -14,6 +14,8 @@ enum SlideTransitionType {
   pixelGrid,
   bar,
   crossMerge,
+  /// slide_15 ↑↓←→ — NEW cross opens from center outward (inverse of Cross_Merge).
+  crossOpen,
   rectZoomIn,
   rectZoomOut,
 
@@ -31,6 +33,12 @@ enum SlideTransitionType {
   curvedDown,
   tiltDrift,
   jalousie,
+  /// Native Jalousie_BT (ic_t_16) — 8 horizontal louvers, rotateX 0→180°.
+  jalousieBt,
+  /// Native Jalousie_LR (ic_t_18) — 8 vertical louvers, rotateY 0→180°.
+  jalousieLr,
+  /// Native RollInTurn_Down_Up (ic_t_19) — CoverFlow strip wave, rotateY.
+  rollInTurnLr,
   zoomIn,
   zoomOut,
 
@@ -172,6 +180,42 @@ class SlideTransitionOption {
       type: SlideTransitionType.pixelGrid,
       gridCols: 8,
       gridRows: 8,
+    ),
+    // Left/right doors open — sides push outward (native Col_Split).
+    SlideTransitionOption(
+      id: 'slide_13',
+      assetPath: 'assets/images/editor/transitions/slide_13.png',
+      type: SlideTransitionType.colSplit,
+    ),
+    // Top/bottom doors open — native Row_Split (ic_t_13).
+    SlideTransitionOption(
+      id: 'slide_14',
+      assetPath: 'assets/images/editor/transitions/slide_14.png',
+      type: SlideTransitionType.rowSplit,
+    ),
+    // 4-way ↑↓←→ — NEW opens from center outward (not meeting at center).
+    SlideTransitionOption(
+      id: 'slide_15',
+      assetPath: 'assets/images/editor/transitions/slide_15.png',
+      type: SlideTransitionType.crossOpen,
+    ),
+    // Horizontal louvers / Venetian blinds — native Jalousie_BT (ic_t_16).
+    SlideTransitionOption(
+      id: 'slide_16',
+      assetPath: 'assets/images/editor/transitions/slide_16.png',
+      type: SlideTransitionType.jalousieBt,
+    ),
+    // Vertical louvers — native Jalousie_LR (ic_t_18).
+    SlideTransitionOption(
+      id: 'slide_17',
+      assetPath: 'assets/images/editor/transitions/slide_17.png',
+      type: SlideTransitionType.jalousieLr,
+    ),
+    // CoverFlow / RollInTurn — strip-by-strip rotateY (ic_t_19).
+    SlideTransitionOption(
+      id: 'slide_18',
+      assetPath: 'assets/images/editor/transitions/slide_18.png',
+      type: SlideTransitionType.rollInTurnLr,
     ),
   ];
 }

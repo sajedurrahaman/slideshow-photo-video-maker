@@ -62,8 +62,20 @@ class TransitionEngine {
       case SlideTransitionType.jalousie:
         // Icon: vertical columns — wipe right → left (not top → bottom).
         return _blinds(a, b, p, verticalStrips: true, rightToLeft: true);
+      case SlideTransitionType.jalousieBt:
+        // Native Jalousie_BT — 8 horizontal strips, rotateX 0→180°.
+        return _jalousie3d(a, b, p, verticalSlats: false);
+      case SlideTransitionType.jalousieLr:
+        // Native Jalousie_LR — 8 vertical strips, rotateY 0→180°.
+        return _jalousie3d(a, b, p, verticalSlats: true);
+      case SlideTransitionType.rollInTurnLr:
+        // Native RollInTurn — CoverFlow strip wave, rotateY + i*30° delay.
+        return _rollInTurn(a, b, p, horizontalStrips: false);
       case SlideTransitionType.crossMerge:
         return _crossMerge(a, b, p);
+      case SlideTransitionType.crossOpen:
+        // Icon ↑↓←→: Col_Split + Row_Split — NEW cross grows center → out.
+        return _crossOpen(a, b, p);
       case SlideTransitionType.rowColSplit:
         // Hinge at (pivotNx, pivotNy) — lines start together then split apart.
         return _rowColSplit(a, b, p, pivotNx: pivotNx, pivotNy: pivotNy);
@@ -82,9 +94,11 @@ class TransitionEngine {
       case SlideTransitionType.crossShutter:
         return _crossShutter(a, b, p);
       case SlideTransitionType.rowSplit:
-        return _split(a, b, p, rows: true);
+        // Native Row_Split — same as Col_Split but top/bottom doors.
+        return _nativeDoorSplit(a, b, p, horizontal: false);
       case SlideTransitionType.colSplit:
-        return _split(a, b, p, rows: false);
+        // Native Col_Split (ic_t_12 / slide_13) — MaskBitmap3D.rowDraw.
+        return _nativeDoorSplit(a, b, p, horizontal: true);
       case SlideTransitionType.flipPageRight:
         return _flipPage(a, b, p);
       case SlideTransitionType.curvedDown:
@@ -360,6 +374,247 @@ class TransitionEngine {
     return out;
   }
 
+  /// Native Jalousie_BT / LR — 8 slats flip 0→180° (OLD face → NEW face).
+  /// [verticalSlats] false = horizontal louvers (rotateX / Jalousie_BT);
+  /// true = vertical columns (rotateY / Jalousie_LR).
+  static img.Image _jalousie3d(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    required bool verticalSlats,
+    int partNumber = 8,
+  }) {
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image(width: w, height: h, numChannels: 4);
+    // Gaps when edge-on → dark (matches native between-slat look).
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        out.setPixelRgba(x, y, 8, 8, 12, 255);
+      }
+    }
+
+    final angle = p * math.pi; // 0 → 180°
+    final showNew = angle >= math.pi / 2;
+    final rot = angle < math.pi / 2 ? angle : (math.pi - angle);
+    final scale = math.cos(rot).abs().clamp(0.02, 1.0);
+    final src = showNew ? newImg : oldImg;
+
+    if (!verticalSlats) {
+      // Horizontal louvers — foreshorten in Y (rotateX).
+      final stripH = h / partNumber;
+      for (var i = 0; i < partNumber; i++) {
+        final srcTop = (i * stripH).floor();
+        final srcBottom = ((i + 1) * stripH).floor().clamp(0, h);
+        final srcH = srcBottom - srcTop;
+        if (srcH <= 0) continue;
+
+        final midY = (srcTop + srcBottom) / 2.0;
+        final destH = math.max(1, (srcH * scale).round());
+        final destTop = (midY - destH / 2.0).round();
+
+        for (var dy = 0; dy < destH; dy++) {
+          final y = destTop + dy;
+          if (y < 0 || y >= h) continue;
+          final sy =
+              (srcTop + (dy / destH) * srcH).floor().clamp(srcTop, srcBottom - 1);
+          // Mild horizontal trapezoid squeeze toward strip edges (perspective).
+          final edge = (dy / math.max(1, destH - 1) - 0.5).abs() * 2.0;
+          final squeeze = 1.0 - (1.0 - scale) * 0.22 * edge;
+          final halfW = (w * squeeze) / 2.0;
+          final x0 = ((w / 2.0) - halfW).round();
+          final x1 = ((w / 2.0) + halfW).round();
+          for (var x = x0; x < x1; x++) {
+            if (x < 0 || x >= w) continue;
+            final sx = ((x - x0) / math.max(1, x1 - x0) * w)
+                .floor()
+                .clamp(0, w - 1);
+            final c = src.getPixel(sx, sy);
+            out.setPixelRgba(
+              x,
+              y,
+              c.r.toInt(),
+              c.g.toInt(),
+              c.b.toInt(),
+              255,
+            );
+          }
+        }
+      }
+    } else {
+      // Vertical slats — foreshorten in X (rotateY).
+      final stripW = w / partNumber;
+      for (var i = 0; i < partNumber; i++) {
+        final srcLeft = (i * stripW).floor();
+        final srcRight = ((i + 1) * stripW).floor().clamp(0, w);
+        final srcW = srcRight - srcLeft;
+        if (srcW <= 0) continue;
+
+        final midX = (srcLeft + srcRight) / 2.0;
+        final destW = math.max(1, (srcW * scale).round());
+        final destLeft = (midX - destW / 2.0).round();
+
+        for (var dx = 0; dx < destW; dx++) {
+          final x = destLeft + dx;
+          if (x < 0 || x >= w) continue;
+          final sx = (srcLeft + (dx / destW) * srcW)
+              .floor()
+              .clamp(srcLeft, srcRight - 1);
+          final edge = (dx / math.max(1, destW - 1) - 0.5).abs() * 2.0;
+          final squeeze = 1.0 - (1.0 - scale) * 0.22 * edge;
+          final halfH = (h * squeeze) / 2.0;
+          final y0 = ((h / 2.0) - halfH).round();
+          final y1 = ((h / 2.0) + halfH).round();
+          for (var y = y0; y < y1; y++) {
+            if (y < 0 || y >= h) continue;
+            final sy = ((y - y0) / math.max(1, y1 - y0) * h)
+                .floor()
+                .clamp(0, h - 1);
+            final c = src.getPixel(sx, sy);
+            out.setPixelRgba(
+              x,
+              y,
+              c.r.toInt(),
+              c.g.toInt(),
+              c.b.toInt(),
+              255,
+            );
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Native RollInTurn (MaskBitmap3D.drawRollInTurn) — CoverFlow strip wave.
+  /// [horizontalStrips] false = vertical strips / rotateY (ic_t_19 LR);
+  /// true = horizontal strips / rotateX (TB/BT).
+  ///
+  /// Each strip: tDegree = base − i·30°, clamped 0…90. Hinge on strip
+  /// leading edge; face flips OLD→NEW past 45°.
+  static img.Image _rollInTurn(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    required bool horizontalStrips,
+    int parts = 8,
+  }) {
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image(width: w, height: h, numChannels: 4);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        out.setPixelRgba(x, y, 8, 8, 12, 255);
+      }
+    }
+
+    // Span so last strip also reaches 90° when p→1.
+    final base = p * (90.0 + (parts - 1) * 30.0);
+
+    if (!horizontalStrips) {
+      final stripW = w / parts;
+      for (var i = 0; i < parts; i++) {
+        final deg = (base - i * 30.0).clamp(0.0, 90.0);
+        final showNew = deg >= 45.0;
+        final faceDeg = showNew ? (90.0 - deg) : deg;
+        final scale =
+            math.cos(faceDeg * math.pi / 180.0).abs().clamp(0.02, 1.0);
+        final src = showNew ? newImg : oldImg;
+
+        final srcLeft = (i * stripW).floor();
+        final srcRight = ((i + 1) * stripW).floor().clamp(0, w);
+        final srcW = srcRight - srcLeft;
+        if (srcW <= 0) continue;
+
+        final destW = math.max(1, (srcW * scale).round());
+        // Hinge = left edge of strip (CoverFlow swing away to the right).
+        final destLeft = srcLeft;
+
+        for (var dx = 0; dx < destW; dx++) {
+          final x = destLeft + dx;
+          if (x < 0 || x >= w) continue;
+          final sx = (srcLeft + (dx / destW) * srcW)
+              .floor()
+              .clamp(srcLeft, srcRight - 1);
+          // Mild vertical taper for perspective (icon trapezoid look).
+          final edge = (dx / math.max(1, destW - 1)).clamp(0.0, 1.0);
+          final squeeze = 1.0 - (1.0 - scale) * 0.18 * edge;
+          final halfH = (h * squeeze) / 2.0;
+          final y0 = ((h / 2.0) - halfH).round();
+          final y1 = ((h / 2.0) + halfH).round();
+          for (var y = y0; y < y1; y++) {
+            if (y < 0 || y >= h) continue;
+            final sy = ((y - y0) / math.max(1, y1 - y0) * h)
+                .floor()
+                .clamp(0, h - 1);
+            final c = src.getPixel(sx, sy);
+            out.setPixelRgba(
+              x,
+              y,
+              c.r.toInt(),
+              c.g.toInt(),
+              c.b.toInt(),
+              255,
+            );
+          }
+        }
+      }
+    } else {
+      final stripH = h / parts;
+      for (var i = 0; i < parts; i++) {
+        final deg = (base - i * 30.0).clamp(0.0, 90.0);
+        final showNew = deg >= 45.0;
+        final faceDeg = showNew ? (90.0 - deg) : deg;
+        final scale =
+            math.cos(faceDeg * math.pi / 180.0).abs().clamp(0.02, 1.0);
+        final src = showNew ? newImg : oldImg;
+
+        final srcTop = (i * stripH).floor();
+        final srcBottom = ((i + 1) * stripH).floor().clamp(0, h);
+        final srcH = srcBottom - srcTop;
+        if (srcH <= 0) continue;
+
+        final destH = math.max(1, (srcH * scale).round());
+        final destTop = srcTop; // hinge = top edge
+
+        for (var dy = 0; dy < destH; dy++) {
+          final y = destTop + dy;
+          if (y < 0 || y >= h) continue;
+          final sy = (srcTop + (dy / destH) * srcH)
+              .floor()
+              .clamp(srcTop, srcBottom - 1);
+          final edge = (dy / math.max(1, destH - 1)).clamp(0.0, 1.0);
+          final squeeze = 1.0 - (1.0 - scale) * 0.18 * edge;
+          final halfW = (w * squeeze) / 2.0;
+          final x0 = ((w / 2.0) - halfW).round();
+          final x1 = ((w / 2.0) + halfW).round();
+          for (var x = x0; x < x1; x++) {
+            if (x < 0 || x >= w) continue;
+            final sx = ((x - x0) / math.max(1, x1 - x0) * w)
+                .floor()
+                .clamp(0, w - 1);
+            final c = src.getPixel(sx, sy);
+            out.setPixelRgba(
+              x,
+              y,
+              c.r.toInt(),
+              c.g.toInt(),
+              c.b.toInt(),
+              255,
+            );
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /// Native Cross_Merge (MaskBitmap3D.barDraw) — matches reference video.
   ///
   /// 1) NEW full underneath
@@ -399,6 +654,36 @@ class TransitionEngine {
         }
         final c = oldImg.getPixel(x, y);
         out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+      }
+    }
+    return out;
+  }
+
+  /// slide_15 ↑↓←→ — Col_Split + Row_Split together (native door math).
+  /// NEW “+” opens from center outward; OLD retreats into the 4 corners.
+  static img.Image _crossOpen(img.Image oldImg, img.Image newImg, double p) {
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image.from(newImg); // NEW underneath
+    final i = p * 21.0;
+    final leftEdge = ((0.5 - 0.0238 * i) * w).round().clamp(0, w);
+    final rightEdge = ((0.5 + 0.0238 * i) * w).round().clamp(0, w);
+    final topEdge = ((0.5 - 0.0238 * i) * h).round().clamp(0, h);
+    final bottomEdge = ((0.5 + 0.0238 * i) * h).round().clamp(0, h);
+
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final inSideDoor = x < leftEdge || x >= rightEdge;
+        final inTopBottomDoor = y < topEdge || y >= bottomEdge;
+        // OLD only where both doors overlap = 4 corners.
+        if (inSideDoor && inTopBottomDoor) {
+          final c = oldImg.getPixel(x, y);
+          out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        }
+        // else keep NEW (center cross growing outward)
       }
     }
     return out;
@@ -570,6 +855,51 @@ class TransitionEngine {
     return out;
   }
 
+  /// Native Col_Split / Row_Split (MaskBitmap3D.rowDraw, frames i = 0…21).
+  ///
+  /// Full NEW underneath; OLD “doors” stay on the sides (or top/bottom) and
+  /// retreat as center gap grows: edge = 0.5 ± 0.0238·i.
+  /// [horizontal] true = Col_Split (left/right); false = Row_Split (top/bottom).
+  static img.Image _nativeDoorSplit(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    required bool horizontal,
+  }) {
+    if (p <= 0.0) return img.Image.from(oldImg);
+    if (p >= 1.0) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final out = img.Image.from(newImg); // NEW underneath
+    final i = p * 21.0;
+
+    if (horizontal) {
+      final leftEdge = ((0.5 - 0.0238 * i) * w).round().clamp(0, w);
+      final rightEdge = ((0.5 + 0.0238 * i) * w).round().clamp(0, w);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          if (x < leftEdge || x >= rightEdge) {
+            final c = oldImg.getPixel(x, y);
+            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          }
+        }
+      }
+    } else {
+      final topEdge = ((0.5 - 0.0238 * i) * h).round().clamp(0, h);
+      final bottomEdge = ((0.5 + 0.0238 * i) * h).round().clamp(0, h);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          if (y < topEdge || y >= bottomEdge) {
+            final c = oldImg.getPixel(x, y);
+            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   static img.Image _crossShutter(img.Image a, img.Image b, double p) {
     final out = img.Image(width: a.width, height: a.height, numChannels: 4);
     const cell = 24;
@@ -583,60 +913,6 @@ class TransitionEngine {
         final open = odd ? localX < p : localY < p;
         final c = open ? b.getPixel(x, y) : a.getPixel(x, y);
         out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
-      }
-    }
-    return out;
-  }
-
-  static img.Image _split(
-    img.Image a,
-    img.Image b,
-    double p, {
-    required bool rows,
-  }) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
-    final offset = rows
-        ? (a.height * p / 2).round()
-        : (a.width * p / 2).round();
-    for (var y = 0; y < a.height; y++) {
-      for (var x = 0; x < a.width; x++) {
-        img.Pixel c;
-        if (rows) {
-          if (y < a.height / 2) {
-            final sy = (y - offset).clamp(0, a.height - 1);
-            c = y - offset < 0 ? b.getPixel(x, y) : a.getPixel(x, sy);
-            if (p > 0.5 && y < offset) c = b.getPixel(x, y);
-          } else {
-            final sy = (y + offset).clamp(0, a.height - 1);
-            c = y + offset >= a.height ? b.getPixel(x, y) : a.getPixel(x, sy);
-            if (p > 0.5 && y >= a.height - offset) c = b.getPixel(x, y);
-          }
-        } else {
-          if (x < a.width / 2) {
-            final sx = (x - offset).clamp(0, a.width - 1);
-            c = x - offset < 0 ? b.getPixel(x, y) : a.getPixel(sx, y);
-            if (p > 0.5 && x < offset) c = b.getPixel(x, y);
-          } else {
-            final sx = (x + offset).clamp(0, a.width - 1);
-            c = x + offset >= a.width ? b.getPixel(x, y) : a.getPixel(sx, y);
-            if (p > 0.5 && x >= a.width - offset) c = b.getPixel(x, y);
-          }
-        }
-        // Soft blend toward B in second half
-        if (p > 0.55) {
-          final t = ((p - 0.55) / 0.45).clamp(0.0, 1.0);
-          final cb = b.getPixel(x, y);
-          out.setPixelRgba(
-            x,
-            y,
-            _lerp(c.r.toInt(), cb.r.toInt(), t),
-            _lerp(c.g.toInt(), cb.g.toInt(), t),
-            _lerp(c.b.toInt(), cb.b.toInt(), t),
-            255,
-          );
-        } else {
-          out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
-        }
       }
     }
     return out;
