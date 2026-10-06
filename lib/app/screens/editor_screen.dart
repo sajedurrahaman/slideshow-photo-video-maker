@@ -39,8 +39,11 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<SlideshowProject>().refreshLivePreview();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Let the editor paint first so Next→route is not blocked by decode.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!mounted) return;
+      await context.read<SlideshowProject>().refreshLivePreview();
     });
   }
 
@@ -65,6 +68,68 @@ class _EditorScreenState extends State<EditorScreen> {
     final m = (sec ~/ 60).toString().padLeft(2, '0');
     final s = (sec % 60).floor().toString().padLeft(2, '0');
     return '$m:$s';
+  }
+
+  Widget _timeText(SlideshowProject project) {
+    return ValueListenableBuilder<double>(
+      valueListenable: project.previewPositionListenable,
+      builder: (_, pos, _) => Text(
+        '${_fmt(pos)} / ${_fmt(project.estimatedDurationSec)}',
+        style: const TextStyle(
+          fontSize: 12,
+          color: AppColors.textMuted,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  /// Preview row shown inside SectionSheet for every tool.
+  Widget _previewRow(SlideshowProject project) {
+    final disabled = project.isProcessing || project.isPreparingPreview;
+    final isSlide = _tool == EditorTool.slide;
+
+    if (isSlide) {
+      return Row(
+        children: [
+          _timeText(project),
+          Expanded(
+            child: Center(
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                onPressed: disabled ? null : _preview,
+                icon: Icon(
+                  project.isPreviewPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+                iconSize: 32,
+                color: project.isPreviewReady ? Colors.black87 : Colors.black38,
+              ),
+            ),
+          ),
+          const SizedBox(width: 64),
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        _timeText(project),
+        const Spacer(),
+        IconButton(
+          onPressed: disabled ? null : _preview,
+          icon: Icon(
+            project.isPreviewPlaying
+                ? Icons.pause_circle_outline
+                : Icons.play_circle_outline,
+          ),
+          color: project.isPreviewReady
+              ? AppColors.primary
+              : AppColors.textMuted,
+        ),
+      ],
+    );
   }
 
   @override
@@ -94,14 +159,12 @@ class _EditorScreenState extends State<EditorScreen> {
         children: [
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
               child: Center(
                 child: AspectRatio(
                   aspectRatio: aspect,
                   child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                    ),
+                    decoration: const BoxDecoration(color: Colors.black),
                     child: ClipRRect(
                       child: Stack(
                         fit: StackFit.expand,
@@ -195,75 +258,7 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _tool == EditorTool.slide
-                ? Row(
-                    children: [
-                      ValueListenableBuilder<double>(
-                        valueListenable: project.previewPositionListenable,
-                        builder: (_, pos, _) => Text(
-                          '${_fmt(pos)} / ${_fmt(project.estimatedDurationSec)}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMuted,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Center(
-                          child: IconButton(
-                            onPressed: (project.isProcessing ||
-                                    project.isPreparingPreview)
-                                ? null
-                                : _preview,
-                            icon: Icon(
-                              project.isPreviewPlaying
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                            ),
-                            iconSize: 32,
-                            color: project.isPreviewReady
-                                ? Colors.black87
-                                : Colors.black38,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 64),
-                    ],
-                  )
-                : Row(
-                    children: [
-                      ValueListenableBuilder<double>(
-                        valueListenable: project.previewPositionListenable,
-                        builder: (_, pos, _) => Text(
-                          '${_fmt(pos)} / ${_fmt(project.estimatedDurationSec)}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMuted,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: (project.isProcessing ||
-                                project.isPreparingPreview)
-                            ? null
-                            : _preview,
-                        icon: Icon(
-                          project.isPreviewPlaying
-                              ? Icons.pause_circle_outline
-                              : Icons.play_circle_outline,
-                        ),
-                        color: project.isPreviewReady
-                            ? AppColors.primary
-                            : AppColors.textMuted,
-                      ),
-                    ],
-                  ),
-          ),
+
           // Thumbnail strip hidden while Slide tool is open (ref design).
           if (_tool != EditorTool.slide)
             SizedBox(
@@ -325,19 +320,15 @@ class _EditorScreenState extends State<EditorScreen> {
                 },
               ),
             ),
-          // Tool panel
-          if (_tool == EditorTool.slide)
-            _SlidePanel(
-              project: project,
-              onClose: () {},
-              onConfirm: () => project.refreshLivePreview(),
-            )
-          else
-            SectionSheet(
-              title: _toolLabel(_tool),
-              height: _panelHeight(_tool),
-              child: _buildPanel(project),
-            ),
+
+          // Tool panel (SectionSheet for every tool, including Slide)
+          SectionSheet(
+            title: _toolLabel(_tool),
+            height: 180,
+            headerRow: _previewRow(project),
+            child: _buildPanel(project),
+          ),
+
           // Bottom toolbar
           Container(
             height: 72,
@@ -376,12 +367,6 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
     );
   }
-
-  double _panelHeight(EditorTool tool) => switch (tool) {
-    EditorTool.text => 200,
-    EditorTool.starting || EditorTool.ending => 210,
-    _ => 160,
-  };
 
   String _toolLabel(EditorTool t) => switch (t) {
     EditorTool.slide => 'Slide',
@@ -427,7 +412,10 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Widget _buildPanel(SlideshowProject project) {
     return switch (_tool) {
-      EditorTool.slide => const SizedBox.shrink(),
+      EditorTool.slide => _SlideTransitions(
+        project: project,
+        onChanged: () => project.refreshLivePreview(),
+      ),
       EditorTool.text => _TextPanel(
         controller: _textController,
         project: project,
@@ -482,111 +470,48 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 }
 
-/// Figma-style Slide sheet: close / title / check + transition tiles.
-class _SlidePanel extends StatelessWidget {
-  const _SlidePanel({
-    required this.project,
-    required this.onClose,
-    required this.onConfirm,
-  });
+/// Slide tool content: horizontal list of transition tiles.
+class _SlideTransitions extends StatelessWidget {
+  const _SlideTransitions({required this.project, required this.onChanged});
 
   final SlideshowProject project;
-  final VoidCallback onClose;
-  final VoidCallback onConfirm;
+  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
     final options = SlideTransitionOption.all;
     final selectedId = project.selectedSlideTransition.id;
+    const accent = Color(0xFF4FC3F7);
 
-    return Container(
-      height: 150,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: AppColors.border)),
-      ),
-      child: Column(
-        children: [
-          SizedBox(
-            height: 44,
-            child: Row(
-              children: [
-                IconButton(
-                  onPressed: onClose,
-                  icon: const Icon(Icons.close, size: 22),
-                  color: AppColors.textMuted,
-                ),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'Slide',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF4FC3F7),
-                        ),
-                      ),
-                      Container(
-                        margin: const EdgeInsets.only(top: 4),
-                        width: 48,
-                        height: 2.5,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF4FC3F7),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: onConfirm,
-                  icon: const Icon(Icons.check, size: 24),
-                  color: const Color(0xFF4FC3F7),
-                ),
-              ],
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+      itemCount: options.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 0),
+      itemBuilder: (context, i) {
+        final option = options[i];
+        final selected = option.id == selectedId;
+        return GestureDetector(
+          onTap: () {
+            project.selectSlideTransition(option);
+            onChanged();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            width: 68,
+            height: 68,
+            child: Image.asset(
+              option.isNone
+                  ? 'assets/images/editor/transitions/default.png'
+                  : option.assetPath!,
+              fit: BoxFit.contain,
+              color: selected ? accent : null,
+              colorBlendMode: selected ? BlendMode.srcIn : null,
+              filterQuality: FilterQuality.medium,
             ),
           ),
-          Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.all(4),
-              itemCount: options.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 4),
-              itemBuilder: (context, i) {
-                final option = options[i];
-                final selected = option.id == selectedId;
-                const accent = Color(0xFF4FC3F7);
-                return GestureDetector(
-                  onTap: () => project.selectSlideTransition(option),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    width: 64,
-                    height: 64,
-                    padding: const EdgeInsets.all(4),
-                    child: option.isNone
-                        ? Image.asset(
-                            "assets/images/editor/transitions/default.png",
-                            fit: BoxFit.contain,
-                            color: selected ? accent : null,
-                            colorBlendMode: selected ? BlendMode.srcIn : null,
-                            filterQuality: FilterQuality.medium,
-                          )
-                        : Image.asset(
-                            option.assetPath!,
-                            fit: BoxFit.contain,
-                            color: selected ? accent : null,
-                            colorBlendMode: selected ? BlendMode.srcIn : null,
-                            filterQuality: FilterQuality.medium,
-                          ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

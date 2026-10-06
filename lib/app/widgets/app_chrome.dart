@@ -20,8 +20,9 @@ class TealPillButton extends StatelessWidget {
       onPressed: enabled ? onPressed : null,
       style: TextButton.styleFrom(
         foregroundColor: Colors.white,
-        backgroundColor:
-            enabled ? AppColors.primary : AppColors.primary.withValues(alpha: 0.35),
+        backgroundColor: enabled
+            ? AppColors.primary
+            : AppColors.primary.withValues(alpha: 0.35),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         minimumSize: const Size(0, 34),
@@ -102,11 +103,16 @@ class SectionSheet extends StatelessWidget {
     required this.title,
     required this.child,
     this.height = 168,
+    this.headerRow,
   });
 
   final String title;
   final Widget child;
   final double height;
+
+  /// Optional row shown at the top of the sheet (e.g. preview controls).
+  /// Built by the parent so this widget stays free of project/state logic.
+  final Widget? headerRow;
 
   @override
   Widget build(BuildContext context) {
@@ -119,15 +125,36 @@ class SectionSheet extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (headerRow != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: headerRow!,
+            ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-            child: Text(
-              title,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textMuted,
-              ),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  onPressed: () {},
+                  icon: Icon(Icons.close, color: AppColors.textDark),
+                ),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                    // decorationColor: AppColors.primary,
+                    // decorationThickness: 2,
+                    // decorationStyle: TextDecorationStyle.solid,
+                  ),
+                ),
+                IconButton(
+                  onPressed: () {},
+                  icon: Icon(Icons.check, color: AppColors.primary),
+                ),
+              ],
             ),
           ),
           Expanded(child: child),

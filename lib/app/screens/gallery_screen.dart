@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
 
@@ -23,6 +26,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   final Set<String> _selectedIds = {};
   final List<String> _orderedIds = [];
   bool _loading = true;
+  bool _continuing = false;
   String? _error;
 
   @override
@@ -90,6 +94,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Future<void> _continue() async {
+    if (_continuing) return;
     if (_orderedIds.length < AppConstants.minPhotos) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -99,25 +104,74 @@ class _GalleryScreenState extends State<GalleryScreen> {
       return;
     }
 
-    final photos = <SlideshowPhoto>[];
-    for (final id in _orderedIds) {
-      final item = _assets.firstWhere((e) => e.id == id);
-      final file = await item.entity.file;
-      if (file == null) continue;
-      photos.add(SlideshowPhoto(id: id, path: file.path));
-    }
-    if (photos.length < AppConstants.minPhotos) {
+    setState(() => _continuing = true);
+    try {
+      final dir = await getTemporaryDirectory();
+      final pickDir = Directory(
+        p.join(dir.path, 'picked_${DateTime.now().millisecondsSinceEpoch}'),
+      );
+      await pickDir.create(recursive: true);
+
+      final photos = <SlideshowPhoto>[];
+      for (var i = 0; i < _orderedIds.length; i++) {
+        if (!mounted) return;
+        final id = _orderedIds[i];
+        final item = _assets.firstWhere((e) => e.id == id);
+        final dest = await _copyPickedAsset(item, pickDir, i);
+        if (dest == null) continue;
+        photos.add(SlideshowPhoto(id: id, path: dest.path));
+      }
+      if (photos.length < AppConstants.minPhotos) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not load selected photos')),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      context.read<SlideshowProject>().setPhotos(photos);
+      if (!mounted) return;
+      context.push('/editor');
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not load selected photos')),
+        SnackBar(content: Text('Could not open editor: $e')),
       );
-      return;
+    } finally {
+      if (mounted) setState(() => _continuing = false);
     }
+  }
 
-    if (!mounted) return;
-    context.read<SlideshowProject>().setPhotos(photos);
-    if (!mounted) return;
-    context.push('/editor');
+  /// Prefer already-loaded gallery thumbs. Never call originBytes / 1920px
+  /// decode here — that hangs Glide on Xiaomi and leaves Next spinning.
+  Future<File?> _copyPickedAsset(
+    _PickedAsset item,
+    Directory dir,
+    int index,
+  ) async {
+    final safeId = item.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final dest = File(p.join(dir.path, 'pick_${index}_$safeId.jpg'));
+
+    Uint8List? bytes = item.thumbBytes;
+    if (bytes == null || bytes.isEmpty) {
+      try {
+        bytes = await item.entity.thumbnailData.timeout(
+          const Duration(seconds: 2),
+        );
+      } catch (_) {}
+    }
+    if (bytes == null || bytes.isEmpty) {
+      try {
+        bytes = await item.entity
+            .thumbnailDataWithSize(const ThumbnailSize(512, 512))
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
+    if (bytes == null || bytes.isEmpty) return null;
+
+    await dest.writeAsBytes(bytes, flush: false);
+    return dest;
   }
 
   @override
@@ -128,67 +182,68 @@ class _GalleryScreenState extends State<GalleryScreen> {
       appBar: AppBar(
         title: const Row(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Recent'),
-            Icon(Icons.keyboard_arrow_down, size: 20),
-          ],
+          children: [Text('Recent'), Icon(Icons.keyboard_arrow_down, size: 20)],
         ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: TealPillButton(
               label: count > 0 ? 'Next($count)' : 'Next',
-              enabled: count >= AppConstants.minPhotos,
+              enabled: count >= AppConstants.minPhotos && !_continuing,
               onPressed: _continue,
             ),
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Column(
         children: [
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(_error!, textAlign: TextAlign.center),
-                              const SizedBox(height: 16),
-                              FilledButton(
-                                onPressed: () => PhotoManager.openSetting(),
-                                child: const Text('Open Settings'),
-                              ),
-                              TextButton(
-                                onPressed: _load,
-                                child: const Text('Retry'),
-                              ),
-                            ],
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!, textAlign: TextAlign.center),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: () => PhotoManager.openSetting(),
+                            child: const Text('Open Settings'),
                           ),
-                        ),
-                      )
-                    : GridView.builder(
-                        padding: const EdgeInsets.all(2),
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          TextButton(
+                            onPressed: _load,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : GridView.builder(
+                    padding: const EdgeInsets.all(2),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: 3,
                           mainAxisSpacing: 2,
                           crossAxisSpacing: 2,
                         ),
-                        itemCount: _assets.length,
-                        itemBuilder: (context, index) {
-                          final item = _assets[index];
-                          final selected = _selectedIds.contains(item.id);
-                          return _ThumbTile(
-                            entity: item.entity,
-                            selected: selected,
-                            onTap: () => _toggle(item.id),
-                          );
-                        },
-                      ),
+                    itemCount: _assets.length,
+                    itemBuilder: (context, index) {
+                      final item = _assets[index];
+                      final selected = _selectedIds.contains(item.id);
+                      return _ThumbTile(
+                        entity: item.entity,
+                        selected: selected,
+                        onTap: () => _toggle(item.id),
+                        onThumb: (data) => item.thumbBytes = data,
+                      );
+                    },
+                  ),
           ),
           if (_orderedIds.isNotEmpty)
             Container(
@@ -256,6 +311,17 @@ class _GalleryScreenState extends State<GalleryScreen> {
               ),
             ),
         ],
+          ),
+          if (_continuing)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x66000000),
+                child: Center(
+                  child: CircularProgressIndicator(color: AppColors.primary),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -264,6 +330,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
 class _PickedAsset {
   final String id;
   final AssetEntity entity;
+  Uint8List? thumbBytes;
   _PickedAsset({required this.id, required this.entity});
 }
 
@@ -272,11 +339,13 @@ class _ThumbTile extends StatefulWidget {
     required this.entity,
     required this.selected,
     required this.onTap,
+    required this.onThumb,
   });
 
   final AssetEntity entity;
   final bool selected;
   final VoidCallback onTap;
+  final ValueChanged<Uint8List> onThumb;
 
   @override
   State<_ThumbTile> createState() => _ThumbTileState();
@@ -295,7 +364,8 @@ class _ThumbTileState extends State<_ThumbTile> {
     final data = await widget.entity.thumbnailDataWithSize(
       const ThumbnailSize(300, 300),
     );
-    if (!mounted) return;
+    if (!mounted || data == null) return;
+    widget.onThumb(data);
     setState(() => _bytes = data);
   }
 
@@ -352,7 +422,9 @@ class _TrayThumbState extends State<_TrayThumb> {
   @override
   void initState() {
     super.initState();
-    widget.entity.thumbnailDataWithSize(const ThumbnailSize(120, 120)).then((d) {
+    widget.entity.thumbnailDataWithSize(const ThumbnailSize(120, 120)).then((
+      d,
+    ) {
       if (!mounted) return;
       setState(() => _bytes = d);
     });

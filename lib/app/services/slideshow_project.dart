@@ -11,6 +11,22 @@ import '../models/models.dart';
 import 'frame_compositor.dart';
 import 'transition_engine.dart';
 
+Uint8List _preparePhotoInWorker(Map<String, Object> args) {
+  final sourceBytes = args['bytes'] as Uint8List;
+  final decoded = img.decodeImage(sourceBytes);
+  if (decoded == null) throw const FormatException('Unsupported image file');
+
+  final filter = PhotoFilterPreset.values[args['filter'] as int];
+  final filtered = FrameCompositor.applyFilter(decoded, filter);
+  final canvas = FrameCompositor.placeOnCanvas(
+    src: filtered,
+    w: args['width'] as int,
+    h: args['height'] as int,
+    bgArgb: args['background'] as int,
+  );
+  return Uint8List.fromList(img.encodeJpg(canvas, quality: 90));
+}
+
 class SlideshowProject extends ChangeNotifier {
   final List<SlideshowPhoto> photos = [];
   SlideTheme selectedTheme = AppThemes.all.first;
@@ -29,8 +45,10 @@ class SlideshowProject extends ChangeNotifier {
 
   bool isPlaying = false;
   bool isPreviewPlaying = false;
+
   /// True while building in-memory preview frames after transition select.
   bool isPreparingPreview = false;
+
   /// True when cache is ready — Play starts smooth playback immediately.
   bool isPreviewReady = false;
   bool isProcessing = false;
@@ -43,8 +61,9 @@ class SlideshowProject extends ChangeNotifier {
   /// Lightweight listeners — avoid rebuilding the whole editor every frame.
   final ValueNotifier<Uint8List?> previewFrameListenable =
       ValueNotifier<Uint8List?>(null);
-  final ValueNotifier<double> previewPositionListenable =
-      ValueNotifier<double>(0);
+  final ValueNotifier<double> previewPositionListenable = ValueNotifier<double>(
+    0,
+  );
 
   /// In-memory JPEG frames for smooth editor preview (no % overlay).
   final List<Uint8List> _previewMemoryFrames = [];
@@ -153,10 +172,7 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _buildPreviewMemoryFrames(
-        generation: generation,
-        cacheKey: key,
-      );
+      await _buildPreviewMemoryFrames(generation: generation, cacheKey: key);
       if (generation != _previewGeneration) return;
       isPreviewReady = _previewMemoryFrames.isNotEmpty;
       if (isPreviewReady) {
@@ -450,17 +466,21 @@ class SlideshowProject extends ChangeNotifier {
 
   Future<img.Image> _preparePhoto(SlideshowPhoto photo, int w, int h) async {
     final bytes = await File(photo.path).readAsBytes();
-    final raw = TransitionEngine.decode(bytes);
-    if (raw == null) {
+    // Full-resolution JPEG decode, filtering and resize can take long enough
+    // to trigger an Android ANR when run on the UI isolate (especially after
+    // selecting several recent photos). Do that work in a worker isolate.
+    final preparedBytes = await compute(_preparePhotoInWorker, {
+      'bytes': bytes,
+      'filter': photo.filter.index,
+      'width': w,
+      'height': h,
+      'background': backgroundArgb,
+    });
+    final prepared = TransitionEngine.decode(preparedBytes);
+    if (prepared == null) {
       throw Exception('Could not decode ${photo.path}');
     }
-    final filtered = FrameCompositor.applyFilter(raw, photo.filter);
-    return FrameCompositor.placeOnCanvas(
-      src: filtered,
-      w: w,
-      h: h,
-      bgArgb: backgroundArgb,
-    );
+    return prepared;
   }
 
   Future<img.Image> _finalize(img.Image frame) {
@@ -622,7 +642,7 @@ class SlideshowProject extends ChangeNotifier {
       return;
     }
     try {
-      final (w, h) = outputSize;
+      final (w, h) = previewSize;
       final prepared = await _preparePhoto(photos.first, w, h);
       final baked = await _finalize(prepared);
       _setPreviewFrame(
