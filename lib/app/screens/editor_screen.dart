@@ -35,6 +35,17 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   EditorTool? _tool = EditorTool.slide;
   final _textController = TextEditingController();
+  final _stripController = ScrollController();
+
+  static const _sheetHeight = 180.0;
+  static const _plusW = 52.0;
+  static const _plusGap = 12.0;
+  static const _thumbW = 88.0;
+  static const _thumbH = 68.0;
+  static const _minus = 22.0;
+  static const _stripPadLeft = 16.0;
+
+  SlideshowProject? _listenedProject;
 
   @override
   void initState() {
@@ -48,7 +59,39 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final project = context.read<SlideshowProject>();
+    if (!identical(_listenedProject, project)) {
+      _listenedProject?.previewPositionListenable.removeListener(
+        _onPreviewPosition,
+      );
+      _listenedProject = project;
+      _listenedProject!.previewPositionListenable.addListener(
+        _onPreviewPosition,
+      );
+    }
+  }
+
+  void _onPreviewPosition() {
+    if (!mounted || _tool != null) return;
+    if (!_stripController.hasClients) return;
+    final project = _listenedProject;
+    if (project == null) return;
+    final playheadX = MediaQuery.sizeOf(context).width / 2;
+    _syncStripToPlayhead(
+      project: project,
+      playheadX: playheadX,
+      thumbsLeft: 0,
+    );
+  }
+
+  @override
   void dispose() {
+    _listenedProject?.previewPositionListenable.removeListener(
+      _onPreviewPosition,
+    );
+    _stripController.dispose();
     _textController.dispose();
     super.dispose();
   }
@@ -136,111 +179,190 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  /// Idle editor chrome: time + play + undo/redo (screenshot).
+  /// Idle editor chrome: time + play + undo/redo (same slot as slide headerRow).
   Widget _idlePreviewRow(SlideshowProject project) {
     final disabled = project.isProcessing || project.isPreparingPreview;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 4, 0),
-      child: Row(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 8),
-            child: _timeText(project),
-          ),
-          Expanded(
-            child: Center(
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                onPressed: disabled ? null : _preview,
-                icon: Icon(
-                  project.isPreviewPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                ),
-                iconSize: 32,
-                color: Colors.black87,
+    return Row(
+      children: [
+        _timeText(project),
+        Expanded(
+          child: Center(
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: disabled ? null : _preview,
+              icon: Icon(
+                project.isPreviewPlaying
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
               ),
+              iconSize: 32,
+              color: Colors.black87,
             ),
           ),
-          IconButton(
-            onPressed: project.canUndo ? () => project.undo() : null,
-            icon: Icon(
-              Icons.undo_rounded,
-              color: project.canUndo ? Colors.black87 : Colors.black26,
-            ),
+        ),
+        IconButton(
+          onPressed: project.canUndo ? () => project.undo() : null,
+          icon: Icon(
+            Icons.undo_rounded,
+            color: project.canUndo ? Colors.black87 : Colors.black26,
           ),
-          IconButton(
-            onPressed: project.canRedo ? () => project.redo() : null,
-            icon: Icon(
-              Icons.redo_rounded,
-              color: project.canRedo ? Colors.black87 : Colors.black26,
-            ),
+        ),
+        IconButton(
+          onPressed: project.canRedo ? () => project.redo() : null,
+          icon: Icon(
+            Icons.redo_rounded,
+            color: project.canRedo ? Colors.black87 : Colors.black26,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Widget _photoStrip(SlideshowProject project) {
-    return SizedBox(
-      height: 88,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        itemCount: project.photos.length + 1,
-        separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemBuilder: (context, i) {
-          if (i == 0) {
-            return GestureDetector(
-              onTap: () => context.push('/gallery'),
-              child: Container(
-                width: 52,
-                height: 68,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.add, color: Colors.white, size: 28),
-              ),
-            );
-          }
-          final photo = project.photos[i - 1];
+  Widget _idleToolPanel(SlideshowProject project) {
+    return Container(
+      height: _sheetHeight,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final playheadX = constraints.maxWidth / 2;
           return Stack(
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.file(
-                  File(photo.path),
-                  width: 88,
-                  height: 68,
-                  fit: BoxFit.cover,
-                ),
-              ),
-              Positioned(
-                top: 4,
-                right: 4,
-                child: GestureDetector(
-                  onTap: () => project.removePhoto(i - 1),
-                  child: Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Icon(
-                      Icons.remove,
-                      size: 14,
-                      color: Colors.black87,
-                    ),
+              Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _idlePreviewRow(project),
                   ),
+                  Expanded(child: _photoStrip(project, playheadX)),
+                ],
+              ),
+              // Playhead — same X as the centered play button, through the strip.
+              Positioned(
+                left: playheadX - 1,
+                top: 40,
+                bottom: 8,
+                child: IgnorePointer(
+                  child: Container(width: 2, color: AppColors.primary),
                 ),
               ),
             ],
           );
         },
       ),
+    );
+  }
+
+  void _syncStripToPlayhead({
+    required SlideshowProject project,
+    required double playheadX,
+    required double thumbsLeft,
+  }) {
+    if (!_stripController.hasClients) return;
+    final n = project.photos.length;
+    final duration = project.estimatedDurationSec;
+    if (n == 0 || duration <= 0) return;
+    final p = (project.previewPositionSec / duration).clamp(0.0, 1.0);
+    final target = p * (n * _thumbW);
+    final max = _stripController.position.maxScrollExtent;
+    final next = target.clamp(0.0, max);
+    if ((_stripController.offset - next).abs() < 0.5) return;
+    _stripController.jumpTo(next);
+  }
+
+  Widget _photoStrip(SlideshowProject project, double playheadX) {
+    final thumbsLeft = _stripPadLeft + _plusW + _plusGap;
+    final leftPad = (playheadX - thumbsLeft).clamp(0.0, 400.0);
+
+    return Row(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: _stripPadLeft),
+          child: GestureDetector(
+            onTap: () => context.push('/gallery'),
+            child: Container(
+              width: _plusW,
+              height: _thumbH,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.add, color: Colors.white, size: 28),
+            ),
+          ),
+        ),
+        const SizedBox(width: _plusGap),
+        Expanded(
+          child: ListView.builder(
+            controller: _stripController,
+            scrollDirection: Axis.horizontal,
+            clipBehavior: Clip.none,
+            physics: project.isPreviewPlaying
+                ? const NeverScrollableScrollPhysics()
+                : const BouncingScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(leftPad, 30, playheadX, 30.5),
+            itemCount: project.photos.length,
+            itemBuilder: (context, photoIndex) {
+              final photo = project.photos[photoIndex];
+              return SizedBox(
+                width: _thumbW,
+                height: _thumbH,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 0.5),
+                          child: Image.file(
+                            File(photo.path),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (photoIndex > 0)
+                      Positioned(
+                        left: -_minus / 2,
+                        top: 0,
+                        bottom: 0,
+                        child: Center(
+                          child: GestureDetector(
+                            onTap: () => project.removePhoto(photoIndex),
+                            child: Container(
+                              width: _minus,
+                              height: _minus,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x33000000),
+                                    blurRadius: 4,
+                                    offset: Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(
+                                Icons.remove,
+                                size: 16,
+                                color: Colors.black87,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -371,10 +493,9 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
           ),
 
-          if (_tool == null) ...[
-            _idlePreviewRow(project),
-            _photoStrip(project),
-          ] else
+          if (_tool == null)
+            _idleToolPanel(project)
+          else
             SectionSheet(
               title: _toolLabel(_tool!),
               height: 180,
