@@ -9,7 +9,7 @@ import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
-import '../widgets/app_chrome.dart';
+import '../widgets/editTool_sheet.dart';
 
 enum EditorTool {
   slide,
@@ -33,7 +33,7 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  EditorTool _tool = EditorTool.slide;
+  EditorTool? _tool = EditorTool.slide;
   final _textController = TextEditingController();
 
   @override
@@ -84,6 +84,10 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  void _dismissTool() {
+    setState(() => _tool = null);
+  }
+
   /// Preview row shown inside SectionSheet for every tool.
   Widget _previewRow(SlideshowProject project) {
     final disabled = project.isProcessing || project.isPreparingPreview;
@@ -129,6 +133,114 @@ class _EditorScreenState extends State<EditorScreen> {
               : AppColors.textMuted,
         ),
       ],
+    );
+  }
+
+  /// Idle editor chrome: time + play + undo/redo (screenshot).
+  Widget _idlePreviewRow(SlideshowProject project) {
+    final disabled = project.isProcessing || project.isPreparingPreview;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 4, 0),
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: _timeText(project),
+          ),
+          Expanded(
+            child: Center(
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                onPressed: disabled ? null : _preview,
+                icon: Icon(
+                  project.isPreviewPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+                iconSize: 32,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: project.canUndo ? () => project.undo() : null,
+            icon: Icon(
+              Icons.undo_rounded,
+              color: project.canUndo ? Colors.black87 : Colors.black26,
+            ),
+          ),
+          IconButton(
+            onPressed: project.canRedo ? () => project.redo() : null,
+            icon: Icon(
+              Icons.redo_rounded,
+              color: project.canRedo ? Colors.black87 : Colors.black26,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _photoStrip(SlideshowProject project) {
+    return SizedBox(
+      height: 88,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        itemCount: project.photos.length + 1,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (context, i) {
+          if (i == 0) {
+            return GestureDetector(
+              onTap: () => context.push('/gallery'),
+              child: Container(
+                width: 52,
+                height: 68,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.add, color: Colors.white, size: 28),
+              ),
+            );
+          }
+          final photo = project.photos[i - 1];
+          return Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(
+                  File(photo.path),
+                  width: 88,
+                  height: 68,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              Positioned(
+                top: 4,
+                right: 4,
+                child: GestureDetector(
+                  onTap: () => project.removePhoto(i - 1),
+                  child: Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(
+                      Icons.remove,
+                      size: 14,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -259,75 +371,18 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
           ),
 
-          // Thumbnail strip hidden while Slide tool is open (ref design).
-          if (_tool != EditorTool.slide)
-            SizedBox(
-              height: 78,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                itemCount: project.photos.length + 1,
-                separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (context, i) {
-                  if (i == project.photos.length) {
-                    return GestureDetector(
-                      onTap: () => context.push('/gallery'),
-                      child: Container(
-                        width: 56,
-                        decoration: BoxDecoration(
-                          color: AppColors.primarySoft,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.primary),
-                        ),
-                        child: const Icon(Icons.add, color: AppColors.primary),
-                      ),
-                    );
-                  }
-                  final photo = project.photos[i];
-                  return Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.file(
-                          File(photo.path),
-                          width: 56,
-                          height: 70,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                      Positioned(
-                        top: 2,
-                        right: 2,
-                        child: GestureDetector(
-                          onTap: () => project.removePhoto(i),
-                          child: Container(
-                            width: 16,
-                            height: 16,
-                            decoration: const BoxDecoration(
-                              color: Colors.black54,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.remove,
-                              size: 12,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
+          if (_tool == null) ...[
+            _idlePreviewRow(project),
+            _photoStrip(project),
+          ] else
+            SectionSheet(
+              title: _toolLabel(_tool!),
+              height: 180,
+              headerRow: _previewRow(project),
+              onClose: _dismissTool,
+              onConfirm: _dismissTool,
+              child: _buildPanel(project),
             ),
-
-          // Tool panel (SectionSheet for every tool, including Slide)
-          SectionSheet(
-            title: _toolLabel(_tool),
-            height: 180,
-            headerRow: _previewRow(project),
-            child: _buildPanel(project),
-          ),
 
           // Bottom toolbar
           Container(
@@ -347,6 +402,10 @@ class _EditorScreenState extends State<EditorScreen> {
                     label: _toolLabel(t),
                     selected: _tool == t,
                     onTap: () {
+                      if (_tool == t) {
+                        _dismissTool();
+                        return;
+                      }
                       setState(() => _tool = t);
                       if (t == EditorTool.slide) {
                         final p = context.read<SlideshowProject>();
@@ -411,7 +470,7 @@ class _EditorScreenState extends State<EditorScreen> {
   };
 
   Widget _buildPanel(SlideshowProject project) {
-    return switch (_tool) {
+    return switch (_tool!) {
       EditorTool.slide => _SlideTransitions(
         project: project,
         onChanged: () => project.refreshLivePreview(),

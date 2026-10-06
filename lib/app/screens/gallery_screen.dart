@@ -12,7 +12,7 @@ import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
-import '../widgets/app_chrome.dart';
+import '../widgets/editTool_sheet.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});

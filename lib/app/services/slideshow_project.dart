@@ -90,6 +90,50 @@ class SlideshowProject extends ChangeNotifier {
 
   double get previewFps => AppConstants.framesPerTransition / slideDurationSec;
 
+  final List<_EditorSnapshot> _undoStack = [];
+  final List<_EditorSnapshot> _redoStack = [];
+
+  bool get canUndo => _undoStack.isNotEmpty;
+  bool get canRedo => _redoStack.isNotEmpty;
+
+  _EditorSnapshot _snapshot() => _EditorSnapshot(
+    photos: List<SlideshowPhoto>.from(photos),
+    transitionId: selectedSlideTransition.id,
+  );
+
+  void _recordHistory() {
+    _undoStack.add(_snapshot());
+    if (_undoStack.length > 30) _undoStack.removeAt(0);
+    _redoStack.clear();
+  }
+
+  void undo() {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(_snapshot());
+    _restore(_undoStack.removeLast());
+  }
+
+  void redo() {
+    if (_redoStack.isEmpty) return;
+    _undoStack.add(_snapshot());
+    _restore(_redoStack.removeLast());
+  }
+
+  void _restore(_EditorSnapshot snap) {
+    photos
+      ..clear()
+      ..addAll(snap.photos);
+    selectedSlideTransition = SlideTransitionOption.all.firstWhere(
+      (o) => o.id == snap.transitionId,
+      orElse: () => SlideTransitionOption.all.first,
+    );
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    unawaited(refreshLivePreview());
+  }
+
   void setPhotos(List<SlideshowPhoto> list) {
     photos
       ..clear()
@@ -103,6 +147,7 @@ class SlideshowProject extends ChangeNotifier {
   void reorderPhoto(int oldIndex, int newIndex) {
     if (oldIndex == newIndex) return;
     if (newIndex < 0 || newIndex >= photos.length) return;
+    _recordHistory();
     final item = photos.removeAt(oldIndex);
     photos.insert(newIndex, item);
     notifyListeners();
@@ -110,6 +155,7 @@ class SlideshowProject extends ChangeNotifier {
 
   void removePhoto(int index) {
     if (index < 0 || index >= photos.length) return;
+    _recordHistory();
     photos.removeAt(index);
     notifyListeners();
   }
@@ -136,6 +182,7 @@ class SlideshowProject extends ChangeNotifier {
       }
       return;
     }
+    _recordHistory();
     selectedSlideTransition = option;
     stopPreviewPlayback();
     _invalidatePreviewCache();
@@ -669,4 +716,11 @@ class SlideshowProject extends ChangeNotifier {
     }
     return frames / fps;
   }
+}
+
+class _EditorSnapshot {
+  final List<SlideshowPhoto> photos;
+  final String transitionId;
+
+  _EditorSnapshot({required this.photos, required this.transitionId});
 }

@@ -104,6 +104,8 @@ class SectionSheet extends StatelessWidget {
     required this.child,
     this.height = 168,
     this.headerRow,
+    this.onClose,
+    this.onConfirm,
   });
 
   final String title;
@@ -113,6 +115,8 @@ class SectionSheet extends StatelessWidget {
   /// Optional row shown at the top of the sheet (e.g. preview controls).
   /// Built by the parent so this widget stays free of project/state logic.
   final Widget? headerRow;
+  final VoidCallback? onClose;
+  final VoidCallback? onConfirm;
 
   @override
   Widget build(BuildContext context) {
@@ -136,14 +140,15 @@ class SectionSheet extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
-                  onPressed: () {},
-                  icon: Icon(Icons.close, color: AppColors.textDark),
+                  onPressed: onClose,
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.close, color: AppColors.textDark),
                 ),
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
                     color: AppColors.primary,
                     // decorationColor: AppColors.primary,
                     // decorationThickness: 2,
@@ -151,8 +156,9 @@ class SectionSheet extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  onPressed: () {},
-                  icon: Icon(Icons.check, color: AppColors.primary),
+                  onPressed: onConfirm,
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.check, color: AppColors.primary),
                 ),
               ],
             ),
