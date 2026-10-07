@@ -39,7 +39,6 @@ class _EditorScreenState extends State<EditorScreen> {
 
   static const _sheetHeight = 180.0;
   static const _plusW = 52.0;
-  static const _plusGap = 12.0;
   static const _thumbW = 88.0;
   static const _thumbH = 68.0;
   static const _minus = 22.0;
@@ -78,12 +77,7 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!_stripController.hasClients) return;
     final project = _listenedProject;
     if (project == null) return;
-    final playheadX = MediaQuery.sizeOf(context).width / 2;
-    _syncStripToPlayhead(
-      project: project,
-      playheadX: playheadX,
-      thumbsLeft: 0,
-    );
+    _syncStripToPlayhead(project: project);
   }
 
   @override
@@ -185,19 +179,17 @@ class _EditorScreenState extends State<EditorScreen> {
     return Row(
       children: [
         _timeText(project),
-        Expanded(
-          child: Center(
-            child: IconButton(
-              padding: EdgeInsets.zero,
-              onPressed: disabled ? null : _preview,
-              icon: Icon(
-                project.isPreviewPlaying
-                    ? Icons.pause_rounded
-                    : Icons.play_arrow_rounded,
-              ),
-              iconSize: 32,
-              color: Colors.black87,
+        Center(
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            onPressed: disabled ? null : _preview,
+            icon: Icon(
+              project.isPreviewPlaying
+                  ? Icons.pause_rounded
+                  : Icons.play_arrow_rounded,
             ),
+            iconSize: 32,
+            color: Colors.black87,
           ),
         ),
         IconButton(
@@ -255,11 +247,7 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  void _syncStripToPlayhead({
-    required SlideshowProject project,
-    required double playheadX,
-    required double thumbsLeft,
-  }) {
+  void _syncStripToPlayhead({required SlideshowProject project}) {
     if (!_stripController.hasClients) return;
     final n = project.photos.length;
     final duration = project.estimatedDurationSec;
@@ -273,37 +261,19 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Widget _photoStrip(SlideshowProject project, double playheadX) {
-    final thumbsLeft = _stripPadLeft + _plusW + _plusGap;
-    final leftPad = (playheadX - thumbsLeft).clamp(0.0, 400.0);
+    // Thumbs fill the row and slide under the + overlay.
+    final leftPad = playheadX.clamp(0.0, 800.0);
 
-    return Row(
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: _stripPadLeft),
-          child: GestureDetector(
-            onTap: () => context.push('/gallery'),
-            child: Container(
-              width: _plusW,
-              height: _thumbH,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.add, color: Colors.white, size: 28),
-            ),
-          ),
-        ),
-        const SizedBox(width: _plusGap),
-        Expanded(
+        Positioned.fill(
           child: ListView.builder(
             controller: _stripController,
             scrollDirection: Axis.horizontal,
-            clipBehavior: Clip.none,
             physics: project.isPreviewPlaying
                 ? const NeverScrollableScrollPhysics()
                 : const BouncingScrollPhysics(),
-            padding: EdgeInsets.fromLTRB(leftPad, 30, playheadX, 30.5),
+            padding: EdgeInsets.fromLTRB(leftPad, 8, playheadX, 12),
             itemCount: project.photos.length,
             itemBuilder: (context, photoIndex) {
               final photo = project.photos[photoIndex];
@@ -360,6 +330,34 @@ class _EditorScreenState extends State<EditorScreen> {
                 ),
               );
             },
+          ),
+        ),
+        // + stays on top; clips slide underneath while playing.
+        Positioned(
+          left: _stripPadLeft,
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: GestureDetector(
+              onTap: () => context.push('/gallery'),
+              child: Container(
+                width: _plusW,
+                height: _thumbH,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 6,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.add, color: Colors.white, size: 28),
+              ),
+            ),
           ),
         ),
       ],
