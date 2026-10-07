@@ -39,9 +39,9 @@ class _EditorScreenState extends State<EditorScreen> {
 
   static const _sheetHeight = 180.0;
   static const _plusW = 52.0;
-  static const _thumbW = 88.0;
+  static const _pixelsPerSecond = 44.0;
   static const _thumbH = 68.0;
-  static const _minus = 22.0;
+  static const _transitionMarkerSize = 22.0;
   static const _stripPadLeft = 16.0;
 
   SlideshowProject? _listenedProject;
@@ -107,17 +107,31 @@ class _EditorScreenState extends State<EditorScreen> {
     return '$m:$s';
   }
 
+  double _timelineDuration(SlideshowProject project) {
+    return project.photos.length * project.slideDurationSec +
+        (project.startingCard?.durationSec ?? 0) +
+        (project.endingCard?.durationSec ?? 0);
+  }
+
   Widget _timeText(SlideshowProject project) {
+    final duration = _timelineDuration(project);
+    final previewDuration = project.estimatedDurationSec;
     return ValueListenableBuilder<double>(
       valueListenable: project.previewPositionListenable,
-      builder: (_, pos, _) => Text(
-        '${_fmt(pos)} / ${_fmt(project.estimatedDurationSec)}',
-        style: const TextStyle(
-          fontSize: 12,
-          color: AppColors.textMuted,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
+      builder: (_, pos, _) {
+        final timelinePosition = previewDuration > 0
+            ? pos / previewDuration * duration
+            : pos;
+        return Text(
+          '${_fmt(timelinePosition.clamp(0.0, duration).toDouble())} / '
+          '${_fmt(duration)}',
+          style: const TextStyle(
+            fontSize: 12,
+            color: AppColors.textMuted,
+            fontWeight: FontWeight.w600,
+          ),
+        );
+      },
     );
   }
 
@@ -177,11 +191,12 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _idlePreviewRow(SlideshowProject project) {
     final disabled = project.isProcessing || project.isPreparingPreview;
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         _timeText(project),
         Center(
           child: IconButton(
-            padding: EdgeInsets.zero,
+            padding: EdgeInsets.only(left: 12),
             onPressed: disabled ? null : _preview,
             icon: Icon(
               project.isPreviewPlaying
@@ -192,19 +207,25 @@ class _EditorScreenState extends State<EditorScreen> {
             color: Colors.black87,
           ),
         ),
-        IconButton(
-          onPressed: project.canUndo ? () => project.undo() : null,
-          icon: Icon(
-            Icons.undo_rounded,
-            color: project.canUndo ? Colors.black87 : Colors.black26,
-          ),
-        ),
-        IconButton(
-          onPressed: project.canRedo ? () => project.redo() : null,
-          icon: Icon(
-            Icons.redo_rounded,
-            color: project.canRedo ? Colors.black87 : Colors.black26,
-          ),
+        Row(
+          children: [
+            IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: project.canUndo ? () => project.undo() : null,
+              icon: Icon(
+                Icons.undo_rounded,
+                color: project.canUndo ? Colors.black87 : Colors.black26,
+              ),
+            ),
+            IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: project.canRedo ? () => project.redo() : null,
+              icon: Icon(
+                Icons.redo_rounded,
+                color: project.canRedo ? Colors.black87 : Colors.black26,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -225,7 +246,7 @@ class _EditorScreenState extends State<EditorScreen> {
               Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.only(left: 14, right: 6),
                     child: _idlePreviewRow(project),
                   ),
                   Expanded(child: _photoStrip(project, playheadX)),
@@ -252,17 +273,22 @@ class _EditorScreenState extends State<EditorScreen> {
     final n = project.photos.length;
     final duration = project.estimatedDurationSec;
     if (n == 0 || duration <= 0) return;
-    final p = (project.previewPositionSec / duration).clamp(0.0, 1.0);
-    final target = p * (n * _thumbW);
+    final p = (project.previewPositionSec / duration)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final trackWidth = n * project.slideDurationSec * _pixelsPerSecond;
+    final target = p * trackWidth;
     final max = _stripController.position.maxScrollExtent;
-    final next = target.clamp(0.0, max);
+    final next = target.clamp(0.0, max).toDouble();
     if ((_stripController.offset - next).abs() < 0.5) return;
     _stripController.jumpTo(next);
   }
 
   Widget _photoStrip(SlideshowProject project, double playheadX) {
-    // Thumbs fill the row and slide under the + overlay.
-    final leftPad = playheadX.clamp(0.0, 800.0);
+    // Each second of a slide gets its own thumbnail, like a video timeline.
+    final leftPad = playheadX.clamp(0.0, 800.0).toDouble();
+    final clipWidth = project.slideDurationSec * _pixelsPerSecond;
+    final thumbnailCount = project.slideDurationSec.ceil();
 
     return Stack(
       children: [
@@ -273,12 +299,12 @@ class _EditorScreenState extends State<EditorScreen> {
             physics: project.isPreviewPlaying
                 ? const NeverScrollableScrollPhysics()
                 : const BouncingScrollPhysics(),
-            padding: EdgeInsets.fromLTRB(leftPad, 8, playheadX, 12),
+            padding: EdgeInsets.fromLTRB(leftPad, 8, playheadX, 42),
             itemCount: project.photos.length,
             itemBuilder: (context, photoIndex) {
               final photo = project.photos[photoIndex];
               return SizedBox(
-                width: _thumbW,
+                width: clipWidth,
                 height: _thumbH,
                 child: Stack(
                   clipBehavior: Clip.none,
@@ -286,26 +312,51 @@ class _EditorScreenState extends State<EditorScreen> {
                     Positioned.fill(
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(4),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 0.5),
-                          child: Image.file(
-                            File(photo.path),
-                            fit: BoxFit.cover,
-                          ),
+                        child: Row(
+                          children: [
+                            for (var i = 0; i < thumbnailCount; i++)
+                              SizedBox(
+                                width: (clipWidth - i * _pixelsPerSecond)
+                                    .clamp(0.0, _pixelsPerSecond)
+                                    .toDouble(),
+                                height: _thumbH,
+                                child: DecoratedBox(
+                                  decoration: const BoxDecoration(
+                                    border: Border(
+                                      right: BorderSide(
+                                        color: Colors.white70,
+                                        width: 1,
+                                      ),
+                                    ),
+                                  ),
+                                  child: Image.file(
+                                    File(photo.path),
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
                     if (photoIndex > 0)
                       Positioned(
-                        left: -_minus / 2,
+                        left: -_transitionMarkerSize / 2,
                         top: 0,
                         bottom: 0,
                         child: Center(
                           child: GestureDetector(
-                            onTap: () => project.removePhoto(photoIndex),
+                            onLongPress: () => project.removePhoto(photoIndex),
+                            onTap: () {
+                              setState(() => _tool = EditorTool.slide);
+                              if (!project.isPreviewReady &&
+                                  !project.isPreparingPreview) {
+                                project.preparePreviewFrames();
+                              }
+                            },
                             child: Container(
-                              width: _minus,
-                              height: _minus,
+                              width: _transitionMarkerSize,
+                              height: _transitionMarkerSize,
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(6),
@@ -318,7 +369,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                 ],
                               ),
                               child: const Icon(
-                                Icons.remove,
+                                Icons.compare_arrows_rounded,
                                 size: 16,
                                 color: Colors.black87,
                               ),
@@ -336,7 +387,7 @@ class _EditorScreenState extends State<EditorScreen> {
         Positioned(
           left: _stripPadLeft,
           top: 0,
-          bottom: 0,
+          bottom: 34,
           child: Center(
             child: GestureDetector(
               onTap: () => context.push('/gallery'),
@@ -346,7 +397,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(4),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x22000000),
