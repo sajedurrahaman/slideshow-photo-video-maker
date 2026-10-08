@@ -39,6 +39,7 @@ flutter:
   assets:
     - assets/frames/
     - assets/music/
+    - assets/effects/
     - assets/images/
     - assets/images/home/
     - assets/images/home/slider/

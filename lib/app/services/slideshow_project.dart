@@ -8,6 +8,7 @@ import 'package:image/image.dart' as img;
 
 import '../core/constants/app_constants.dart';
 import '../models/models.dart';
+import 'effect_overlay_service.dart';
 import 'frame_compositor.dart';
 import 'transition_engine.dart';
 
@@ -30,6 +31,7 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
 class SlideshowProject extends ChangeNotifier {
   final List<SlideshowPhoto> photos = [];
   SlideTheme selectedTheme = AppThemes.all.first;
+  bool isEffectOverlayEnabled = false;
   SlideTransitionOption selectedSlideTransition =
       SlideTransitionOption.all.first;
   String? selectedFrameAsset;
@@ -161,7 +163,10 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   void selectTheme(SlideTheme theme) {
+    final shouldPrepare =
+        selectedTheme.id != theme.id || !isEffectOverlayEnabled;
     selectedTheme = theme;
+    isEffectOverlayEnabled = true;
     if (music == null || music!.isAsset) {
       if (theme.musicAsset != null) {
         music = MusicTrack(
@@ -171,7 +176,13 @@ class SlideshowProject extends ChangeNotifier {
         );
       }
     }
+    if (shouldPrepare) {
+      generatedFrames = [];
+      stopPreviewPlayback();
+      _invalidatePreviewCache();
+    }
     notifyListeners();
+    if (shouldPrepare) unawaited(preparePreviewFrames());
   }
 
   void selectSlideTransition(SlideTransitionOption option) {
@@ -238,6 +249,8 @@ class SlideshowProject extends ChangeNotifier {
   String _buildPreviewCacheKey() {
     return [
       photos.map((e) => '${e.path}:${e.filter.name}').join('|'),
+      selectedTheme.id,
+      isEffectOverlayEnabled,
       selectedSlideTransition.id,
       slideDurationSec,
       aspectRatio.name,
@@ -333,6 +346,10 @@ class SlideshowProject extends ChangeNotifier {
 
     final effect = selectedSlideTransition.type;
     final pairs = decoded.length - 1;
+    final overlayFrames = isEffectOverlayEnabled
+        ? await EffectOverlayService.previewFrames(width: w, height: h)
+        : const <File>[];
+    var renderedFrameIndex = 0;
 
     Uint8List? lastBytes;
     img.Image? lastSource;
@@ -340,13 +357,28 @@ class SlideshowProject extends ChangeNotifier {
     Future<void> pushFrame(img.Image image) async {
       if (generation != _previewGeneration) return;
       // Reuse identical consecutive frames (hold) — same bytes = no re-decode blink.
-      if (identical(image, lastSource) && lastBytes != null) {
+      if (overlayFrames.isEmpty &&
+          identical(image, lastSource) &&
+          lastBytes != null) {
         _previewMemoryFrames.add(lastBytes!);
         return;
       }
       final baked = await _finalize(image);
+      var composed = baked;
+      if (overlayFrames.isNotEmpty) {
+        final effectTime = renderedFrameIndex / previewFps;
+        final effectIndex =
+            ((effectTime * EffectOverlayService.previewFps).floor()) %
+            overlayFrames.length;
+        final effectBytes = await overlayFrames[effectIndex].readAsBytes();
+        final effectFrame = TransitionEngine.decode(effectBytes);
+        if (effectFrame != null) {
+          composed = EffectOverlayService.screenBlend(composed, effectFrame);
+        }
+      }
+      renderedFrameIndex++;
       final bytes = Uint8List.fromList(
-        TransitionEngine.encodeJpeg(baked, quality: 70),
+        TransitionEngine.encodeJpeg(composed, quality: 70),
       );
       lastSource = image;
       lastBytes = bytes;

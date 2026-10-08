@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/constants/app_constants.dart';
+import 'effect_overlay_service.dart';
 import 'slideshow_project.dart';
 
 class ExportService {
@@ -23,7 +24,9 @@ class ExportService {
     }
 
     final docs = await getApplicationDocumentsDirectory();
-    final creations = Directory(p.join(docs.path, AppConstants.creationsFolder));
+    final creations = Directory(
+      p.join(docs.path, AppConstants.creationsFolder),
+    );
     if (!await creations.exists()) {
       await creations.create(recursive: true);
     }
@@ -45,6 +48,10 @@ class ExportService {
       }
     }
 
+    final overlayPath = project.isEffectOverlayEnabled
+        ? await EffectOverlayService.assetFilePath()
+        : null;
+
     final volumeFilter = (music != null && music.volume < 100)
         ? ' -af volume=${(music.volume / 100.0).toStringAsFixed(2)}'
         : '';
@@ -53,15 +60,42 @@ class ExportService {
       ..write('-y -framerate ${fps.toStringAsFixed(3)} ')
       ..write('-i $framesDir/img%05d.jpg ');
 
+    var nextInputIndex = 1;
+    int? overlayInputIndex;
+    if (overlayPath != null) {
+      overlayInputIndex = nextInputIndex++;
+      cmd.write('-stream_loop -1 -i "$overlayPath" ');
+    }
+
+    int? musicInputIndex;
     if (musicPath != null) {
+      musicInputIndex = nextInputIndex++;
       cmd.write('-stream_loop -1 -i "$musicPath" ');
     }
 
+    if (overlayInputIndex != null) {
+      final (width, height) = project.outputSize;
+      cmd.write(
+        '-filter_complex "[$overlayInputIndex:v]'
+        'fps=${fps.toStringAsFixed(3)},scale=$width:$height,setsar=1[effect];'
+        '[0:v][effect]blend=all_mode=screen:shortest=1[screened]" '
+        '-map "[screened]" ',
+      );
+    } else {
+      cmd.write('-map 0:v:0 ');
+    }
+
+    if (musicInputIndex != null) {
+      cmd.write('-map $musicInputIndex:a:0 ');
+    }
+
     cmd.write('-c:v libx264 -pix_fmt yuv420p -r 30 ');
-    if (musicPath != null) {
+    if (musicInputIndex != null) {
       cmd.write('-c:a aac -shortest$volumeFilter ');
     }
-    cmd.write('-preset ultrafast -t ${project.estimatedDurationSec.toStringAsFixed(2)} ');
+    cmd.write(
+      '-preset ultrafast -t ${project.estimatedDurationSec.toStringAsFixed(2)} ',
+    );
     cmd.write('"${output.path}"');
 
     final session = await FFmpegKit.execute(cmd.toString());
@@ -83,7 +117,9 @@ class ExportService {
 
   static Future<List<File>> listCreations() async {
     final docs = await getApplicationDocumentsDirectory();
-    final creations = Directory(p.join(docs.path, AppConstants.creationsFolder));
+    final creations = Directory(
+      p.join(docs.path, AppConstants.creationsFolder),
+    );
     if (!await creations.exists()) return [];
 
     final files = <File>[];
