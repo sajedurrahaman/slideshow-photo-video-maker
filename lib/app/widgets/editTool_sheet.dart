@@ -106,6 +106,8 @@ class SectionSheet extends StatelessWidget {
     this.headerRow,
     this.onClose,
     this.onConfirm,
+    this.compactHeader = false,
+    this.showTopDivider = true,
   });
 
   final String title;
@@ -117,16 +119,21 @@ class SectionSheet extends StatelessWidget {
   final Widget? headerRow;
   final VoidCallback? onClose;
   final VoidCallback? onConfirm;
+  final bool compactHeader;
+  final bool showTopDivider;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       height: height,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(top: BorderSide(color: AppColors.border)),
+        border: showTopDivider
+            ? const Border(top: BorderSide(color: AppColors.border),)
+            : null,
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (headerRow != null)
@@ -135,13 +142,17 @@ class SectionSheet extends StatelessWidget {
               child: headerRow!,
             ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+            padding: EdgeInsets.fromLTRB(8, compactHeader ? 0 : 0, 8, 0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
                   onPressed: onClose,
                   padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: compactHeader
+                      ? const BoxConstraints(minWidth: 32, minHeight: 20)
+                      : null,
                   icon: const Icon(Icons.close, color: AppColors.textDark),
                 ),
                 Text(
@@ -158,6 +169,10 @@ class SectionSheet extends StatelessWidget {
                 IconButton(
                   onPressed: onConfirm,
                   padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: compactHeader
+                      ? const BoxConstraints(minWidth: 32, minHeight: 20)
+                      : null,
                   icon: const Icon(Icons.check, color: AppColors.primary),
                 ),
               ],

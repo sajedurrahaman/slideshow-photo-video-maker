@@ -58,6 +58,8 @@ class _EditorScreenState extends State<EditorScreen> {
   final _stripController = ScrollController();
 
   static const _sheetHeight = 180.0;
+  static const _timelineHeaderHeight = 48.0;
+  static const _inlineTimelineHeaderHeight = 40.0;
   static const _plusW = 52.0;
   static const _pixelsPerSecond = 44.0;
   static const _thumbH = 60.0;
@@ -252,9 +254,14 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Widget _idleToolPanel(SlideshowProject project) {
+  Widget _idleToolPanel(
+    SlideshowProject project, {
+    Widget? timelineContent,
+    double height = _sheetHeight,
+    double timelineHeaderHeight = _timelineHeaderHeight,
+  }) {
     return Container(
-      height: _sheetHeight,
+      height: height,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: AppColors.border)),
@@ -266,22 +273,28 @@ class _EditorScreenState extends State<EditorScreen> {
             children: [
               Column(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.only(left: 14, right: 6),
-                    child: _idlePreviewRow(project),
+                  SizedBox(
+                    height: timelineHeaderHeight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 14, right: 6),
+                      child: _idlePreviewRow(project),
+                    ),
                   ),
-                  Expanded(child: _photoStrip(project, playheadX)),
+                  Expanded(
+                    child: timelineContent ?? _photoStrip(project, playheadX),
+                  ),
                 ],
               ),
               // Playhead — same X as the centered play button, through the strip.
-              Positioned(
-                left: playheadX - 1,
-                top: 40,
-                bottom: 8,
-                child: IgnorePointer(
-                  child: Container(width: 2, color: AppColors.primary),
+              if (timelineContent == null)
+                Positioned(
+                  left: playheadX - 1,
+                  top: 40,
+                  bottom: 8,
+                  child: IgnorePointer(
+                    child: Container(width: 2, color: AppColors.primary),
+                  ),
                 ),
-              ),
             ],
           );
         },
@@ -313,221 +326,239 @@ class _EditorScreenState extends State<EditorScreen> {
     // Each clip width reflects that photo's independently editable duration.
     final leftPad = playheadX.clamp(0.0, 800.0).toDouble();
 
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: ListView.builder(
-            controller: _stripController,
-            scrollDirection: Axis.horizontal,
-            physics: project.isPreviewPlaying
-                ? const NeverScrollableScrollPhysics()
-                : const BouncingScrollPhysics(),
-            padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 44),
-            itemCount: project.photos.length,
-            itemBuilder: (context, photoIndex) {
-              final photo = project.photos[photoIndex];
-              final selected = project.selectedPhotoIndex == photoIndex;
-              final clipWidth = photo.durationSec * _pixelsPerSecond;
-              final canShowDuration = clipWidth >= 72;
-              final thumbnailCount = photo.durationSec.ceil();
-              return Align(
-                alignment: Alignment.center,
-                child: SizedBox(
-                  width: clipWidth,
-                  height: _thumbH,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned.fill(
-                        child: GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _tool = null;
-                              _photoTool = null;
-                              _durationSliderValue = null;
-                            });
-                            project.selectTimelinePhoto(photoIndex);
-                          },
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: Row(
-                                  children: [
-                                    for (var i = 0; i < thumbnailCount; i++)
-                                      SizedBox(
-                                        width:
-                                            (clipWidth - i * _pixelsPerSecond)
-                                                .clamp(0.0, _pixelsPerSecond)
-                                                .toDouble(),
-                                        height: _thumbH,
-                                        child: DecoratedBox(
-                                          decoration: const BoxDecoration(
-                                            border: Border(
-                                              right: BorderSide(
-                                                color: Colors.white70,
-                                                width: 1,
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: project.selectedPhotoIndex == null
+          ? null
+          : () {
+              setState(() {
+                _tool = null;
+                _photoTool = null;
+                _durationSliderValue = null;
+              });
+              project.clearTimelinePhotoSelection();
+            },
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ListView.builder(
+              controller: _stripController,
+              scrollDirection: Axis.horizontal,
+              physics: project.isPreviewPlaying
+                  ? const NeverScrollableScrollPhysics()
+                  : const BouncingScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 44),
+              itemCount: project.photos.length,
+              itemBuilder: (context, photoIndex) {
+                final photo = project.photos[photoIndex];
+                final selected = project.selectedPhotoIndex == photoIndex;
+                final clipWidth = photo.durationSec * _pixelsPerSecond;
+                final canShowDuration = clipWidth >= 72;
+                final thumbnailCount = photo.durationSec.ceil();
+                return Align(
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: clipWidth,
+                    height: _thumbH,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned.fill(
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _tool = null;
+                                _photoTool = null;
+                                _durationSliderValue = null;
+                              });
+                              project.selectTimelinePhoto(photoIndex);
+                            },
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: Row(
+                                    children: [
+                                      for (var i = 0; i < thumbnailCount; i++)
+                                        SizedBox(
+                                          width:
+                                              (clipWidth - i * _pixelsPerSecond)
+                                                  .clamp(0.0, _pixelsPerSecond)
+                                                  .toDouble(),
+                                          height: _thumbH,
+                                          child: DecoratedBox(
+                                            decoration: const BoxDecoration(
+                                              border: Border(
+                                                right: BorderSide(
+                                                  color: Colors.white70,
+                                                  width: 1,
+                                                ),
                                               ),
                                             ),
+                                            child: Image.file(
+                                              File(photo.path),
+                                              fit: BoxFit.fill,
+                                            ),
                                           ),
-                                          child: Image.file(
-                                            File(photo.path),
-                                            fit: BoxFit.fill,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                if (selected)
+                                  Positioned(
+                                    left: 2,
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Center(
+                                      child: _durationHandle(
+                                        icon: Icons.chevron_left_rounded,
+                                        onTap: () =>
+                                            project.changePhotoDuration(
+                                              photoIndex,
+                                              photo.durationSec - 0.5,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                if (selected)
+                                  Positioned(
+                                    right: 2,
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Center(
+                                      child: _durationHandle(
+                                        icon: Icons.chevron_right_rounded,
+                                        onTap: () =>
+                                            project.changePhotoDuration(
+                                              photoIndex,
+                                              photo.durationSec + 0.5,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                if (selected && canShowDuration)
+                                  Positioned(
+                                    left: 20,
+                                    top: 2,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 3,
+                                        vertical: 1,
+                                      ),
+                                      color: Colors.black54,
+                                      child: Text(
+                                        '${photo.durationSec.toStringAsFixed(1)}s',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                if (selected)
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color: AppColors.iconActive,
+                                            width: 6.4,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
                                           ),
                                         ),
                                       ),
-                                  ],
-                                ),
-                              ),
-                              if (selected)
-                                Positioned(
-                                  left: 2,
-                                  top: 0,
-                                  bottom: 0,
-                                  child: Center(
-                                    child: _durationHandle(
-                                      icon: Icons.chevron_left_rounded,
-                                      onTap: () => project.changePhotoDuration(
-                                        photoIndex,
-                                        photo.durationSec - 0.5,
-                                      ),
                                     ),
                                   ),
-                                ),
-                              if (selected)
-                                Positioned(
-                                  right: 2,
-                                  top: 0,
-                                  bottom: 0,
-                                  child: Center(
-                                    child: _durationHandle(
-                                      icon: Icons.chevron_right_rounded,
-                                      onTap: () => project.changePhotoDuration(
-                                        photoIndex,
-                                        photo.durationSec + 0.5,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (selected && canShowDuration)
-                                Positioned(
-                                  left: 20,
-                                  top: 2,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 3,
-                                      vertical: 1,
-                                    ),
-                                    color: Colors.black54,
-                                    child: Text(
-                                      '${photo.durationSec.toStringAsFixed(1)}s',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (selected)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        border: Border.all(
-                                          color: AppColors.iconActive,
-                                          width: 6.4,
-                                        ),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                      if (photoIndex > 0 && project.selectedPhotoIndex == null)
-                        Positioned(
-                          left: -_transitionMarkerSize / 2,
-                          top: 0,
-                          bottom: 0,
-                          child: Center(
-                            child: GestureDetector(
-                              onLongPress: () =>
-                                  project.removePhoto(photoIndex),
-                              onTap: () {
-                                project.clearTimelinePhotoSelection();
-                                setState(() {
-                                  _tool = EditorTool.slide;
-                                  _photoTool = null;
-                                });
-                                if (!project.isPreviewReady &&
-                                    !project.isPreparingPreview) {
-                                  project.preparePreviewFrames();
-                                }
-                              },
-                              child: Container(
-                                width: _transitionMarkerSize,
-                                height: _transitionMarkerSize,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(6),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x33000000),
-                                      blurRadius: 4,
-                                      offset: Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.compare_arrows_rounded,
-                                  size: 16,
-                                  color: Colors.black87,
+                        if (photoIndex > 0 &&
+                            project.selectedPhotoIndex == null)
+                          Positioned(
+                            left: -_transitionMarkerSize / 2,
+                            top: 0,
+                            bottom: 0,
+                            child: Center(
+                              child: GestureDetector(
+                                onLongPress: () =>
+                                    project.removePhoto(photoIndex),
+                                onTap: () {
+                                  project.clearTimelinePhotoSelection();
+                                  setState(() {
+                                    _tool = EditorTool.slide;
+                                    _photoTool = null;
+                                  });
+                                  if (!project.isPreviewReady &&
+                                      !project.isPreparingPreview) {
+                                    project.preparePreviewFrames();
+                                  }
+                                },
+                                child: Container(
+                                  width: _transitionMarkerSize,
+                                  height: _transitionMarkerSize,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(6),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x33000000),
+                                        blurRadius: 4,
+                                        offset: Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Icon(
+                                    Icons.compare_arrows_rounded,
+                                    size: 16,
+                                    color: Colors.black87,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
-        ),
-        if (project.selectedPhotoIndex == null)
-          // + stays on top; clips slide underneath while playing.
-          Positioned(
-            left: _stripPadLeft,
-            top: 0,
-            bottom: 34,
-            child: Center(
-              child: GestureDetector(
-                onTap: () => context.push('/gallery'),
-                child: Container(
-                  width: _plusW,
-                  height: _thumbH,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(4),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x22000000),
-                        blurRadius: 6,
-                        offset: Offset(0, 1),
-                      ),
-                    ],
+          if (project.selectedPhotoIndex == null)
+            // + stays on top; clips slide underneath while playing.
+            Positioned(
+              left: _stripPadLeft,
+              top: 0,
+              bottom: 34,
+              child: Center(
+                child: GestureDetector(
+                  onTap: () => context.push('/gallery'),
+                  child: Container(
+                    width: _plusW,
+                    height: _thumbH,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(4),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x22000000),
+                          blurRadius: 6,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.add, color: Colors.white, size: 28),
                   ),
-                  child: const Icon(Icons.add, color: Colors.white, size: 28),
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -623,14 +654,21 @@ class _EditorScreenState extends State<EditorScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          SizedBox(
+                            height: action.iconAsset == 'animation.png' ? 4 : 0,
+                          ),
                           Image.asset(
                             'assets/images/editor/photo_tools/${action.iconAsset}',
                             width: 28,
-                            height: 28,
+                            height: action.iconAsset == 'animation.png'
+                                ? 23
+                                : 28,
                             color: AppColors.iconNormal,
                             colorBlendMode: BlendMode.srcIn,
                           ),
-                          const SizedBox(height: 4),
+                          SizedBox(
+                            height: action.iconAsset == 'animation.png' ? 6 : 4,
+                          ),
                           Text(
                             action.label,
                             maxLines: 1,
@@ -751,23 +789,44 @@ class _EditorScreenState extends State<EditorScreen> {
     project.updatePhoto(index, photo.copyWith(path: output.path));
   }
 
-  Widget _photoEditSheet(SlideshowProject project) {
+  Widget _photoEditSheet(
+    SlideshowProject project, {
+    double? heightOverride,
+    bool compactContent = false,
+  }) {
     final index = project.selectedPhotoIndex;
     if (index == null || index >= project.photos.length) {
       return const SizedBox.shrink();
     }
     final photo = project.photos[index];
     final tool = _photoTool!;
-    final height = tool == _PhotoTool.animation ? 220.0 : 180.0;
+    final height = heightOverride ?? _sheetHeight;
     return SectionSheet(
       title: _photoToolLabel(tool),
       height: height,
+      compactHeader: compactContent,
+      showTopDivider: !compactContent,
       onClose: () => setState(() => _photoTool = null),
       onConfirm: () => setState(() => _photoTool = null),
       child: switch (tool) {
-        _PhotoTool.duration => _photoDurationPanel(project, index, photo),
-        _PhotoTool.animation => _photoAnimationPanel(project, index, photo),
-        _PhotoTool.background => _photoBackgroundPanel(project, index, photo),
+        _PhotoTool.duration => _photoDurationPanel(
+          project,
+          index,
+          photo,
+          compact: compactContent,
+        ),
+        _PhotoTool.animation => _photoAnimationPanel(
+          project,
+          index,
+          photo,
+          compact: compactContent,
+        ),
+        _PhotoTool.background => _photoBackgroundPanel(
+          project,
+          index,
+          photo,
+          compact: compactContent,
+        ),
         _PhotoTool.crop => _photoCropPanel(project, index, photo),
         _ => const SizedBox.shrink(),
       },
@@ -777,11 +836,14 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _photoDurationPanel(
     SlideshowProject project,
     int index,
-    SlideshowPhoto photo,
-  ) {
+    SlideshowPhoto photo, {
+    bool compact = false,
+  }) {
     final duration = _durationSliderValue ?? photo.durationSec;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+      padding: compact
+          ? const EdgeInsets.symmetric(horizontal: 20)
+          : const EdgeInsets.fromLTRB(20, 4, 20, 8),
       child: Column(
         children: [
           Row(
@@ -820,47 +882,83 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _photoAnimationPanel(
     SlideshowProject project,
     int index,
-    SlideshowPhoto photo,
-  ) {
+    SlideshowPhoto photo, {
+    bool compact = false,
+  }) {
     final selected = switch (_animationPhase) {
       _AnimationPhase.inAnimation => photo.animationIn,
       _AnimationPhase.outAnimation => photo.animationOut,
       _AnimationPhase.loop => photo.animationLoop,
     };
-    final options = PhotoAnimationType.values;
+    const options = <PhotoAnimationType>[
+      PhotoAnimationType.fade,
+      PhotoAnimationType.slightZoom,
+      PhotoAnimationType.zoomIn,
+      PhotoAnimationType.zoomOut,
+      PhotoAnimationType.shake,
+      PhotoAnimationType.slideLeft,
+      PhotoAnimationType.dynamicZoom,
+      PhotoAnimationType.dynamicZoomAlt,
+      PhotoAnimationType.wiper,
+      PhotoAnimationType.pendulum,
+      PhotoAnimationType.upAndDown,
+      PhotoAnimationType.shake2,
+      PhotoAnimationType.mirror,
+      PhotoAnimationType.slideUp,
+      PhotoAnimationType.slideRight,
+      PhotoAnimationType.slideDown,
+    ];
+    final thumb = compact ? 56.0 : 56.0;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            for (final phase in _AnimationPhase.values)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: TextButton(
-                  onPressed: () => setState(() => _animationPhase = phase),
-                  child: Text(
-                    switch (phase) {
-                      _AnimationPhase.inAnimation => 'In',
-                      _AnimationPhase.outAnimation => 'Out',
-                      _AnimationPhase.loop => 'Loop',
-                    },
-                    style: TextStyle(
-                      color: _animationPhase == phase
-                          ? AppColors.primary
-                          : AppColors.textMuted,
-                      fontWeight: FontWeight.w700,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 8, 0),
+          child: Row(
+            children: [
+              for (final phase in _AnimationPhase.values)
+                InkWell(
+                  onTap: () => setState(() => _animationPhase = phase),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Column(
+                      children: [
+                        Text(
+                          switch (phase) {
+                            _AnimationPhase.inAnimation => 'In',
+                            _AnimationPhase.outAnimation => 'Out',
+                            _AnimationPhase.loop => 'Loop',
+                          },
+                          style: TextStyle(
+                            fontSize: compact ? 13 : 15,
+                            color: _animationPhase == phase
+                                ? AppColors.textDark
+                                : AppColors.textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+
+                        Container(
+                          width: 18,
+                          height: 2,
+                          color: _animationPhase == phase
+                              ? AppColors.textDark
+                              : Colors.transparent,
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
+        const SizedBox(height: 4.4),
         Expanded(
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 2),
             itemCount: options.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (context, i) {
               final animation = options[i];
               final isSelected = selected == animation;
@@ -880,41 +978,35 @@ class _EditorScreenState extends State<EditorScreen> {
                   project.updatePhoto(index, updated);
                 },
                 child: SizedBox(
-                  width: 70,
+                  width: thumb,
                   child: Column(
                     children: [
                       Container(
-                        width: 54,
-                        height: 54,
+                        width: thumb,
+                        height: thumb,
                         decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppColors.primarySoft
-                              : AppColors.surfaceAlt,
                           border: Border.all(
                             color: isSelected
                                 ? AppColors.primary
-                                : AppColors.border,
-                            width: isSelected ? 2 : 1,
+                                : Colors.transparent,
+                            width: 2,
                           ),
-                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Icon(
-                          _animationIcon(animation),
-                          color: isSelected
-                              ? AppColors.primary
-                              : AppColors.iconNormal,
+                        clipBehavior: Clip.antiAlias,
+                        child: Image.asset(
+                          'assets/images/editor/animation_thumb.png',
+                          fit: BoxFit.fill,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 1),
                       Text(
-                        _animationLabel(animation),
+                        _animationLabel(animation, _animationPhase),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 10,
-                          color: isSelected
-                              ? AppColors.primaryDark
-                              : AppColors.textMuted,
+                          fontSize: compact ? 10 : 11,
+                          color: AppColors.textDark,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -931,8 +1023,9 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _photoBackgroundPanel(
     SlideshowProject project,
     int index,
-    SlideshowPhoto photo,
-  ) {
+    SlideshowPhoto photo, {
+    bool compact = false,
+  }) {
     const colors = <int?>[
       null,
       0xFFFFFFFF,
@@ -949,9 +1042,9 @@ class _EditorScreenState extends State<EditorScreen> {
     ];
     return ListView.separated(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: compact ? 4 : 20),
       itemCount: colors.length,
-      separatorBuilder: (_, _) => const SizedBox(width: 12),
+      separatorBuilder: (_, _) => SizedBox(width: compact ? 8 : 12),
       itemBuilder: (context, i) {
         final color = colors[i];
         final active = photo.backgroundArgb == color;
@@ -965,8 +1058,8 @@ class _EditorScreenState extends State<EditorScreen> {
           child: Column(
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: compact ? 36 : 48,
+                height: compact ? 36 : 48,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: color == null ? Colors.white : Color(color),
@@ -980,10 +1073,10 @@ class _EditorScreenState extends State<EditorScreen> {
                     ? const Icon(Icons.auto_awesome_motion, size: 18)
                     : null,
               ),
-              const SizedBox(height: 5),
+              SizedBox(height: compact ? 2 : 5),
               Text(
                 color == null ? 'Default' : _backgroundName(color),
-                style: const TextStyle(fontSize: 10),
+                style: TextStyle(fontSize: compact ? 9 : 10),
               ),
             ],
           ),
@@ -1049,29 +1142,30 @@ class _EditorScreenState extends State<EditorScreen> {
     _PhotoTool.replace => 'Replace',
   };
 
-  String _animationLabel(PhotoAnimationType animation) => switch (animation) {
-    PhotoAnimationType.none => 'None',
-    PhotoAnimationType.fade => 'Fade',
-    PhotoAnimationType.slightZoom => 'Slight zoom',
-    PhotoAnimationType.zoomIn => 'Zoom in',
-    PhotoAnimationType.zoomOut => 'Zoom out',
-    PhotoAnimationType.shake => 'Shake',
-    PhotoAnimationType.slideUp => 'Slide up',
-    PhotoAnimationType.slideRight => 'Slide right',
-    PhotoAnimationType.slideDown => 'Slide down',
-  };
-
-  IconData _animationIcon(PhotoAnimationType animation) => switch (animation) {
-    PhotoAnimationType.none => Icons.block,
-    PhotoAnimationType.fade => Icons.gradient,
-    PhotoAnimationType.slightZoom => Icons.zoom_out_map,
-    PhotoAnimationType.zoomIn => Icons.zoom_in,
-    PhotoAnimationType.zoomOut => Icons.zoom_out,
-    PhotoAnimationType.shake => Icons.vibration,
-    PhotoAnimationType.slideUp => Icons.keyboard_arrow_up,
-    PhotoAnimationType.slideRight => Icons.keyboard_arrow_right,
-    PhotoAnimationType.slideDown => Icons.keyboard_arrow_down,
-  };
+  String _animationLabel(PhotoAnimationType animation, _AnimationPhase phase) =>
+      switch (animation) {
+        PhotoAnimationType.none => 'None',
+        PhotoAnimationType.fade => switch (phase) {
+          _AnimationPhase.inAnimation => 'Fade in',
+          _AnimationPhase.outAnimation => 'Fade out',
+          _AnimationPhase.loop => 'Fade',
+        },
+        PhotoAnimationType.slightZoom => 'Slight zoom',
+        PhotoAnimationType.zoomIn => 'Zoom in',
+        PhotoAnimationType.zoomOut => 'Zoom out',
+        PhotoAnimationType.shake => 'Shake 1',
+        PhotoAnimationType.slideLeft => 'Slide left',
+        PhotoAnimationType.dynamicZoom => 'Dynamic zoom',
+        PhotoAnimationType.dynamicZoomAlt => 'Dynamic zoom',
+        PhotoAnimationType.wiper => 'Wiper',
+        PhotoAnimationType.pendulum => 'Pendulum',
+        PhotoAnimationType.upAndDown => 'Up and down',
+        PhotoAnimationType.shake2 => 'Shake 2',
+        PhotoAnimationType.mirror => 'Mirror',
+        PhotoAnimationType.slideUp => 'Slide up',
+        PhotoAnimationType.slideRight => 'Slide right',
+        PhotoAnimationType.slideDown => 'Slide down',
+      };
 
   String _backgroundName(int color) => switch (color) {
     0xFFFFFFFF => 'White',
@@ -1093,6 +1187,12 @@ class _EditorScreenState extends State<EditorScreen> {
     final project = context.watch<SlideshowProject>();
     final (ow, oh) = project.outputSize;
     final aspect = ow / oh;
+    final photoToolReplacesTimeline =
+        project.selectedPhotoIndex != null &&
+        (_photoTool == _PhotoTool.duration ||
+            _photoTool == _PhotoTool.animation ||
+            _photoTool == _PhotoTool.background);
+    final inlineSheetHeight = _sheetHeight - _inlineTimelineHeaderHeight;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -1216,8 +1316,20 @@ class _EditorScreenState extends State<EditorScreen> {
           ),
 
           if (project.selectedPhotoIndex != null) ...[
-            _idleToolPanel(project),
-            if (_photoTool == null)
+            if (photoToolReplacesTimeline)
+              _idleToolPanel(
+                project,
+                height: _inlineTimelineHeaderHeight + inlineSheetHeight,
+                timelineHeaderHeight: _inlineTimelineHeaderHeight,
+                timelineContent: _photoEditSheet(
+                  project,
+                  heightOverride: inlineSheetHeight,
+                  compactContent: true,
+                ),
+              )
+            else
+              _idleToolPanel(project),
+            if (_photoTool == null || photoToolReplacesTimeline)
               _photoEditorToolbar(project)
             else
               _photoEditSheet(project),

@@ -34,15 +34,40 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.shake:
         final dx = (math.sin(t * math.pi * 8) * w * 0.035).round();
         return _place(image, w, h, dx, 0, backgroundArgb);
+      case PhotoAnimationType.shake2:
+        final sx = (math.sin(t * math.pi * 12) * w * 0.05).round();
+        final sy = (math.cos(t * math.pi * 10) * h * 0.02).round();
+        return _place(image, w, h, sx, sy, backgroundArgb);
+      case PhotoAnimationType.slideLeft:
+        return _place(image, w, h, -((1 - t) * w).round(), 0, backgroundArgb);
       case PhotoAnimationType.slideUp:
-        final dy = ((1 - t) * h).round();
-        return _place(image, w, h, 0, dy, backgroundArgb);
+        return _place(image, w, h, 0, ((1 - t) * h).round(), backgroundArgb);
       case PhotoAnimationType.slideRight:
-        final dx = ((1 - t) * w).round();
-        return _place(image, w, h, dx, 0, backgroundArgb);
+        return _place(image, w, h, ((1 - t) * w).round(), 0, backgroundArgb);
       case PhotoAnimationType.slideDown:
-        final dy = -((1 - t) * h).round();
-        return _place(image, w, h, 0, dy, backgroundArgb);
+        return _place(image, w, h, 0, -((1 - t) * h).round(), backgroundArgb);
+      case PhotoAnimationType.dynamicZoom:
+        return _zoom(image, 1.0 + 0.28 * t, backgroundArgb);
+      case PhotoAnimationType.dynamicZoomAlt:
+        return _zoom(image, 1.28 - 0.28 * t, backgroundArgb);
+      case PhotoAnimationType.wiper:
+        return _place(
+          image,
+          w,
+          h,
+          ((0.5 - t) * w * 0.35).round(),
+          0,
+          backgroundArgb,
+        );
+      case PhotoAnimationType.pendulum:
+        final swing = (math.sin(t * math.pi) * w * 0.12).round();
+        return _place(image, w, h, swing, 0, backgroundArgb);
+      case PhotoAnimationType.upAndDown:
+        final bob = (math.sin(t * math.pi * 2) * h * 0.06).round();
+        return _place(image, w, h, 0, bob, backgroundArgb);
+      case PhotoAnimationType.mirror:
+        final flipped = img.flipHorizontal(image);
+        return t < 0.5 ? image : flipped;
     }
   }
 
