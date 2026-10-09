@@ -14,6 +14,7 @@ enum SlideTransitionType {
   pixelGrid,
   bar,
   crossMerge,
+
   /// slide_15 ↑↓←→ — NEW cross opens from center outward (inverse of Cross_Merge).
   crossOpen,
   rectZoomIn,
@@ -33,10 +34,13 @@ enum SlideTransitionType {
   curvedDown,
   tiltDrift,
   jalousie,
+
   /// Native Jalousie_BT (ic_t_16) — 8 horizontal louvers, rotateX 0→180°.
   jalousieBt,
+
   /// Native Jalousie_LR (ic_t_18) — 8 vertical louvers, rotateY 0→180°.
   jalousieLr,
+
   /// Native RollInTurn_Down_Up (ic_t_19) — CoverFlow strip wave, rotateY.
   rollInTurnLr,
   zoomIn,
@@ -358,19 +362,80 @@ class MusicTrack {
   }
 }
 
+enum PhotoAnimationType {
+  none,
+  fade,
+  slightZoom,
+  zoomIn,
+  zoomOut,
+  shake,
+  slideUp,
+  slideRight,
+  slideDown,
+}
+
 class SlideshowPhoto {
   final String id;
   final String path;
   final PhotoFilterPreset filter;
+  final double durationSec;
+  final int? backgroundArgb;
+  final double? cropAspectRatio;
+  final bool mirrored;
+  final bool flipped;
+  final int rotationQuarterTurns;
+  final PhotoAnimationType animationIn;
+  final PhotoAnimationType animationOut;
+  final PhotoAnimationType animationLoop;
 
   SlideshowPhoto({
     required this.id,
     required this.path,
     this.filter = PhotoFilterPreset.original,
+    this.durationSec = AppConstants.defaultDurationSec,
+    this.backgroundArgb,
+    this.cropAspectRatio,
+    this.mirrored = false,
+    this.flipped = false,
+    this.rotationQuarterTurns = 0,
+    this.animationIn = PhotoAnimationType.none,
+    this.animationOut = PhotoAnimationType.none,
+    this.animationLoop = PhotoAnimationType.none,
   });
 
-  SlideshowPhoto copyWith({PhotoFilterPreset? filter}) {
-    return SlideshowPhoto(id: id, path: path, filter: filter ?? this.filter);
+  SlideshowPhoto copyWith({
+    String? path,
+    PhotoFilterPreset? filter,
+    double? durationSec,
+    int? backgroundArgb,
+    bool clearBackgroundArgb = false,
+    double? cropAspectRatio,
+    bool clearCropAspectRatio = false,
+    bool? mirrored,
+    bool? flipped,
+    int? rotationQuarterTurns,
+    PhotoAnimationType? animationIn,
+    PhotoAnimationType? animationOut,
+    PhotoAnimationType? animationLoop,
+  }) {
+    return SlideshowPhoto(
+      id: id,
+      path: path ?? this.path,
+      filter: filter ?? this.filter,
+      durationSec: durationSec ?? this.durationSec,
+      backgroundArgb: clearBackgroundArgb
+          ? null
+          : backgroundArgb ?? this.backgroundArgb,
+      cropAspectRatio: clearCropAspectRatio
+          ? null
+          : cropAspectRatio ?? this.cropAspectRatio,
+      mirrored: mirrored ?? this.mirrored,
+      flipped: flipped ?? this.flipped,
+      rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
+      animationIn: animationIn ?? this.animationIn,
+      animationOut: animationOut ?? this.animationOut,
+      animationLoop: animationLoop ?? this.animationLoop,
+    );
   }
 }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -10,20 +11,49 @@ import '../core/constants/app_constants.dart';
 import '../models/models.dart';
 import 'effect_overlay_service.dart';
 import 'frame_compositor.dart';
+import 'photo_animation_engine.dart';
 import 'transition_engine.dart';
 
 Uint8List _preparePhotoInWorker(Map<String, Object> args) {
-  final sourceBytes = args['bytes'] as Uint8List;
-  final decoded = img.decodeImage(sourceBytes);
+  final decoded = img.decodeImage(args['bytes'] as Uint8List);
   if (decoded == null) throw const FormatException('Unsupported image file');
 
   final filter = PhotoFilterPreset.values[args['filter'] as int];
-  final filtered = FrameCompositor.applyFilter(decoded, filter);
+  var filtered = FrameCompositor.applyFilter(decoded, filter);
+  final cropAspectRatio = args['cropAspectRatio'] as double;
+  if (cropAspectRatio > 0) {
+    final sourceAspectRatio = filtered.width / filtered.height;
+    var cropWidth = filtered.width;
+    var cropHeight = filtered.height;
+    if (sourceAspectRatio > cropAspectRatio) {
+      cropWidth = (filtered.height * cropAspectRatio).round();
+    } else {
+      cropHeight = (filtered.width / cropAspectRatio).round();
+    }
+    filtered = img.copyCrop(
+      filtered,
+      x: (filtered.width - cropWidth) ~/ 2,
+      y: (filtered.height - cropHeight) ~/ 2,
+      width: cropWidth,
+      height: cropHeight,
+    );
+  }
+  if (args['mirrored'] as bool) img.flipHorizontal(filtered);
+  if (args['flipped'] as bool) img.flipVertical(filtered);
+  final rotationQuarterTurns = args['rotationQuarterTurns'] as int;
+  if (rotationQuarterTurns != 0) {
+    filtered = img.copyRotate(
+      filtered,
+      angle: rotationQuarterTurns * 90,
+      interpolation: img.Interpolation.linear,
+    );
+  }
+
   final canvas = FrameCompositor.placeOnCanvas(
     src: filtered,
     w: args['width'] as int,
     h: args['height'] as int,
-    bgArgb: args['background'] as int,
+    bgArgb: args['photoBackground'] as int,
   );
   return Uint8List.fromList(img.encodeJpg(canvas, quality: 90));
 }
@@ -32,6 +62,7 @@ class SlideshowProject extends ChangeNotifier {
   final List<SlideshowPhoto> photos = [];
   SlideTheme selectedTheme = AppThemes.all.first;
   bool isEffectOverlayEnabled = false;
+  int? selectedPhotoIndex;
   SlideTransitionOption selectedSlideTransition =
       SlideTransitionOption.all.first;
   String? selectedFrameAsset;
@@ -90,7 +121,22 @@ class SlideshowProject extends ChangeNotifier {
   /// Smaller size so preview can play near real-time like native.
   (int, int) get previewSize => aspectRatio.sizeForQuality(ExportQuality.p480);
 
-  double get previewFps => AppConstants.framesPerTransition / slideDurationSec;
+  double get previewFps =>
+      (AppConstants.framesPerTransition + AppConstants.holdFrames) /
+      slideDurationSec;
+
+  int frameCountForDuration(double seconds) =>
+      (seconds * previewFps).round().clamp(1, 10000);
+
+  int photoFrameStartIndex(int photoIndex) {
+    var index = startingCard == null
+        ? 0
+        : frameCountForDuration(startingCard!.durationSec);
+    for (var i = 0; i < photoIndex && i < photos.length; i++) {
+      index += frameCountForDuration(photos[i].durationSec);
+    }
+    return index;
+  }
 
   final List<_EditorSnapshot> _undoStack = [];
   final List<_EditorSnapshot> _redoStack = [];
@@ -101,6 +147,7 @@ class SlideshowProject extends ChangeNotifier {
   _EditorSnapshot _snapshot() => _EditorSnapshot(
     photos: List<SlideshowPhoto>.from(photos),
     transitionId: selectedSlideTransition.id,
+    selectedPhotoIndex: selectedPhotoIndex,
   );
 
   void _recordHistory() {
@@ -129,11 +176,20 @@ class SlideshowProject extends ChangeNotifier {
       (o) => o.id == snap.transitionId,
       orElse: () => SlideTransitionOption.all.first,
     );
+    selectedPhotoIndex = snap.selectedPhotoIndex == null || photos.isEmpty
+        ? null
+        : snap.selectedPhotoIndex!.clamp(0, photos.length - 1).toInt();
     generatedFrames = [];
     stopPreviewPlayback();
     _invalidatePreviewCache();
     notifyListeners();
-    unawaited(refreshLivePreview());
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames());
+    } else if (photos.isNotEmpty) {
+      unawaited(_refreshPhotoPreview(selectedPhotoIndex ?? 0));
+    } else {
+      _setPreviewFrame(null);
+    }
   }
 
   void setPhotos(List<SlideshowPhoto> list) {
@@ -143,7 +199,62 @@ class SlideshowProject extends ChangeNotifier {
     generatedFrames = [];
     _setPreviewFrame(null);
     _invalidatePreviewCache();
+    selectedPhotoIndex = null;
     notifyListeners();
+  }
+
+  void selectTimelinePhoto(int index) {
+    if (index < 0 || index >= photos.length) return;
+    selectedPhotoIndex = index;
+    stopPreviewPlayback();
+    if (_previewMemoryFrames.isNotEmpty && isPreviewReady) {
+      final frameIndex = photoFrameStartIndex(index)
+          .clamp(0, _previewMemoryFrames.length - 1)
+          .toInt();
+      previewFrameIndex = frameIndex;
+      _setPreviewPosition(frameIndex / previewFps);
+      _setPreviewFrame(_previewMemoryFrames[frameIndex]);
+    } else if (photos.length < AppConstants.minPhotos) {
+      unawaited(_refreshPhotoPreview(index));
+    } else if (!isPreparingPreview) {
+      unawaited(preparePreviewFrames());
+    }
+    notifyListeners();
+  }
+
+  void clearTimelinePhotoSelection() {
+    selectedPhotoIndex = null;
+    stopPreviewPlayback();
+    if (_previewMemoryFrames.isNotEmpty) {
+      previewFrameIndex = 0;
+      _setPreviewPosition(0);
+      _setPreviewFrame(_previewMemoryFrames.first);
+    } else if (photos.isNotEmpty) {
+      unawaited(_refreshPhotoPreview(0));
+    }
+    notifyListeners();
+  }
+
+  void updatePhoto(int index, SlideshowPhoto photo) {
+    if (index < 0 || index >= photos.length) return;
+    _recordHistory();
+    photos[index] = photo;
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames());
+    } else {
+      unawaited(_refreshPhotoPreview(index));
+    }
+  }
+
+  void changePhotoDuration(int index, double seconds) {
+    if (index < 0 || index >= photos.length) return;
+    final duration = seconds.clamp(1.0, 10.0).toDouble();
+    if ((photos[index].durationSec - duration).abs() < 0.001) return;
+    updatePhoto(index, photos[index].copyWith(durationSec: duration));
   }
 
   void reorderPhoto(int oldIndex, int newIndex) {
@@ -159,7 +270,40 @@ class SlideshowProject extends ChangeNotifier {
     if (index < 0 || index >= photos.length) return;
     _recordHistory();
     photos.removeAt(index);
+    final previouslySelected = selectedPhotoIndex;
+    if (photos.isEmpty) {
+      selectedPhotoIndex = null;
+    } else if (previouslySelected == index) {
+      selectedPhotoIndex = index >= photos.length ? photos.length - 1 : index;
+    } else if (previouslySelected != null && previouslySelected > index) {
+      selectedPhotoIndex = previouslySelected - 1;
+    }
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
     notifyListeners();
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames());
+    } else if (photos.isNotEmpty) {
+      unawaited(_refreshPhotoPreview(selectedPhotoIndex ?? 0));
+    } else {
+      _setPreviewFrame(null);
+    }
+  }
+
+  Future<void> _refreshPhotoPreview(int index) async {
+    if (index < 0 || index >= photos.length) return;
+    try {
+      final (w, h) = previewSize;
+      final image = await _preparePhoto(photos[index], w, h);
+      final baked = await _finalize(image);
+      _setPreviewFrame(
+        Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
+      );
+      notifyListeners();
+    } catch (_) {
+      // Keep the current frame if a replacement image cannot be decoded.
+    }
   }
 
   void selectTheme(SlideTheme theme) {
@@ -234,9 +378,14 @@ class SlideshowProject extends ChangeNotifier {
       if (generation != _previewGeneration) return;
       isPreviewReady = _previewMemoryFrames.isNotEmpty;
       if (isPreviewReady) {
-        previewFrameIndex = 0;
-        _setPreviewPosition(0);
-        _setPreviewFrame(_previewMemoryFrames.first);
+        final selectedStart = selectedPhotoIndex == null
+            ? 0
+            : photoFrameStartIndex(selectedPhotoIndex!);
+        previewFrameIndex = selectedStart
+            .clamp(0, _previewMemoryFrames.length - 1)
+            .toInt();
+        _setPreviewPosition(previewFrameIndex / previewFps);
+        _setPreviewFrame(_previewMemoryFrames[previewFrameIndex]);
       }
     } finally {
       if (generation == _previewGeneration) {
@@ -248,7 +397,16 @@ class SlideshowProject extends ChangeNotifier {
 
   String _buildPreviewCacheKey() {
     return [
-      photos.map((e) => '${e.path}:${e.filter.name}').join('|'),
+      photos
+          .map(
+            (e) =>
+                '${e.path}:${e.filter.name}:${e.durationSec}:'
+                '${e.backgroundArgb}:${e.cropAspectRatio}:${e.mirrored}:'
+                '${e.flipped}:${e.rotationQuarterTurns}:'
+                '${e.animationIn.name}:${e.animationOut.name}:'
+                '${e.animationLoop.name}',
+          )
+          .join('|'),
       selectedTheme.id,
       isEffectOverlayEnabled,
       selectedSlideTransition.id,
@@ -298,9 +456,14 @@ class SlideshowProject extends ChangeNotifier {
 
     isPreviewPlaying = true;
     isPlaying = true;
-    previewFrameIndex = 0;
-    _setPreviewPosition(0);
-    _setPreviewFrame(_previewMemoryFrames.first);
+    final selectedStart = selectedPhotoIndex == null
+        ? 0
+        : photoFrameStartIndex(selectedPhotoIndex!);
+    previewFrameIndex = selectedStart
+        .clamp(0, _previewMemoryFrames.length - 1)
+        .toInt();
+    _setPreviewPosition(previewFrameIndex / previewFps);
+    _setPreviewFrame(_previewMemoryFrames[previewFrameIndex]);
     notifyListeners(); // play/pause icon only
 
     // Slightly gentler than encode FPS so JPEG decode can keep up (less blink).
@@ -316,10 +479,15 @@ class SlideshowProject extends ChangeNotifier {
         _previewTimer = null;
         isPreviewPlaying = false;
         isPlaying = false;
-        previewFrameIndex = 0;
-        _setPreviewPosition(0);
+        final selectedStart = selectedPhotoIndex == null
+            ? 0
+            : photoFrameStartIndex(selectedPhotoIndex!);
+        previewFrameIndex = selectedStart
+            .clamp(0, _previewMemoryFrames.length - 1)
+            .toInt();
+        _setPreviewPosition(previewFrameIndex / previewFps);
         if (_previewMemoryFrames.isNotEmpty) {
-          _setPreviewFrame(_previewMemoryFrames.first);
+          _setPreviewFrame(_previewMemoryFrames[previewFrameIndex]);
         }
         notifyListeners(); // stop icon
         return;
@@ -391,63 +559,134 @@ class SlideshowProject extends ChangeNotifier {
         w: w,
         h: h,
       );
-      final n = (startingCard!.durationSec * previewFps).round().clamp(4, 40);
+      final n = frameCountForDuration(startingCard!.durationSec).clamp(4, 300);
       for (var i = 0; i < n; i++) {
         if (generation != _previewGeneration) return;
         await pushFrame(cardImg);
       }
     }
 
-    for (var i = 0; i < pairs; i++) {
+    for (var i = 0; i < decoded.length; i++) {
       if (generation != _previewGeneration) return;
-      final from = decoded[i];
-      final to = decoded[i + 1];
+      final photo = photos[i];
+      final totalFrames = frameCountForDuration(photo.durationSec);
+      final transitionFrames = i < pairs && effect != SlideTransitionType.none
+          ? math.min(AppConstants.framesPerTransition, totalFrames)
+          : 0;
+      final outFrames =
+          photo.animationOut != PhotoAnimationType.none &&
+              (effect == SlideTransitionType.none || i == pairs)
+          ? math.min(AppConstants.framesPerTransition, totalFrames)
+          : 0;
+      final holdFrames = totalFrames - transitionFrames - outFrames;
+      final background = photo.backgroundArgb ?? backgroundArgb;
 
-      for (var hold = 0; hold < AppConstants.holdFrames; hold++) {
+      for (var hold = 0; hold < holdFrames; hold++) {
         if (generation != _previewGeneration) return;
-        await pushFrame(from);
+        var held = decoded[i];
+        final inFrames = math.min(AppConstants.framesPerTransition, holdFrames);
+        final animateInDuringHold =
+            photo.animationIn != PhotoAnimationType.none &&
+            inFrames > 0 &&
+            (effect == SlideTransitionType.none || i == 0);
+        if (animateInDuringHold) {
+          held = PhotoAnimationEngine.apply(
+            image: held,
+            type: photo.animationIn,
+            progress: (hold + 1) / inFrames,
+            backgroundArgb: background,
+          );
+        }
+        if (photo.animationLoop != PhotoAnimationType.none) {
+          held = PhotoAnimationEngine.apply(
+            image: held,
+            type: photo.animationLoop,
+            progress: ((hold / totalFrames) * 3) % 1,
+            backgroundArgb: background,
+          );
+        }
+        await pushFrame(held);
       }
 
-      // None = hard cut (one frame of next), skip long blend.
-      if (effect == SlideTransitionType.none) {
-        await pushFrame(to);
-        continue;
-      }
-
-      final option = selectedSlideTransition;
-      for (var t = 0; t < AppConstants.framesPerTransition; t++) {
-        if (generation != _previewGeneration) return;
-        final progress = (t + 1) / AppConstants.framesPerTransition;
-        final blended = TransitionEngine.apply(
-          from: from,
-          to: to,
-          type: effect,
-          progress: progress,
-          gridCols: option.gridCols,
-          gridRows: option.gridRows,
-          reverseDiagonal: option.reverseDiagonal,
-          topToBottom: option.topToBottom,
-          pivotNx: option.pivotNx,
-          pivotNy: option.pivotNy,
-        );
-        await pushFrame(blended);
+      if (transitionFrames > 0) {
+        final option = selectedSlideTransition;
+        final nextPhoto = photos[i + 1];
+        final nextBackground = nextPhoto.backgroundArgb ?? backgroundArgb;
+        for (var t = 0; t < transitionFrames; t++) {
+          if (generation != _previewGeneration) return;
+          final progress = (t + 1) / transitionFrames;
+          var fromFrame = decoded[i];
+          if (photo.animationOut != PhotoAnimationType.none) {
+            fromFrame = PhotoAnimationEngine.apply(
+              image: fromFrame,
+              type: photo.animationOut,
+              progress: progress,
+              backgroundArgb: background,
+              reverse: true,
+            );
+          }
+          if (photo.animationLoop != PhotoAnimationType.none) {
+            fromFrame = PhotoAnimationEngine.apply(
+              image: fromFrame,
+              type: photo.animationLoop,
+              progress: ((t / totalFrames) * 3) % 1,
+              backgroundArgb: background,
+            );
+          }
+          var toFrame = decoded[i + 1];
+          if (nextPhoto.animationIn != PhotoAnimationType.none) {
+            toFrame = PhotoAnimationEngine.apply(
+              image: toFrame,
+              type: nextPhoto.animationIn,
+              progress: progress,
+              backgroundArgb: nextBackground,
+            );
+          }
+          if (nextPhoto.animationLoop != PhotoAnimationType.none) {
+            toFrame = PhotoAnimationEngine.apply(
+              image: toFrame,
+              type: nextPhoto.animationLoop,
+              progress: ((t / totalFrames) * 3) % 1,
+              backgroundArgb: nextBackground,
+            );
+          }
+          final blended = TransitionEngine.apply(
+            from: fromFrame,
+            to: toFrame,
+            type: effect,
+            progress: progress,
+            gridCols: option.gridCols,
+            gridRows: option.gridRows,
+            reverseDiagonal: option.reverseDiagonal,
+            topToBottom: option.topToBottom,
+            pivotNx: option.pivotNx,
+            pivotNy: option.pivotNy,
+          );
+          await pushFrame(blended);
+        }
+      } else if (outFrames > 0) {
+        for (var t = 0; t < outFrames; t++) {
+          if (generation != _previewGeneration) return;
+          final fromFrame = PhotoAnimationEngine.apply(
+            image: decoded[i],
+            type: photo.animationOut,
+            progress: (t + 1) / outFrames,
+            backgroundArgb: background,
+            reverse: true,
+          );
+          await pushFrame(fromFrame);
+        }
       }
     }
 
     if (generation != _previewGeneration) return;
-    final last = decoded.last;
-    for (var hold = 0; hold < AppConstants.holdFrames; hold++) {
-      if (generation != _previewGeneration) return;
-      await pushFrame(last);
-    }
-
     if (endingCard != null) {
       final cardImg = await FrameCompositor.makeTitleCard(
         card: endingCard!,
         w: w,
         h: h,
       );
-      final n = (endingCard!.durationSec * previewFps).round().clamp(4, 40);
+      final n = frameCountForDuration(endingCard!.durationSec).clamp(4, 300);
       for (var i = 0; i < n; i++) {
         if (generation != _previewGeneration) return;
         await pushFrame(cardImg);
@@ -553,7 +792,11 @@ class SlideshowProject extends ChangeNotifier {
       'filter': photo.filter.index,
       'width': w,
       'height': h,
-      'background': backgroundArgb,
+      'photoBackground': photo.backgroundArgb ?? backgroundArgb,
+      'cropAspectRatio': photo.cropAspectRatio ?? 0.0,
+      'mirrored': photo.mirrored,
+      'flipped': photo.flipped,
+      'rotationQuarterTurns': photo.rotationQuarterTurns,
     });
     final prepared = TransitionEngine.decode(preparedBytes);
     if (prepared == null) {
@@ -597,8 +840,6 @@ class SlideshowProject extends ChangeNotifier {
 
       final frames = <File>[];
       var frameIndex = 0;
-      // Prefer explicit Slide-panel transition; fall back to theme mix.
-      final effectList = <SlideTransitionType>[selectedSlideTransition.type];
       final pairs = decoded.length - 1;
 
       Future<void> writeFrame(img.Image image) async {
@@ -624,67 +865,151 @@ class SlideshowProject extends ChangeNotifier {
           w: w,
           h: h,
         );
-        introFrames = (startingCard!.durationSec * (22.0 / slideDurationSec))
-            .round()
-            .clamp(8, 60);
+        introFrames = frameCountForDuration(startingCard!.durationSec);
         for (var i = 0; i < introFrames; i++) {
           await writeFrame(cardImg);
         }
       }
 
+      final endingFrames = endingCard == null
+          ? 0
+          : frameCountForDuration(endingCard!.durationSec);
       final totalFramesEstimate =
           introFrames +
-          pairs * (AppConstants.framesPerTransition + AppConstants.holdFrames) +
-          AppConstants.holdFrames +
-          (endingCard != null ? 16 : 0);
+          photos.fold<int>(
+            0,
+            (total, photo) => total + frameCountForDuration(photo.durationSec),
+          ) +
+          endingFrames;
+      final effect = selectedSlideTransition.type;
+      final option = selectedSlideTransition;
 
-      for (var i = 0; i < pairs; i++) {
-        final from = decoded[i];
-        final to = decoded[i + 1];
-        final effect = effectList[i % effectList.length];
+      for (var i = 0; i < decoded.length; i++) {
+        final photo = photos[i];
+        final totalFrames = frameCountForDuration(photo.durationSec);
+        final transitionFrames = i < pairs && effect != SlideTransitionType.none
+            ? math.min(AppConstants.framesPerTransition, totalFrames)
+            : 0;
+        final outFrames =
+            photo.animationOut != PhotoAnimationType.none &&
+                (effect == SlideTransitionType.none || i == pairs)
+            ? math.min(AppConstants.framesPerTransition, totalFrames)
+            : 0;
+        final holdFrames = totalFrames - transitionFrames - outFrames;
+        final background = photo.backgroundArgb ?? backgroundArgb;
 
-        for (var hold = 0; hold < AppConstants.holdFrames; hold++) {
-          await writeFrame(from);
-          processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
-          onProgress?.call(processProgress);
-        }
-
-        final option = selectedSlideTransition;
-        if (effect == SlideTransitionType.none) {
-          await writeFrame(to);
-          processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
-          onProgress?.call(processProgress);
-          continue;
-        }
-
-        for (var t = 0; t < AppConstants.framesPerTransition; t++) {
-          final progress = (t + 1) / AppConstants.framesPerTransition;
-          final blended = TransitionEngine.apply(
-            from: from,
-            to: to,
-            type: effect,
-            progress: progress,
-            gridCols: option.gridCols,
-            gridRows: option.gridRows,
-            reverseDiagonal: option.reverseDiagonal,
-            topToBottom: option.topToBottom,
-            pivotNx: option.pivotNx,
-            pivotNy: option.pivotNy,
+        for (var hold = 0; hold < holdFrames; hold++) {
+          var held = decoded[i];
+          final inFrames = math.min(
+            AppConstants.framesPerTransition,
+            holdFrames,
           );
-          await writeFrame(blended);
+          final animateInDuringHold =
+              photo.animationIn != PhotoAnimationType.none &&
+              inFrames > 0 &&
+              (effect == SlideTransitionType.none || i == 0);
+          if (animateInDuringHold) {
+            held = PhotoAnimationEngine.apply(
+              image: held,
+              type: photo.animationIn,
+              progress: (hold + 1) / inFrames,
+              backgroundArgb: background,
+            );
+          }
+          if (photo.animationLoop != PhotoAnimationType.none) {
+            held = PhotoAnimationEngine.apply(
+              image: held,
+              type: photo.animationLoop,
+              progress: ((hold / totalFrames) * 3) % 1,
+              backgroundArgb: background,
+            );
+          }
+          await writeFrame(held);
           processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
           onProgress?.call(processProgress);
-          if (t % 3 == 0) {
-            previewFrameBytes = await frames.last.readAsBytes();
-            previewFrameIndex = frameIndex - 1;
-            notifyListeners();
+        }
+
+        if (transitionFrames > 0) {
+          final nextPhoto = photos[i + 1];
+          final nextBackground = nextPhoto.backgroundArgb ?? backgroundArgb;
+          for (var t = 0; t < transitionFrames; t++) {
+            final progress = (t + 1) / transitionFrames;
+            var fromFrame = decoded[i];
+            if (photo.animationOut != PhotoAnimationType.none) {
+              fromFrame = PhotoAnimationEngine.apply(
+                image: fromFrame,
+                type: photo.animationOut,
+                progress: progress,
+                backgroundArgb: background,
+                reverse: true,
+              );
+            }
+            if (photo.animationLoop != PhotoAnimationType.none) {
+              fromFrame = PhotoAnimationEngine.apply(
+                image: fromFrame,
+                type: photo.animationLoop,
+                progress: ((t / totalFrames) * 3) % 1,
+                backgroundArgb: background,
+              );
+            }
+            var toFrame = decoded[i + 1];
+            if (nextPhoto.animationIn != PhotoAnimationType.none) {
+              toFrame = PhotoAnimationEngine.apply(
+                image: toFrame,
+                type: nextPhoto.animationIn,
+                progress: progress,
+                backgroundArgb: nextBackground,
+              );
+            }
+            if (nextPhoto.animationLoop != PhotoAnimationType.none) {
+              toFrame = PhotoAnimationEngine.apply(
+                image: toFrame,
+                type: nextPhoto.animationLoop,
+                progress: ((t / totalFrames) * 3) % 1,
+                backgroundArgb: nextBackground,
+              );
+            }
+            final blended = TransitionEngine.apply(
+              from: fromFrame,
+              to: toFrame,
+              type: effect,
+              progress: progress,
+              gridCols: option.gridCols,
+              gridRows: option.gridRows,
+              reverseDiagonal: option.reverseDiagonal,
+              topToBottom: option.topToBottom,
+              pivotNx: option.pivotNx,
+              pivotNy: option.pivotNy,
+            );
+            await writeFrame(blended);
+            processProgress = (frameIndex / totalFramesEstimate).clamp(
+              0.0,
+              1.0,
+            );
+            onProgress?.call(processProgress);
+            if (t % 3 == 0) {
+              previewFrameBytes = await frames.last.readAsBytes();
+              previewFrameIndex = frameIndex - 1;
+              notifyListeners();
+            }
+          }
+        } else if (outFrames > 0) {
+          for (var t = 0; t < outFrames; t++) {
+            final fromFrame = PhotoAnimationEngine.apply(
+              image: decoded[i],
+              type: photo.animationOut,
+              progress: (t + 1) / outFrames,
+              backgroundArgb: background,
+              reverse: true,
+            );
+            await writeFrame(fromFrame);
+            processProgress = (frameIndex / totalFramesEstimate).clamp(
+              0.0,
+              1.0,
+            );
+            onProgress?.call(processProgress);
           }
         }
-      }
-
-      final last = decoded.last;
-      for (var hold = 0; hold < AppConstants.holdFrames; hold++) {
-        await writeFrame(last);
       }
 
       if (endingCard != null) {
@@ -693,9 +1018,7 @@ class SlideshowProject extends ChangeNotifier {
           w: w,
           h: h,
         );
-        final n = (endingCard!.durationSec * (22.0 / slideDurationSec))
-            .round()
-            .clamp(8, 60);
+        final n = endingFrames;
         for (var i = 0; i < n; i++) {
           await writeFrame(cardImg);
         }
@@ -703,8 +1026,11 @@ class SlideshowProject extends ChangeNotifier {
 
       generatedFrames = frames;
       if (frames.isNotEmpty) {
-        previewFrameBytes = await frames.first.readAsBytes();
-        previewFrameIndex = 0;
+        final selectedStart = selectedPhotoIndex == null
+            ? 0
+            : photoFrameStartIndex(selectedPhotoIndex!);
+        previewFrameIndex = selectedStart.clamp(0, frames.length - 1).toInt();
+        previewFrameBytes = await frames[previewFrameIndex].readAsBytes();
       }
       processProgress = 1;
     } finally {
@@ -722,7 +1048,8 @@ class SlideshowProject extends ChangeNotifier {
     }
     try {
       final (w, h) = previewSize;
-      final prepared = await _preparePhoto(photos.first, w, h);
+      final index = selectedPhotoIndex ?? 0;
+      final prepared = await _preparePhoto(photos[index], w, h);
       final baked = await _finalize(prepared);
       _setPreviewFrame(
         Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
@@ -735,24 +1062,20 @@ class SlideshowProject extends ChangeNotifier {
 
   double get estimatedDurationSec {
     if (photos.length < 2) return 0;
-    final pairs = photos.length - 1;
-    var frames =
-        pairs * (AppConstants.framesPerTransition + AppConstants.holdFrames) +
-        AppConstants.holdFrames;
-    final fps = 22.0 / slideDurationSec;
-    if (startingCard != null) {
-      frames += (startingCard!.durationSec * fps).round();
-    }
-    if (endingCard != null) {
-      frames += (endingCard!.durationSec * fps).round();
-    }
-    return frames / fps;
+    return photos.fold<double>(0, (total, photo) => total + photo.durationSec) +
+        (startingCard?.durationSec ?? 0) +
+        (endingCard?.durationSec ?? 0);
   }
 }
 
 class _EditorSnapshot {
   final List<SlideshowPhoto> photos;
   final String transitionId;
+  final int? selectedPhotoIndex;
 
-  _EditorSnapshot({required this.photos, required this.transitionId});
+  _EditorSnapshot({
+    required this.photos,
+    required this.transitionId,
+    required this.selectedPhotoIndex,
+  });
 }

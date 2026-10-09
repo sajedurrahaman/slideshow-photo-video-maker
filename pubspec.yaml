@@ -44,4 +44,5 @@ flutter:
     - assets/images/home/
     - assets/images/home/slider/
     - assets/images/editor/
+    - assets/images/editor/photo_tools/
     - assets/images/editor/transitions/

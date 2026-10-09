@@ -1,8 +1,11 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../core/constants/app_constants.dart';
@@ -25,6 +28,20 @@ enum EditorTool {
   bg,
 }
 
+enum _PhotoTool {
+  duration,
+  animation,
+  delete,
+  background,
+  crop,
+  mirror,
+  flip,
+  rotate,
+  replace,
+}
+
+enum _AnimationPhase { inAnimation, outAnimation, loop }
+
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key});
 
@@ -33,14 +50,17 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  EditorTool? _tool = EditorTool.slide;
+  EditorTool? _tool;
+  _PhotoTool? _photoTool;
+  _AnimationPhase _animationPhase = _AnimationPhase.inAnimation;
+  double? _durationSliderValue;
   final _textController = TextEditingController();
   final _stripController = ScrollController();
 
   static const _sheetHeight = 180.0;
   static const _plusW = 52.0;
   static const _pixelsPerSecond = 44.0;
-  static const _thumbH = 68.0;
+  static const _thumbH = 60.0;
   static const _transitionMarkerSize = 22.0;
   static const _stripPadLeft = 16.0;
 
@@ -108,9 +128,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   double _timelineDuration(SlideshowProject project) {
-    return project.photos.length * project.slideDurationSec +
-        (project.startingCard?.durationSec ?? 0) +
-        (project.endingCard?.durationSec ?? 0);
+    return project.estimatedDurationSec;
   }
 
   Widget _timeText(SlideshowProject project) {
@@ -207,26 +225,29 @@ class _EditorScreenState extends State<EditorScreen> {
             color: Colors.black87,
           ),
         ),
-        Row(
-          children: [
-            IconButton(
-              padding: EdgeInsets.zero,
-              onPressed: project.canUndo ? () => project.undo() : null,
-              icon: Icon(
-                Icons.undo_rounded,
-                color: project.canUndo ? Colors.black87 : Colors.black26,
+        if (project.selectedPhotoIndex == null)
+          Row(
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                onPressed: project.canUndo ? () => project.undo() : null,
+                icon: Icon(
+                  Icons.undo_rounded,
+                  color: project.canUndo ? Colors.black87 : Colors.black26,
+                ),
               ),
-            ),
-            IconButton(
-              padding: EdgeInsets.zero,
-              onPressed: project.canRedo ? () => project.redo() : null,
-              icon: Icon(
-                Icons.redo_rounded,
-                color: project.canRedo ? Colors.black87 : Colors.black26,
+              IconButton(
+                padding: EdgeInsets.zero,
+                onPressed: project.canRedo ? () => project.redo() : null,
+                icon: Icon(
+                  Icons.redo_rounded,
+                  color: project.canRedo ? Colors.black87 : Colors.black26,
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          )
+        else
+          const SizedBox(width: 96),
       ],
     );
   }
@@ -270,14 +291,18 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _syncStripToPlayhead({required SlideshowProject project}) {
     if (!_stripController.hasClients) return;
-    final n = project.photos.length;
-    final duration = project.estimatedDurationSec;
-    if (n == 0 || duration <= 0) return;
-    final p = (project.previewPositionSec / duration)
-        .clamp(0.0, 1.0)
-        .toDouble();
-    final trackWidth = n * project.slideDurationSec * _pixelsPerSecond;
-    final target = p * trackWidth;
+    if (project.photos.isEmpty) return;
+    final trackWidth = project.photos.fold<double>(
+      0,
+      (sum, photo) => sum + photo.durationSec * _pixelsPerSecond,
+    );
+    if (trackWidth <= 0) return;
+    final photoDuration = trackWidth / _pixelsPerSecond;
+    final timelinePosition =
+        (project.previewPositionSec - (project.startingCard?.durationSec ?? 0))
+            .clamp(0.0, photoDuration)
+            .toDouble();
+    final target = timelinePosition * _pixelsPerSecond;
     final max = _stripController.position.maxScrollExtent;
     final next = target.clamp(0.0, max).toDouble();
     if ((_stripController.offset - next).abs() < 0.5) return;
@@ -285,10 +310,8 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Widget _photoStrip(SlideshowProject project, double playheadX) {
-    // Each second of a slide gets its own thumbnail, like a video timeline.
+    // Each clip width reflects that photo's independently editable duration.
     final leftPad = playheadX.clamp(0.0, 800.0).toDouble();
-    final clipWidth = project.slideDurationSec * _pixelsPerSecond;
-    final thumbnailCount = project.slideDurationSec.ceil();
 
     return Stack(
       children: [
@@ -299,121 +322,771 @@ class _EditorScreenState extends State<EditorScreen> {
             physics: project.isPreviewPlaying
                 ? const NeverScrollableScrollPhysics()
                 : const BouncingScrollPhysics(),
-            padding: EdgeInsets.fromLTRB(leftPad, 8, playheadX, 42),
+            padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 44),
             itemCount: project.photos.length,
             itemBuilder: (context, photoIndex) {
               final photo = project.photos[photoIndex];
-              return SizedBox(
-                width: clipWidth,
-                height: _thumbH,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned.fill(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: Row(
-                          children: [
-                            for (var i = 0; i < thumbnailCount; i++)
-                              SizedBox(
-                                width: (clipWidth - i * _pixelsPerSecond)
-                                    .clamp(0.0, _pixelsPerSecond)
-                                    .toDouble(),
-                                height: _thumbH,
-                                child: DecoratedBox(
-                                  decoration: const BoxDecoration(
-                                    border: Border(
-                                      right: BorderSide(
-                                        color: Colors.white70,
-                                        width: 1,
+              final selected = project.selectedPhotoIndex == photoIndex;
+              final clipWidth = photo.durationSec * _pixelsPerSecond;
+              final canShowDuration = clipWidth >= 72;
+              final thumbnailCount = photo.durationSec.ceil();
+              return Align(
+                alignment: Alignment.center,
+                child: SizedBox(
+                  width: clipWidth,
+                  height: _thumbH,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned.fill(
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _tool = null;
+                              _photoTool = null;
+                              _durationSliderValue = null;
+                            });
+                            project.selectTimelinePhoto(photoIndex);
+                          },
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: Row(
+                                  children: [
+                                    for (var i = 0; i < thumbnailCount; i++)
+                                      SizedBox(
+                                        width:
+                                            (clipWidth - i * _pixelsPerSecond)
+                                                .clamp(0.0, _pixelsPerSecond)
+                                                .toDouble(),
+                                        height: _thumbH,
+                                        child: DecoratedBox(
+                                          decoration: const BoxDecoration(
+                                            border: Border(
+                                              right: BorderSide(
+                                                color: Colors.white70,
+                                                width: 1,
+                                              ),
+                                            ),
+                                          ),
+                                          child: Image.file(
+                                            File(photo.path),
+                                            fit: BoxFit.fill,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              if (selected)
+                                Positioned(
+                                  left: 2,
+                                  top: 0,
+                                  bottom: 0,
+                                  child: Center(
+                                    child: _durationHandle(
+                                      icon: Icons.chevron_left_rounded,
+                                      onTap: () => project.changePhotoDuration(
+                                        photoIndex,
+                                        photo.durationSec - 0.5,
                                       ),
                                     ),
                                   ),
-                                  child: Image.file(
-                                    File(photo.path),
-                                    fit: BoxFit.cover,
+                                ),
+                              if (selected)
+                                Positioned(
+                                  right: 2,
+                                  top: 0,
+                                  bottom: 0,
+                                  child: Center(
+                                    child: _durationHandle(
+                                      icon: Icons.chevron_right_rounded,
+                                      onTap: () => project.changePhotoDuration(
+                                        photoIndex,
+                                        photo.durationSec + 0.5,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                              if (selected && canShowDuration)
+                                Positioned(
+                                  left: 20,
+                                  top: 2,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 3,
+                                      vertical: 1,
+                                    ),
+                                    color: Colors.black54,
+                                    child: Text(
+                                      '${photo.durationSec.toStringAsFixed(1)}s',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (selected)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                          color: AppColors.iconActive,
+                                          width: 6.4,
+                                        ),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    if (photoIndex > 0)
-                      Positioned(
-                        left: -_transitionMarkerSize / 2,
-                        top: 0,
-                        bottom: 0,
-                        child: Center(
-                          child: GestureDetector(
-                            onLongPress: () => project.removePhoto(photoIndex),
-                            onTap: () {
-                              setState(() => _tool = EditorTool.slide);
-                              if (!project.isPreviewReady &&
-                                  !project.isPreparingPreview) {
-                                project.preparePreviewFrames();
-                              }
-                            },
-                            child: Container(
-                              width: _transitionMarkerSize,
-                              height: _transitionMarkerSize,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(6),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x33000000),
-                                    blurRadius: 4,
-                                    offset: Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                              child: const Icon(
-                                Icons.compare_arrows_rounded,
-                                size: 16,
-                                color: Colors.black87,
+                      if (photoIndex > 0 && project.selectedPhotoIndex == null)
+                        Positioned(
+                          left: -_transitionMarkerSize / 2,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: GestureDetector(
+                              onLongPress: () =>
+                                  project.removePhoto(photoIndex),
+                              onTap: () {
+                                project.clearTimelinePhotoSelection();
+                                setState(() {
+                                  _tool = EditorTool.slide;
+                                  _photoTool = null;
+                                });
+                                if (!project.isPreviewReady &&
+                                    !project.isPreparingPreview) {
+                                  project.preparePreviewFrames();
+                                }
+                              },
+                              child: Container(
+                                width: _transitionMarkerSize,
+                                height: _transitionMarkerSize,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(6),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x33000000),
+                                      blurRadius: 4,
+                                      offset: Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.compare_arrows_rounded,
+                                  size: 16,
+                                  color: Colors.black87,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             },
           ),
         ),
-        // + stays on top; clips slide underneath while playing.
-        Positioned(
-          left: _stripPadLeft,
-          top: 0,
-          bottom: 34,
-          child: Center(
-            child: GestureDetector(
-              onTap: () => context.push('/gallery'),
-              child: Container(
-                width: _plusW,
-                height: _thumbH,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(4),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x22000000),
-                      blurRadius: 6,
-                      offset: Offset(0, 1),
-                    ),
-                  ],
+        if (project.selectedPhotoIndex == null)
+          // + stays on top; clips slide underneath while playing.
+          Positioned(
+            left: _stripPadLeft,
+            top: 0,
+            bottom: 34,
+            child: Center(
+              child: GestureDetector(
+                onTap: () => context.push('/gallery'),
+                child: Container(
+                  width: _plusW,
+                  height: _thumbH,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(4),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x22000000),
+                        blurRadius: 6,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.add, color: Colors.white, size: 28),
                 ),
-                child: const Icon(Icons.add, color: Colors.white, size: 28),
               ),
             ),
+          ),
+      ],
+    );
+  }
+
+  Widget _durationHandle({
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: 16,
+        height: 19,
+        alignment: Alignment.center,
+        color: AppColors.primary,
+        child: Icon(icon, size: 16, color: Colors.black87),
+      ),
+    );
+  }
+
+  Widget _editorToolbar() {
+    return Container(
+      height: 72,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        children: [
+          for (final t in EditorTool.values)
+            EditorToolIcon(
+              assetPath: _toolAsset(t),
+              icon: _toolIcon(t),
+              label: _toolLabel(t),
+              selected: _tool == t,
+              onTap: () {
+                if (_tool == t) {
+                  _dismissTool();
+                  return;
+                }
+                setState(() => _tool = t);
+                if (t == EditorTool.slide) {
+                  final p = context.read<SlideshowProject>();
+                  if (!p.isPreviewReady && !p.isPreparingPreview) {
+                    p.preparePreviewFrames();
+                  }
+                }
+                if (t == EditorTool.music) context.push('/music');
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _photoEditorToolbar(SlideshowProject project) {
+    const actions = [
+      (tool: _PhotoTool.duration, label: 'Duration', iconAsset: 'duration.png'),
+      (
+        tool: _PhotoTool.animation,
+        label: 'Animation',
+        iconAsset: 'animation.png',
+      ),
+      (tool: _PhotoTool.delete, label: 'Delete', iconAsset: 'delete.png'),
+      (tool: _PhotoTool.background, label: 'Background', iconAsset: 'bg.png'),
+      (tool: _PhotoTool.crop, label: 'Crop', iconAsset: 'crop.png'),
+      (tool: _PhotoTool.mirror, label: 'Mirror', iconAsset: 'mirror.png'),
+      (tool: _PhotoTool.flip, label: 'Flip', iconAsset: 'flip.png'),
+      (tool: _PhotoTool.rotate, label: 'Rotate', iconAsset: 'rotate.png'),
+      (tool: _PhotoTool.replace, label: 'Replace', iconAsset: 'replace.png'),
+    ];
+    return Container(
+      height: 72,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(left: 54, right: 6),
+              children: [
+                for (final action in actions)
+                  SizedBox(
+                    width: 72,
+                    child: InkWell(
+                      onTap: () => _handlePhotoToolTap(project, action.tool),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Image.asset(
+                            'assets/images/editor/photo_tools/${action.iconAsset}',
+                            width: 28,
+                            height: 28,
+                            color: AppColors.iconNormal,
+                            colorBlendMode: BlendMode.srcIn,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            action.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: AppColors.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Positioned(
+            left: 3,
+            top: 4,
+            bottom: 4,
+            child: Material(
+              color: AppColors.surfaceAlt,
+              elevation: 3,
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 48,
+                child: IconButton(
+                  tooltip: 'Back to editor tools',
+                  onPressed: () {
+                    setState(() {
+                      _photoTool = null;
+                      _tool = null;
+                    });
+                    project.clearTimelinePhotoSelection();
+                  },
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handlePhotoToolTap(
+    SlideshowProject project,
+    _PhotoTool tool,
+  ) async {
+    final index = project.selectedPhotoIndex;
+    if (index == null || index >= project.photos.length) return;
+    final photo = project.photos[index];
+
+    if (tool == _PhotoTool.delete) {
+      project.removePhoto(index);
+      setState(() => _photoTool = null);
+      return;
+    }
+    if (tool == _PhotoTool.mirror) {
+      project.updatePhoto(index, photo.copyWith(mirrored: !photo.mirrored));
+      return;
+    }
+    if (tool == _PhotoTool.flip) {
+      project.updatePhoto(index, photo.copyWith(flipped: !photo.flipped));
+      return;
+    }
+    if (tool == _PhotoTool.rotate) {
+      project.updatePhoto(
+        index,
+        photo.copyWith(
+          rotationQuarterTurns: (photo.rotationQuarterTurns + 1) % 4,
+        ),
+      );
+      return;
+    }
+    if (tool == _PhotoTool.replace) {
+      await _replaceSelectedPhoto(project, index, photo);
+      return;
+    }
+
+    setState(() {
+      _photoTool = tool;
+      if (tool == _PhotoTool.animation) {
+        _animationPhase = _AnimationPhase.inAnimation;
+      }
+    });
+  }
+
+  Future<void> _replaceSelectedPhoto(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo,
+  ) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+      withData: true,
+    );
+    if (!mounted || result == null || result.files.isEmpty) return;
+    final picked = result.files.single;
+    final temp = await getTemporaryDirectory();
+    final extension = p.extension(picked.name).isEmpty
+        ? '.jpg'
+        : p.extension(picked.name);
+    final output = File(
+      p.join(
+        temp.path,
+        'replacement_${DateTime.now().microsecondsSinceEpoch}$extension',
+      ),
+    );
+    if (picked.path != null) {
+      await File(picked.path!).copy(output.path);
+    } else if (picked.bytes != null) {
+      await output.writeAsBytes(picked.bytes!, flush: true);
+    } else {
+      return;
+    }
+    project.updatePhoto(index, photo.copyWith(path: output.path));
+  }
+
+  Widget _photoEditSheet(SlideshowProject project) {
+    final index = project.selectedPhotoIndex;
+    if (index == null || index >= project.photos.length) {
+      return const SizedBox.shrink();
+    }
+    final photo = project.photos[index];
+    final tool = _photoTool!;
+    final height = tool == _PhotoTool.animation ? 220.0 : 180.0;
+    return SectionSheet(
+      title: _photoToolLabel(tool),
+      height: height,
+      onClose: () => setState(() => _photoTool = null),
+      onConfirm: () => setState(() => _photoTool = null),
+      child: switch (tool) {
+        _PhotoTool.duration => _photoDurationPanel(project, index, photo),
+        _PhotoTool.animation => _photoAnimationPanel(project, index, photo),
+        _PhotoTool.background => _photoBackgroundPanel(project, index, photo),
+        _PhotoTool.crop => _photoCropPanel(project, index, photo),
+        _ => const SizedBox.shrink(),
+      },
+    );
+  }
+
+  Widget _photoDurationPanel(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo,
+  ) {
+    final duration = _durationSliderValue ?? photo.durationSec;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Current Screen Duration',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Text(
+                '${duration.toStringAsFixed(1)}s',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            min: 1,
+            max: 10,
+            divisions: 18,
+            value: duration.clamp(1.0, 10.0).toDouble(),
+            onChanged: (value) => setState(() => _durationSliderValue = value),
+            onChangeEnd: (value) {
+              project.changePhotoDuration(index, value);
+              setState(() => _durationSliderValue = null);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _photoAnimationPanel(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo,
+  ) {
+    final selected = switch (_animationPhase) {
+      _AnimationPhase.inAnimation => photo.animationIn,
+      _AnimationPhase.outAnimation => photo.animationOut,
+      _AnimationPhase.loop => photo.animationLoop,
+    };
+    final options = PhotoAnimationType.values;
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (final phase in _AnimationPhase.values)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: TextButton(
+                  onPressed: () => setState(() => _animationPhase = phase),
+                  child: Text(
+                    switch (phase) {
+                      _AnimationPhase.inAnimation => 'In',
+                      _AnimationPhase.outAnimation => 'Out',
+                      _AnimationPhase.loop => 'Loop',
+                    },
+                    style: TextStyle(
+                      color: _animationPhase == phase
+                          ? AppColors.primary
+                          : AppColors.textMuted,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        Expanded(
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            itemCount: options.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, i) {
+              final animation = options[i];
+              final isSelected = selected == animation;
+              return InkWell(
+                onTap: () {
+                  final updated = switch (_animationPhase) {
+                    _AnimationPhase.inAnimation => photo.copyWith(
+                      animationIn: animation,
+                    ),
+                    _AnimationPhase.outAnimation => photo.copyWith(
+                      animationOut: animation,
+                    ),
+                    _AnimationPhase.loop => photo.copyWith(
+                      animationLoop: animation,
+                    ),
+                  };
+                  project.updatePhoto(index, updated);
+                },
+                child: SizedBox(
+                  width: 70,
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? AppColors.primarySoft
+                              : AppColors.surfaceAlt,
+                          border: Border.all(
+                            color: isSelected
+                                ? AppColors.primary
+                                : AppColors.border,
+                            width: isSelected ? 2 : 1,
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          _animationIcon(animation),
+                          color: isSelected
+                              ? AppColors.primary
+                              : AppColors.iconNormal,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _animationLabel(animation),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: isSelected
+                              ? AppColors.primaryDark
+                              : AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ],
     );
   }
+
+  Widget _photoBackgroundPanel(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo,
+  ) {
+    const colors = <int?>[
+      null,
+      0xFFFFFFFF,
+      0xFFBDBDBD,
+      0xFF424242,
+      0xFF000000,
+      0xFFFFCDD2,
+      0xFFFF8A80,
+      0xFFFF5252,
+      0xFF80DEEA,
+      0xFF90CAF9,
+      0xFFB39DDB,
+      0xFFA5D6A7,
+    ];
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      itemCount: colors.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 12),
+      itemBuilder: (context, i) {
+        final color = colors[i];
+        final active = photo.backgroundArgb == color;
+        return InkWell(
+          onTap: () => project.updatePhoto(
+            index,
+            color == null
+                ? photo.copyWith(clearBackgroundArgb: true)
+                : photo.copyWith(backgroundArgb: color),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: color == null ? Colors.white : Color(color),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: active ? AppColors.primary : AppColors.border,
+                    width: active ? 3 : 1,
+                  ),
+                ),
+                child: color == null
+                    ? const Icon(Icons.auto_awesome_motion, size: 18)
+                    : null,
+              ),
+              const SizedBox(height: 5),
+              Text(
+                color == null ? 'Default' : _backgroundName(color),
+                style: const TextStyle(fontSize: 10),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _photoCropPanel(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo,
+  ) {
+    const ratios = <({String label, double? ratio})>[
+      (label: 'Free', ratio: null),
+      (label: '1:1', ratio: 1),
+      (label: '4:5', ratio: 4 / 5),
+      (label: '9:16', ratio: 9 / 16),
+      (label: '16:9', ratio: 16 / 9),
+    ];
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 22),
+      itemCount: ratios.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 10),
+      itemBuilder: (context, i) {
+        final option = ratios[i];
+        final selected = photo.cropAspectRatio == option.ratio;
+        return InkWell(
+          onTap: () => project.updatePhoto(
+            index,
+            option.ratio == null
+                ? photo.copyWith(clearCropAspectRatio: true)
+                : photo.copyWith(cropAspectRatio: option.ratio),
+          ),
+          child: Container(
+            width: 68,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? AppColors.primarySoft : Colors.white,
+              border: Border.all(
+                color: selected ? AppColors.primary : AppColors.border,
+                width: selected ? 2 : 1,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(option.label, style: const TextStyle(fontSize: 12)),
+          ),
+        );
+      },
+    );
+  }
+
+  String _photoToolLabel(_PhotoTool tool) => switch (tool) {
+    _PhotoTool.duration => 'Duration',
+    _PhotoTool.animation => 'Animation',
+    _PhotoTool.delete => 'Delete',
+    _PhotoTool.background => 'Background',
+    _PhotoTool.crop => 'Crop',
+    _PhotoTool.mirror => 'Mirror',
+    _PhotoTool.flip => 'Flip',
+    _PhotoTool.rotate => 'Rotate',
+    _PhotoTool.replace => 'Replace',
+  };
+
+  String _animationLabel(PhotoAnimationType animation) => switch (animation) {
+    PhotoAnimationType.none => 'None',
+    PhotoAnimationType.fade => 'Fade',
+    PhotoAnimationType.slightZoom => 'Slight zoom',
+    PhotoAnimationType.zoomIn => 'Zoom in',
+    PhotoAnimationType.zoomOut => 'Zoom out',
+    PhotoAnimationType.shake => 'Shake',
+    PhotoAnimationType.slideUp => 'Slide up',
+    PhotoAnimationType.slideRight => 'Slide right',
+    PhotoAnimationType.slideDown => 'Slide down',
+  };
+
+  IconData _animationIcon(PhotoAnimationType animation) => switch (animation) {
+    PhotoAnimationType.none => Icons.block,
+    PhotoAnimationType.fade => Icons.gradient,
+    PhotoAnimationType.slightZoom => Icons.zoom_out_map,
+    PhotoAnimationType.zoomIn => Icons.zoom_in,
+    PhotoAnimationType.zoomOut => Icons.zoom_out,
+    PhotoAnimationType.shake => Icons.vibration,
+    PhotoAnimationType.slideUp => Icons.keyboard_arrow_up,
+    PhotoAnimationType.slideRight => Icons.keyboard_arrow_right,
+    PhotoAnimationType.slideDown => Icons.keyboard_arrow_down,
+  };
+
+  String _backgroundName(int color) => switch (color) {
+    0xFFFFFFFF => 'White',
+    0xFFBDBDBD => 'Gray',
+    0xFF424242 => 'Dark',
+    0xFF000000 => 'Black',
+    0xFFFFCDD2 => 'Rose',
+    0xFFFF8A80 => 'Coral',
+    0xFFFF5252 => 'Red',
+    0xFF80DEEA => 'Cyan',
+    0xFF90CAF9 => 'Blue',
+    0xFFB39DDB => 'Violet',
+    0xFFA5D6A7 => 'Green',
+    _ => 'Color',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -542,55 +1215,27 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
           ),
 
-          if (_tool == null)
-            _idleToolPanel(project)
-          else
-            SectionSheet(
-              title: _toolLabel(_tool!),
-              height: 180,
-              headerRow: _previewRow(project),
-              onClose: _dismissTool,
-              onConfirm: _dismissTool,
-              child: _buildPanel(project),
-            ),
+          if (project.selectedPhotoIndex != null) ...[
+            _idleToolPanel(project),
+            if (_photoTool == null)
+              _photoEditorToolbar(project)
+            else
+              _photoEditSheet(project),
+          ] else ...[
+            if (_tool == null)
+              _idleToolPanel(project)
+            else
+              SectionSheet(
+                title: _toolLabel(_tool!),
+                height: 180,
+                headerRow: _previewRow(project),
+                onClose: _dismissTool,
+                onConfirm: _dismissTool,
+                child: _buildPanel(project),
+              ),
 
-          // Bottom toolbar
-          Container(
-            height: 72,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(top: BorderSide(color: AppColors.border)),
-            ),
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              children: [
-                for (final t in EditorTool.values)
-                  EditorToolIcon(
-                    assetPath: _toolAsset(t),
-                    icon: _toolIcon(t),
-                    label: _toolLabel(t),
-                    selected: _tool == t,
-                    onTap: () {
-                      if (_tool == t) {
-                        _dismissTool();
-                        return;
-                      }
-                      setState(() => _tool = t);
-                      if (t == EditorTool.slide) {
-                        final p = context.read<SlideshowProject>();
-                        if (!p.isPreviewReady && !p.isPreparingPreview) {
-                          p.preparePreviewFrames();
-                        }
-                      }
-                      if (t == EditorTool.music) {
-                        context.push('/music');
-                      }
-                    },
-                  ),
-              ],
-            ),
-          ),
+            _editorToolbar(),
+          ],
           SizedBox(height: MediaQuery.paddingOf(context).bottom),
         ],
       ),
