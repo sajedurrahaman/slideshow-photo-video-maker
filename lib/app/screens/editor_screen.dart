@@ -648,15 +648,15 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
           ),
           Positioned(
-            left: 3,
-            top: 4,
-            bottom: 4,
+            left: 10,
+            top: 10,
+            bottom: 10,
             child: Material(
               color: AppColors.surfaceAlt,
               elevation: 3,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(6),
               child: SizedBox(
-                width: 48,
+                width: 38,
                 child: IconButton(
                   tooltip: 'Back to editor tools',
                   onPressed: () {
