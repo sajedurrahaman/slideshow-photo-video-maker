@@ -380,6 +380,25 @@ enum PhotoAnimationType {
   slideUp,
   slideRight,
   slideDown,
+  leftAndRight,
+  spinRight,
+  spinLeft,
+  spinUpper,
+  mirrorOutside,
+  bottomOut,
+  leftOut,
+  rightOut,
+  topOut,
+  dynamicZoomOut,
+  flipLeft,
+  flipLower,
+  flipRight,
+  slideOutTop,
+  slideOutBottom,
+  rotateFade,
+  flyOutLeft,
+  flyOutRight,
+  flyOutUp,
 }
 
 class SlideshowPhoto {
@@ -395,6 +414,9 @@ class SlideshowPhoto {
   final PhotoAnimationType animationIn;
   final PhotoAnimationType animationOut;
   final PhotoAnimationType animationLoop;
+  final double animationInDurationSec;
+  final double animationOutDurationSec;
+  final double animationLoopDurationSec;
 
   SlideshowPhoto({
     required this.id,
@@ -409,6 +431,9 @@ class SlideshowPhoto {
     this.animationIn = PhotoAnimationType.none,
     this.animationOut = PhotoAnimationType.none,
     this.animationLoop = PhotoAnimationType.none,
+    this.animationInDurationSec = 1.0,
+    this.animationOutDurationSec = 1.0,
+    this.animationLoopDurationSec = 1.0,
   });
 
   SlideshowPhoto copyWith({
@@ -425,6 +450,9 @@ class SlideshowPhoto {
     PhotoAnimationType? animationIn,
     PhotoAnimationType? animationOut,
     PhotoAnimationType? animationLoop,
+    double? animationInDurationSec,
+    double? animationOutDurationSec,
+    double? animationLoopDurationSec,
   }) {
     return SlideshowPhoto(
       id: id,
@@ -443,6 +471,12 @@ class SlideshowPhoto {
       animationIn: animationIn ?? this.animationIn,
       animationOut: animationOut ?? this.animationOut,
       animationLoop: animationLoop ?? this.animationLoop,
+      animationInDurationSec:
+          animationInDurationSec ?? this.animationInDurationSec,
+      animationOutDurationSec:
+          animationOutDurationSec ?? this.animationOutDurationSec,
+      animationLoopDurationSec:
+          animationLoopDurationSec ?? this.animationLoopDurationSec,
     );
   }
 }

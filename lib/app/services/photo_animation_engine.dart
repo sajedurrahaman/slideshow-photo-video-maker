@@ -68,7 +68,140 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.mirror:
         final flipped = img.flipHorizontal(image);
         return t < 0.5 ? image : flipped;
+      case PhotoAnimationType.leftAndRight:
+        final sway = (math.sin(t * math.pi * 2) * (1 - t * 0.35) * w * 0.1)
+            .round();
+        return _place(image, w, h, sway, 0, backgroundArgb);
+      case PhotoAnimationType.spinRight:
+        return _spin(image, (1 - t) * 70, backgroundArgb);
+      case PhotoAnimationType.spinLeft:
+        return _spin(image, -(1 - t) * 70, backgroundArgb);
+      case PhotoAnimationType.spinUpper:
+        final scale = 0.15 + 0.85 * t;
+        final sh = math.max(1, (h * scale).round());
+        final resized = img.copyResize(
+          image,
+          width: w,
+          height: sh,
+          interpolation: img.Interpolation.linear,
+        );
+        return _place(resized, w, h, 0, 0, backgroundArgb);
+      case PhotoAnimationType.mirrorOutside:
+        final shown = t < 0.5 ? img.flipHorizontal(image) : image;
+        return _place(
+          shown,
+          w,
+          h,
+          ((1 - t) * w * 0.55).round(),
+          0,
+          backgroundArgb,
+        );
+      case PhotoAnimationType.bottomOut:
+        return _place(image, w, h, 0, ((1 - t) * h).round(), backgroundArgb);
+      case PhotoAnimationType.leftOut:
+        return _place(image, w, h, -((1 - t) * w).round(), 0, backgroundArgb);
+      case PhotoAnimationType.rightOut:
+        return _place(image, w, h, ((1 - t) * w).round(), 0, backgroundArgb);
+      case PhotoAnimationType.topOut:
+        return _place(image, w, h, 0, -((1 - t) * h).round(), backgroundArgb);
+      case PhotoAnimationType.dynamicZoomOut:
+        return _zoom(image, 0.42 + 0.58 * t, backgroundArgb);
+      case PhotoAnimationType.flipLeft:
+        return _hinge(image, t, 1, alignRight: false, alignBottom: false, backgroundArgb: backgroundArgb);
+      case PhotoAnimationType.flipRight:
+        return _hinge(image, t, 1, alignRight: true, alignBottom: false, backgroundArgb: backgroundArgb);
+      case PhotoAnimationType.flipLower:
+        return _hinge(image, 1, t, alignRight: false, alignBottom: true, backgroundArgb: backgroundArgb);
+      case PhotoAnimationType.slideOutTop:
+        return _place(
+          _fade(image, 0.2 + 0.8 * t, backgroundArgb),
+          w,
+          h,
+          0,
+          -((1 - t) * h).round(),
+          backgroundArgb,
+        );
+      case PhotoAnimationType.slideOutBottom:
+        return _place(
+          _fade(image, 0.2 + 0.8 * t, backgroundArgb),
+          w,
+          h,
+          0,
+          ((1 - t) * h).round(),
+          backgroundArgb,
+        );
+      case PhotoAnimationType.rotateFade:
+        return _spin(
+          _fade(image, t, backgroundArgb),
+          (1 - t) * 160,
+          backgroundArgb,
+        );
+      case PhotoAnimationType.flyOutLeft:
+        return _fly(image, t, -1, 0, backgroundArgb);
+      case PhotoAnimationType.flyOutRight:
+        return _fly(image, t, 1, 0, backgroundArgb);
+      case PhotoAnimationType.flyOutUp:
+        return _fly(image, t, 0, -1, backgroundArgb);
     }
+  }
+
+  static img.Image _hinge(
+    img.Image image,
+    double scaleX,
+    double scaleY, {
+    required bool alignRight,
+    required bool alignBottom,
+    required int backgroundArgb,
+  }) {
+    final w = image.width;
+    final h = image.height;
+    final sx = scaleX.clamp(0.02, 1.0);
+    final sy = scaleY.clamp(0.02, 1.0);
+    final sw = math.max(1, (w * sx).round());
+    final sh = math.max(1, (h * sy).round());
+    final resized = img.copyResize(
+      image,
+      width: sw,
+      height: sh,
+      interpolation: img.Interpolation.linear,
+    );
+    final dx = alignRight ? w - sw : 0;
+    final dy = alignBottom ? h - sh : (h - sh) ~/ 2;
+    return _place(resized, w, h, dx, dy, backgroundArgb);
+  }
+
+  static img.Image _fly(
+    img.Image image,
+    double t,
+    int xDir,
+    int yDir,
+    int backgroundArgb,
+  ) {
+    final faded = _fade(image, t, backgroundArgb);
+    final scaled = _zoom(faded, 0.35 + 0.65 * t, backgroundArgb);
+    final w = image.width;
+    final h = image.height;
+    return _place(
+      scaled,
+      w,
+      h,
+      (xDir * (1 - t) * w * 0.9).round(),
+      (yDir * (1 - t) * h * 0.9).round(),
+      backgroundArgb,
+    );
+  }
+
+  static img.Image _spin(img.Image image, double degrees, int backgroundArgb) {
+    if (degrees.abs() < 0.5) return image;
+    final rotated = img.copyRotate(image, angle: degrees);
+    return _place(
+      rotated,
+      image.width,
+      image.height,
+      (image.width - rotated.width) ~/ 2,
+      (image.height - rotated.height) ~/ 2,
+      backgroundArgb,
+    );
   }
 
   static img.Image _fade(img.Image image, double amount, int backgroundArgb) {

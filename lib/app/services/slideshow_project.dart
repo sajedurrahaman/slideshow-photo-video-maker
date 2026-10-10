@@ -128,6 +128,82 @@ class SlideshowProject extends ChangeNotifier {
   int frameCountForDuration(double seconds) =>
       (seconds * previewFps).round().clamp(1, 10000);
 
+  double _animSeconds(double seconds, double photoDuration) {
+    final cap = photoDuration < 0.1 ? 0.1 : photoDuration;
+    return seconds.clamp(0.1, cap);
+  }
+
+  int _animFrames(double seconds, double photoDuration) =>
+      frameCountForDuration(_animSeconds(seconds, photoDuration));
+
+  (int, int) _splitAnimFrames(SlideshowPhoto photo, int totalFrames) {
+    final hasIn = photo.animationIn != PhotoAnimationType.none;
+    final hasOut = photo.animationOut != PhotoAnimationType.none;
+    var inFrames = hasIn
+        ? _animFrames(photo.animationInDurationSec, photo.durationSec)
+        : 0;
+    var outFrames = hasOut
+        ? _animFrames(photo.animationOutDurationSec, photo.durationSec)
+        : 0;
+    if (inFrames > totalFrames) inFrames = totalFrames;
+    if (outFrames > totalFrames - inFrames) {
+      outFrames = totalFrames - inFrames;
+    }
+    return (inFrames, outFrames);
+  }
+
+  /// In motion occupies the opening frames. Out motion occupies the closing frames.
+  img.Image _animatePhotoFrame({
+    required img.Image source,
+    required SlideshowPhoto photo,
+    required int frameIndex,
+    required int totalFrames,
+    required int inFrames,
+    required int outFrames,
+    required int background,
+  }) {
+    final outStart = totalFrames - outFrames;
+    var frame = source;
+    if (photo.animationIn != PhotoAnimationType.none &&
+        inFrames > 0 &&
+        frameIndex < outStart) {
+      final progress = frameIndex < inFrames
+          ? (frameIndex + 1) / inFrames
+          : 1.0;
+      frame = PhotoAnimationEngine.apply(
+        image: source,
+        type: photo.animationIn,
+        progress: progress,
+        backgroundArgb: background,
+      );
+    }
+    if (photo.animationOut != PhotoAnimationType.none &&
+        outFrames > 0 &&
+        frameIndex >= outStart) {
+      final outIndex = frameIndex - outStart;
+      frame = PhotoAnimationEngine.apply(
+        image: source,
+        type: photo.animationOut,
+        progress: (outIndex + 1) / outFrames,
+        backgroundArgb: background,
+        reverse: true,
+      );
+    }
+    if (photo.animationLoop != PhotoAnimationType.none) {
+      final loopFrames = math.max(
+        1,
+        _animFrames(photo.animationLoopDurationSec, photo.durationSec),
+      );
+      frame = PhotoAnimationEngine.apply(
+        image: frame,
+        type: photo.animationLoop,
+        progress: (frameIndex % loopFrames) / loopFrames,
+        backgroundArgb: background,
+      );
+    }
+    return frame;
+  }
+
   int photoFrameStartIndex(int photoIndex) {
     var index = startingCard == null
         ? 0
@@ -254,7 +330,25 @@ class SlideshowProject extends ChangeNotifier {
     if (index < 0 || index >= photos.length) return;
     final duration = seconds.clamp(1.0, 10.0).toDouble();
     if ((photos[index].durationSec - duration).abs() < 0.001) return;
-    updatePhoto(index, photos[index].copyWith(durationSec: duration));
+    final current = photos[index];
+    updatePhoto(
+      index,
+      current.copyWith(
+        durationSec: duration,
+        animationInDurationSec: _animSeconds(
+          current.animationInDurationSec,
+          duration,
+        ),
+        animationOutDurationSec: _animSeconds(
+          current.animationOutDurationSec,
+          duration,
+        ),
+        animationLoopDurationSec: _animSeconds(
+          current.animationLoopDurationSec,
+          duration,
+        ),
+      ),
+    );
   }
 
   void reorderPhoto(int oldIndex, int newIndex) {
@@ -404,7 +498,10 @@ class SlideshowProject extends ChangeNotifier {
                 '${e.backgroundArgb}:${e.cropAspectRatio}:${e.mirrored}:'
                 '${e.flipped}:${e.rotationQuarterTurns}:'
                 '${e.animationIn.name}:${e.animationOut.name}:'
-                '${e.animationLoop.name}',
+                '${e.animationLoop.name}:'
+                '${e.animationInDurationSec.toStringAsFixed(2)}:'
+                '${e.animationOutDurationSec.toStringAsFixed(2)}:'
+                '${e.animationLoopDurationSec.toStringAsFixed(2)}',
           )
           .join('|'),
       selectedTheme.id,
@@ -456,9 +553,15 @@ class SlideshowProject extends ChangeNotifier {
 
     isPreviewPlaying = true;
     isPlaying = true;
-    final selectedStart = selectedPhotoIndex == null
+    final selected = selectedPhotoIndex;
+    final selectedStart = selected == null
         ? 0
-        : photoFrameStartIndex(selectedPhotoIndex!);
+        : photoFrameStartIndex(selected);
+    final selectedEnd = selected == null
+        ? _previewMemoryFrames.length
+        : (selectedStart + frameCountForDuration(photos[selected].durationSec))
+              .clamp(0, _previewMemoryFrames.length)
+              .toInt();
     previewFrameIndex = selectedStart
         .clamp(0, _previewMemoryFrames.length - 1)
         .toInt();
@@ -474,14 +577,11 @@ class SlideshowProject extends ChangeNotifier {
         return;
       }
       final next = previewFrameIndex + 1;
-      if (next >= _previewMemoryFrames.length) {
+      if (next >= selectedEnd) {
         timer.cancel();
         _previewTimer = null;
         isPreviewPlaying = false;
         isPlaying = false;
-        final selectedStart = selectedPhotoIndex == null
-            ? 0
-            : photoFrameStartIndex(selectedPhotoIndex!);
         previewFrameIndex = selectedStart
             .clamp(0, _previewMemoryFrames.length - 1)
             .toInt();
@@ -573,83 +673,40 @@ class SlideshowProject extends ChangeNotifier {
       final transitionFrames = i < pairs && effect != SlideTransitionType.none
           ? math.min(AppConstants.framesPerTransition, totalFrames)
           : 0;
-      final outFrames =
-          photo.animationOut != PhotoAnimationType.none &&
-              (effect == SlideTransitionType.none || i == pairs)
-          ? math.min(AppConstants.framesPerTransition, totalFrames)
-          : 0;
-      final holdFrames = totalFrames - transitionFrames - outFrames;
       final background = photo.backgroundArgb ?? backgroundArgb;
+      final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
+      final soloFrames = totalFrames - transitionFrames;
 
-      for (var hold = 0; hold < holdFrames; hold++) {
+      for (var hold = 0; hold < soloFrames; hold++) {
         if (generation != _previewGeneration) return;
-        var held = decoded[i];
-        final inFrames = math.min(AppConstants.framesPerTransition, holdFrames);
-        final animateInDuringHold =
-            photo.animationIn != PhotoAnimationType.none &&
-            inFrames > 0 &&
-            (effect == SlideTransitionType.none || i == 0);
-        if (animateInDuringHold) {
-          held = PhotoAnimationEngine.apply(
-            image: held,
-            type: photo.animationIn,
-            progress: (hold + 1) / inFrames,
-            backgroundArgb: background,
-          );
-        }
-        if (photo.animationLoop != PhotoAnimationType.none) {
-          held = PhotoAnimationEngine.apply(
-            image: held,
-            type: photo.animationLoop,
-            progress: ((hold / totalFrames) * 3) % 1,
-            backgroundArgb: background,
-          );
-        }
-        await pushFrame(held);
+        await pushFrame(
+          _animatePhotoFrame(
+            source: decoded[i],
+            photo: photo,
+            frameIndex: hold,
+            totalFrames: totalFrames,
+            inFrames: inFrames,
+            outFrames: outFrames,
+            background: background,
+          ),
+        );
       }
 
       if (transitionFrames > 0) {
         final option = selectedSlideTransition;
-        final nextPhoto = photos[i + 1];
-        final nextBackground = nextPhoto.backgroundArgb ?? backgroundArgb;
         for (var t = 0; t < transitionFrames; t++) {
           if (generation != _previewGeneration) return;
           final progress = (t + 1) / transitionFrames;
-          var fromFrame = decoded[i];
-          if (photo.animationOut != PhotoAnimationType.none) {
-            fromFrame = PhotoAnimationEngine.apply(
-              image: fromFrame,
-              type: photo.animationOut,
-              progress: progress,
-              backgroundArgb: background,
-              reverse: true,
-            );
-          }
-          if (photo.animationLoop != PhotoAnimationType.none) {
-            fromFrame = PhotoAnimationEngine.apply(
-              image: fromFrame,
-              type: photo.animationLoop,
-              progress: ((t / totalFrames) * 3) % 1,
-              backgroundArgb: background,
-            );
-          }
-          var toFrame = decoded[i + 1];
-          if (nextPhoto.animationIn != PhotoAnimationType.none) {
-            toFrame = PhotoAnimationEngine.apply(
-              image: toFrame,
-              type: nextPhoto.animationIn,
-              progress: progress,
-              backgroundArgb: nextBackground,
-            );
-          }
-          if (nextPhoto.animationLoop != PhotoAnimationType.none) {
-            toFrame = PhotoAnimationEngine.apply(
-              image: toFrame,
-              type: nextPhoto.animationLoop,
-              progress: ((t / totalFrames) * 3) % 1,
-              backgroundArgb: nextBackground,
-            );
-          }
+          final fromFrame = _animatePhotoFrame(
+            source: decoded[i],
+            photo: photo,
+            frameIndex: soloFrames + t,
+            totalFrames: totalFrames,
+            inFrames: inFrames,
+            outFrames: outFrames,
+            background: background,
+          );
+          final toFrame = decoded[i + 1];
           final blended = TransitionEngine.apply(
             from: fromFrame,
             to: toFrame,
@@ -663,18 +720,6 @@ class SlideshowProject extends ChangeNotifier {
             pivotNy: option.pivotNy,
           );
           await pushFrame(blended);
-        }
-      } else if (outFrames > 0) {
-        for (var t = 0; t < outFrames; t++) {
-          if (generation != _previewGeneration) return;
-          final fromFrame = PhotoAnimationEngine.apply(
-            image: decoded[i],
-            type: photo.animationOut,
-            progress: (t + 1) / outFrames,
-            backgroundArgb: background,
-            reverse: true,
-          );
-          await pushFrame(fromFrame);
         }
       }
     }
@@ -890,85 +935,39 @@ class SlideshowProject extends ChangeNotifier {
         final transitionFrames = i < pairs && effect != SlideTransitionType.none
             ? math.min(AppConstants.framesPerTransition, totalFrames)
             : 0;
-        final outFrames =
-            photo.animationOut != PhotoAnimationType.none &&
-                (effect == SlideTransitionType.none || i == pairs)
-            ? math.min(AppConstants.framesPerTransition, totalFrames)
-            : 0;
-        final holdFrames = totalFrames - transitionFrames - outFrames;
         final background = photo.backgroundArgb ?? backgroundArgb;
+        final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
+        final soloFrames = totalFrames - transitionFrames;
 
-        for (var hold = 0; hold < holdFrames; hold++) {
-          var held = decoded[i];
-          final inFrames = math.min(
-            AppConstants.framesPerTransition,
-            holdFrames,
+        for (var hold = 0; hold < soloFrames; hold++) {
+          await writeFrame(
+            _animatePhotoFrame(
+              source: decoded[i],
+              photo: photo,
+              frameIndex: hold,
+              totalFrames: totalFrames,
+              inFrames: inFrames,
+              outFrames: outFrames,
+              background: background,
+            ),
           );
-          final animateInDuringHold =
-              photo.animationIn != PhotoAnimationType.none &&
-              inFrames > 0 &&
-              (effect == SlideTransitionType.none || i == 0);
-          if (animateInDuringHold) {
-            held = PhotoAnimationEngine.apply(
-              image: held,
-              type: photo.animationIn,
-              progress: (hold + 1) / inFrames,
-              backgroundArgb: background,
-            );
-          }
-          if (photo.animationLoop != PhotoAnimationType.none) {
-            held = PhotoAnimationEngine.apply(
-              image: held,
-              type: photo.animationLoop,
-              progress: ((hold / totalFrames) * 3) % 1,
-              backgroundArgb: background,
-            );
-          }
-          await writeFrame(held);
           processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
           onProgress?.call(processProgress);
         }
 
         if (transitionFrames > 0) {
-          final nextPhoto = photos[i + 1];
-          final nextBackground = nextPhoto.backgroundArgb ?? backgroundArgb;
           for (var t = 0; t < transitionFrames; t++) {
             final progress = (t + 1) / transitionFrames;
-            var fromFrame = decoded[i];
-            if (photo.animationOut != PhotoAnimationType.none) {
-              fromFrame = PhotoAnimationEngine.apply(
-                image: fromFrame,
-                type: photo.animationOut,
-                progress: progress,
-                backgroundArgb: background,
-                reverse: true,
-              );
-            }
-            if (photo.animationLoop != PhotoAnimationType.none) {
-              fromFrame = PhotoAnimationEngine.apply(
-                image: fromFrame,
-                type: photo.animationLoop,
-                progress: ((t / totalFrames) * 3) % 1,
-                backgroundArgb: background,
-              );
-            }
-            var toFrame = decoded[i + 1];
-            if (nextPhoto.animationIn != PhotoAnimationType.none) {
-              toFrame = PhotoAnimationEngine.apply(
-                image: toFrame,
-                type: nextPhoto.animationIn,
-                progress: progress,
-                backgroundArgb: nextBackground,
-              );
-            }
-            if (nextPhoto.animationLoop != PhotoAnimationType.none) {
-              toFrame = PhotoAnimationEngine.apply(
-                image: toFrame,
-                type: nextPhoto.animationLoop,
-                progress: ((t / totalFrames) * 3) % 1,
-                backgroundArgb: nextBackground,
-              );
-            }
+            final fromFrame = _animatePhotoFrame(
+              source: decoded[i],
+              photo: photo,
+              frameIndex: soloFrames + t,
+              totalFrames: totalFrames,
+              inFrames: inFrames,
+              outFrames: outFrames,
+              background: background,
+            );
+            final toFrame = decoded[i + 1];
             final blended = TransitionEngine.apply(
               from: fromFrame,
               to: toFrame,
@@ -992,22 +991,6 @@ class SlideshowProject extends ChangeNotifier {
               previewFrameIndex = frameIndex - 1;
               notifyListeners();
             }
-          }
-        } else if (outFrames > 0) {
-          for (var t = 0; t < outFrames; t++) {
-            final fromFrame = PhotoAnimationEngine.apply(
-              image: decoded[i],
-              type: photo.animationOut,
-              progress: (t + 1) / outFrames,
-              backgroundArgb: background,
-              reverse: true,
-            );
-            await writeFrame(fromFrame);
-            processProgress = (frameIndex / totalFramesEstimate).clamp(
-              0.0,
-              1.0,
-            );
-            onProgress?.call(processProgress);
           }
         }
       }

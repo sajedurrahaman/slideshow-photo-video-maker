@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -40,7 +41,7 @@ enum _PhotoTool {
   replace,
 }
 
-enum _AnimationPhase { inAnimation, outAnimation, loop }
+enum _AnimationPhase { inAnimation, outAnimation }
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key});
@@ -54,12 +55,14 @@ class _EditorScreenState extends State<EditorScreen> {
   _PhotoTool? _photoTool;
   _AnimationPhase _animationPhase = _AnimationPhase.inAnimation;
   double? _durationSliderValue;
+  double? _inDurationDrag;
+  double? _outDurationDrag;
   final _textController = TextEditingController();
   final _stripController = ScrollController();
 
   static const _sheetHeight = 180.0;
   static const _timelineHeaderHeight = 48.0;
-  static const _inlineTimelineHeaderHeight = 40.0;
+  static const _photoToolbarHeight = 72.0;
   static const _plusW = 52.0;
   static const _pixelsPerSecond = 44.0;
   static const _thumbH = 60.0;
@@ -633,7 +636,7 @@ class _EditorScreenState extends State<EditorScreen> {
       (tool: _PhotoTool.replace, label: 'Replace', iconAsset: 'replace.png'),
     ];
     return Container(
-      height: 72,
+      height: _photoToolbarHeight,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: AppColors.border)),
@@ -888,26 +891,50 @@ class _EditorScreenState extends State<EditorScreen> {
     final selected = switch (_animationPhase) {
       _AnimationPhase.inAnimation => photo.animationIn,
       _AnimationPhase.outAnimation => photo.animationOut,
-      _AnimationPhase.loop => photo.animationLoop,
     };
-    const options = <PhotoAnimationType>[
+    const inOptions = <PhotoAnimationType>[
+      PhotoAnimationType.none,
       PhotoAnimationType.fade,
       PhotoAnimationType.slightZoom,
       PhotoAnimationType.zoomIn,
-      PhotoAnimationType.zoomOut,
       PhotoAnimationType.shake,
-      PhotoAnimationType.slideLeft,
-      PhotoAnimationType.dynamicZoom,
-      PhotoAnimationType.dynamicZoomAlt,
-      PhotoAnimationType.wiper,
-      PhotoAnimationType.pendulum,
-      PhotoAnimationType.upAndDown,
       PhotoAnimationType.shake2,
       PhotoAnimationType.mirror,
       PhotoAnimationType.slideUp,
       PhotoAnimationType.slideRight,
       PhotoAnimationType.slideDown,
+      PhotoAnimationType.slideLeft,
+      PhotoAnimationType.dynamicZoom,
+      PhotoAnimationType.wiper,
+      PhotoAnimationType.pendulum,
+      PhotoAnimationType.upAndDown,
+      PhotoAnimationType.leftAndRight,
+      PhotoAnimationType.spinRight,
+      PhotoAnimationType.spinLeft,
+      PhotoAnimationType.spinUpper,
     ];
+    final options = _animationPhase == _AnimationPhase.inAnimation
+        ? inOptions
+        : const <PhotoAnimationType>[
+            PhotoAnimationType.none,
+            PhotoAnimationType.fade,
+            PhotoAnimationType.zoomOut,
+            PhotoAnimationType.mirrorOutside,
+            PhotoAnimationType.bottomOut,
+            PhotoAnimationType.leftOut,
+            PhotoAnimationType.rightOut,
+            PhotoAnimationType.topOut,
+            PhotoAnimationType.dynamicZoomOut,
+            PhotoAnimationType.flipLeft,
+            PhotoAnimationType.flipLower,
+            PhotoAnimationType.flipRight,
+            PhotoAnimationType.slideOutTop,
+            PhotoAnimationType.slideOutBottom,
+            PhotoAnimationType.rotateFade,
+            PhotoAnimationType.flyOutLeft,
+            PhotoAnimationType.flyOutRight,
+            PhotoAnimationType.flyOutUp,
+          ];
     final thumb = compact ? 56.0 : 56.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -918,7 +945,11 @@ class _EditorScreenState extends State<EditorScreen> {
             children: [
               for (final phase in _AnimationPhase.values)
                 InkWell(
-                  onTap: () => setState(() => _animationPhase = phase),
+                  onTap: () => setState(() {
+                    _animationPhase = phase;
+                    _inDurationDrag = null;
+                    _outDurationDrag = null;
+                  }),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     child: Column(
@@ -927,7 +958,6 @@ class _EditorScreenState extends State<EditorScreen> {
                           switch (phase) {
                             _AnimationPhase.inAnimation => 'In',
                             _AnimationPhase.outAnimation => 'Out',
-                            _AnimationPhase.loop => 'Loop',
                           },
                           style: TextStyle(
                             fontSize: compact ? 13 : 15,
@@ -971,14 +1001,11 @@ class _EditorScreenState extends State<EditorScreen> {
                     _AnimationPhase.outAnimation => photo.copyWith(
                       animationOut: animation,
                     ),
-                    _AnimationPhase.loop => photo.copyWith(
-                      animationLoop: animation,
-                    ),
                   };
                   project.updatePhoto(index, updated);
                 },
                 child: SizedBox(
-                  width: thumb,
+                  width: 78,
                   child: Column(
                     children: [
                       Container(
@@ -993,10 +1020,21 @@ class _EditorScreenState extends State<EditorScreen> {
                           ),
                         ),
                         clipBehavior: Clip.antiAlias,
-                        child: Image.asset(
-                          'assets/images/editor/animation_thumb.png',
-                          fit: BoxFit.fill,
-                        ),
+                        child: animation == PhotoAnimationType.none
+                            ? const ColoredBox(
+                                color: Color(0xFFF2F2F2),
+                                child: Center(
+                                  child: Icon(
+                                    Icons.block,
+                                    color: Color(0xFF9E9E9E),
+                                    size: 28,
+                                  ),
+                                ),
+                              )
+                            : _MotionThumb(
+                                type: animation,
+                                phase: _animationPhase,
+                              ),
                       ),
                       const SizedBox(height: 1),
                       Text(
@@ -1016,7 +1054,85 @@ class _EditorScreenState extends State<EditorScreen> {
             },
           ),
         ),
+        _animationDurationBar(project, index, photo),
       ],
+    );
+  }
+
+  Widget _animationDurationBar(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo,
+  ) {
+    final max = photo.durationSec < 0.1 ? 0.1 : photo.durationSec;
+    final hasIn = photo.animationIn != PhotoAnimationType.none;
+    final hasOut = photo.animationOut != PhotoAnimationType.none;
+    var inSec = _inDurationDrag ?? photo.animationInDurationSec;
+    var outSec = _outDurationDrag ?? photo.animationOutDurationSec;
+    if (hasIn) {
+      inSec = inSec.clamp(0.1, max).toDouble();
+    } else {
+      inSec = 0;
+    }
+    if (hasOut) {
+      outSec = outSec.clamp(0.1, max).toDouble();
+    } else {
+      outSec = 0;
+    }
+    if (hasIn && hasOut && inSec + outSec > max) {
+      outSec = (max - inSec).clamp(0.1, max).toDouble();
+      if (inSec + outSec > max) {
+        inSec = (max - outSec).clamp(0.1, max).toDouble();
+      }
+    }
+    const labelStyle = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w600,
+      color: AppColors.textDark,
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 2),
+      child: Row(
+        children: [
+          const SizedBox(width: 24, child: Text('In', style: labelStyle)),
+          Expanded(
+            child: _InOutDurationBar(
+              maxSec: max,
+              inSec: inSec,
+              outSec: outSec,
+              inEnabled: hasIn,
+              outEnabled: hasOut,
+              onChanged: (nextIn, nextOut) {
+                setState(() {
+                  _inDurationDrag = nextIn;
+                  _outDurationDrag = nextOut;
+                });
+              },
+              onChangeEnd: (nextIn, nextOut) {
+                setState(() {
+                  _inDurationDrag = null;
+                  _outDurationDrag = null;
+                });
+                project.updatePhoto(
+                  index,
+                  photo.copyWith(
+                    animationInDurationSec: hasIn
+                        ? nextIn
+                        : photo.animationInDurationSec,
+                    animationOutDurationSec: hasOut
+                        ? nextOut
+                        : photo.animationOutDurationSec,
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(
+            width: 28,
+            child: Text('Out', textAlign: TextAlign.right, style: labelStyle),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1148,23 +1264,62 @@ class _EditorScreenState extends State<EditorScreen> {
         PhotoAnimationType.fade => switch (phase) {
           _AnimationPhase.inAnimation => 'Fade in',
           _AnimationPhase.outAnimation => 'Fade out',
-          _AnimationPhase.loop => 'Fade',
         },
-        PhotoAnimationType.slightZoom => 'Slight zoom',
+        PhotoAnimationType.slightZoom => switch (phase) {
+          _AnimationPhase.inAnimation => 'Slight zoom in',
+          _ => 'Slight zoom',
+        },
         PhotoAnimationType.zoomIn => 'Zoom in',
         PhotoAnimationType.zoomOut => 'Zoom out',
         PhotoAnimationType.shake => 'Shake 1',
-        PhotoAnimationType.slideLeft => 'Slide left',
-        PhotoAnimationType.dynamicZoom => 'Dynamic zoom',
+        PhotoAnimationType.shake2 => 'Shake 2',
+        PhotoAnimationType.mirror => switch (phase) {
+          _AnimationPhase.inAnimation => 'Mirror in',
+          _ => 'Mirror',
+        },
+        PhotoAnimationType.slideUp => switch (phase) {
+          _AnimationPhase.inAnimation => 'Slide up (inside)',
+          _ => 'Slide up',
+        },
+        PhotoAnimationType.slideRight => switch (phase) {
+          _AnimationPhase.inAnimation => 'Slide right (inside)',
+          _ => 'Slide right',
+        },
+        PhotoAnimationType.slideDown => switch (phase) {
+          _AnimationPhase.inAnimation => 'Slide down (inside)',
+          _ => 'Slide down',
+        },
+        PhotoAnimationType.slideLeft => switch (phase) {
+          _AnimationPhase.inAnimation => 'Slide left (inside)',
+          _ => 'Slide left',
+        },
+        PhotoAnimationType.dynamicZoom => switch (phase) {
+          _AnimationPhase.inAnimation => 'Dynamic zoom in',
+          _ => 'Dynamic zoom',
+        },
         PhotoAnimationType.dynamicZoomAlt => 'Dynamic zoom',
-        PhotoAnimationType.wiper => 'Wiper',
+        PhotoAnimationType.wiper => 'Wipe',
         PhotoAnimationType.pendulum => 'Pendulum',
         PhotoAnimationType.upAndDown => 'Up and down',
-        PhotoAnimationType.shake2 => 'Shake 2',
-        PhotoAnimationType.mirror => 'Mirror',
-        PhotoAnimationType.slideUp => 'Slide up',
-        PhotoAnimationType.slideRight => 'Slide right',
-        PhotoAnimationType.slideDown => 'Slide down',
+        PhotoAnimationType.leftAndRight => 'Left and right',
+        PhotoAnimationType.spinRight => 'Spin right (inside)',
+        PhotoAnimationType.spinLeft => 'Spin left (inside)',
+        PhotoAnimationType.spinUpper => 'Spin upper (inside)',
+        PhotoAnimationType.mirrorOutside => 'Mirror (outside)',
+        PhotoAnimationType.bottomOut => 'Bottom out',
+        PhotoAnimationType.leftOut => 'Left out',
+        PhotoAnimationType.rightOut => 'Right out',
+        PhotoAnimationType.topOut => 'Top out',
+        PhotoAnimationType.dynamicZoomOut => 'Dynamic zoom out',
+        PhotoAnimationType.flipLeft => 'Flip left',
+        PhotoAnimationType.flipLower => 'Flip lower',
+        PhotoAnimationType.flipRight => 'Flip right',
+        PhotoAnimationType.slideOutTop => 'Slide out top',
+        PhotoAnimationType.slideOutBottom => 'Slide out bottom',
+        PhotoAnimationType.rotateFade => 'Rotate fade',
+        PhotoAnimationType.flyOutLeft => 'Fly out left',
+        PhotoAnimationType.flyOutRight => 'Fly out right',
+        PhotoAnimationType.flyOutUp => 'Fly out up',
       };
 
   String _backgroundName(int color) => switch (color) {
@@ -1192,7 +1347,10 @@ class _EditorScreenState extends State<EditorScreen> {
         (_photoTool == _PhotoTool.duration ||
             _photoTool == _PhotoTool.animation ||
             _photoTool == _PhotoTool.background);
-    final inlineSheetHeight = _sheetHeight - _inlineTimelineHeaderHeight;
+    final inlineSheetHeight = _sheetHeight - _timelineHeaderHeight;
+    final replacedSheetExtra = photoToolReplacesTimeline
+        ? _photoToolbarHeight
+        : 0.0;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -1319,19 +1477,22 @@ class _EditorScreenState extends State<EditorScreen> {
             if (photoToolReplacesTimeline)
               _idleToolPanel(
                 project,
-                height: _inlineTimelineHeaderHeight + inlineSheetHeight,
-                timelineHeaderHeight: _inlineTimelineHeaderHeight,
+                height:
+                    _timelineHeaderHeight +
+                    inlineSheetHeight +
+                    replacedSheetExtra,
+                timelineHeaderHeight: _timelineHeaderHeight,
                 timelineContent: _photoEditSheet(
                   project,
-                  heightOverride: inlineSheetHeight,
+                  heightOverride: inlineSheetHeight + replacedSheetExtra,
                   compactContent: true,
                 ),
               )
             else
               _idleToolPanel(project),
-            if (_photoTool == null || photoToolReplacesTimeline)
+            if (_photoTool == null)
               _photoEditorToolbar(project)
-            else
+            else if (!photoToolReplacesTimeline)
               _photoEditSheet(project),
           ] else ...[
             if (_tool == null)
@@ -2002,4 +2163,438 @@ class _TitleCardPanelState extends State<_TitleCardPanel> {
       ),
     );
   }
+}
+
+class _MotionThumb extends StatefulWidget {
+  const _MotionThumb({required this.type, required this.phase});
+
+  final PhotoAnimationType type;
+  final _AnimationPhase phase;
+
+  @override
+  State<_MotionThumb> createState() => _MotionThumbState();
+}
+
+class _MotionThumbState extends State<_MotionThumb>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        var t = Curves.easeInOut.transform(_controller.value);
+        if (widget.phase == _AnimationPhase.outAnimation) {
+          t = 1 - t;
+        }
+        final motion = _thumbMotion(widget.type, t);
+        return ClipRect(
+          child: Opacity(
+            opacity: motion.opacity,
+            child: Transform.translate(
+              offset: motion.offset,
+              child: Transform.rotate(
+                angle: motion.turns * math.pi * 2,
+                child: Transform(
+                  alignment: motion.alignment,
+                  transform: Matrix4.diagonal3Values(
+                    motion.scaleX,
+                    motion.scaleY,
+                    1,
+                  ),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      child: Image.asset(
+        'assets/images/editor/animation_thumb.png',
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+      ),
+    );
+  }
+}
+
+enum _DurationHandle { inn, out }
+
+class _InOutDurationBar extends StatefulWidget {
+  const _InOutDurationBar({
+    required this.maxSec,
+    required this.inSec,
+    required this.outSec,
+    required this.inEnabled,
+    required this.outEnabled,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  final double maxSec;
+  final double inSec;
+  final double outSec;
+  final bool inEnabled;
+  final bool outEnabled;
+  final void Function(double inSec, double outSec) onChanged;
+  final void Function(double inSec, double outSec) onChangeEnd;
+
+  @override
+  State<_InOutDurationBar> createState() => _InOutDurationBarState();
+}
+
+class _InOutDurationBarState extends State<_InOutDurationBar> {
+  static const _handle = 22.0;
+  static const _yellow = Color(0xFFD6E04A);
+  _DurationHandle? _dragging;
+  double? _lastIn;
+  double? _lastOut;
+
+  double _snap(double seconds) => ((seconds * 10).round() / 10).toDouble();
+
+  (double, double) _valuesFor(double localX, double width) {
+    final max = widget.maxSec < 0.1 ? 0.1 : widget.maxSec;
+    final track = math.max(1.0, width - _handle);
+    final fraction = ((localX - _handle / 2) / track).clamp(0.0, 1.0);
+    var inSec = widget.inEnabled ? widget.inSec.clamp(0.1, max) : 0.0;
+    var outSec = widget.outEnabled ? widget.outSec.clamp(0.1, max) : 0.0;
+    if (_dragging == _DurationHandle.inn) {
+      final cap = widget.outEnabled ? math.max(0.1, max - outSec) : max;
+      inSec = (fraction * max).clamp(0.1, cap).toDouble();
+    } else if (_dragging == _DurationHandle.out) {
+      final cap = widget.inEnabled ? math.max(0.1, max - inSec) : max;
+      outSec = ((1 - fraction) * max).clamp(0.1, cap).toDouble();
+    }
+    return (inSec.toDouble(), outSec.toDouble());
+  }
+
+  void _pickHandle(double localX, double width) {
+    final max = widget.maxSec < 0.1 ? 0.1 : widget.maxSec;
+    final track = math.max(1.0, width - _handle);
+    final dx = localX - _handle / 2;
+    final inX = widget.inEnabled ? (widget.inSec / max) * track : double.nan;
+    final outX = widget.outEnabled
+        ? (1 - widget.outSec / max) * track
+        : double.nan;
+    const slop = 36.0;
+    final nearIn = widget.inEnabled && (dx - inX).abs() <= slop;
+    final nearOut = widget.outEnabled && (dx - outX).abs() <= slop;
+    if (nearIn && nearOut) {
+      _dragging = (dx - inX).abs() <= (dx - outX).abs()
+          ? _DurationHandle.inn
+          : _DurationHandle.out;
+    } else if (nearIn) {
+      _dragging = _DurationHandle.inn;
+    } else if (nearOut) {
+      _dragging = _DurationHandle.out;
+    } else {
+      _dragging = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final max = widget.maxSec < 0.1 ? 0.1 : widget.maxSec;
+        final track = math.max(1.0, width - _handle);
+        final inLimit = widget.inEnabled
+            ? (widget.inSec / max).clamp(0.0, 1.0)
+            : 0.0;
+        final outLimit = widget.outEnabled
+            ? (widget.outSec / max).clamp(0.0, 1.0)
+            : 0.0;
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragStart: widget.inEnabled || widget.outEnabled
+              ? (details) => _pickHandle(details.localPosition.dx, width)
+              : null,
+          onHorizontalDragUpdate: (details) {
+            if (_dragging == null) return;
+            final next = _valuesFor(details.localPosition.dx, width);
+            _lastIn = next.$1;
+            _lastOut = next.$2;
+            widget.onChanged(next.$1, next.$2);
+          },
+          onHorizontalDragEnd: (_) {
+            if (_dragging == null) return;
+            widget.onChangeEnd(
+              _snap(_lastIn ?? widget.inSec),
+              _snap(_lastOut ?? widget.outSec),
+            );
+            _dragging = null;
+          },
+          onHorizontalDragCancel: () => _dragging = null,
+          child: SizedBox(
+            height: 36,
+            child: Stack(
+              alignment: Alignment.centerLeft,
+              children: [
+                Positioned(
+                  left: _handle / 2,
+                  right: _handle / 2,
+                  child: SizedBox(
+                    height: 3,
+                    child: Stack(
+                      children: [
+                        const Positioned.fill(
+                          child: ColoredBox(color: Color(0xFFE0E0E0)),
+                        ),
+                        if (inLimit > 0)
+                          Positioned(
+                            left: 0,
+                            width: inLimit * track,
+                            top: 0,
+                            bottom: 0,
+                            child: const ColoredBox(color: _yellow),
+                          ),
+                        if (outLimit > 0)
+                          Positioned(
+                            right: 0,
+                            width: outLimit * track,
+                            top: 0,
+                            bottom: 0,
+                            child: const ColoredBox(color: _yellow),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (widget.inEnabled)
+                  Positioned(
+                    left: inLimit * track,
+                    child: const _DurationArrow(
+                      icon: Icons.chevron_right,
+                      active: true,
+                    ),
+                  )
+                else
+                  Positioned(
+                    left: 0,
+                    child: const _DurationArrow(
+                      icon: Icons.chevron_right,
+                      active: false,
+                    ),
+                  ),
+                if (widget.outEnabled)
+                  Positioned(
+                    left: (1 - outLimit) * track,
+                    child: const _DurationArrow(
+                      icon: Icons.chevron_left,
+                      active: true,
+                    ),
+                  )
+                else
+                  Positioned(
+                    left: track,
+                    child: const _DurationArrow(
+                      icon: Icons.chevron_left,
+                      active: false,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DurationArrow extends StatelessWidget {
+  const _DurationArrow({required this.icon, required this.active});
+
+  final IconData icon;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        color: active ? Colors.white : const Color(0xFFEDEDED),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: active ? const Color(0xFFD0D0D0) : const Color(0xFFD8D8D8),
+        ),
+        boxShadow: active
+            ? const [
+                BoxShadow(
+                  color: Color(0x22000000),
+                  blurRadius: 2,
+                  offset: Offset(0, 1),
+                ),
+              ]
+            : null,
+      ),
+      child: Icon(
+        icon,
+        size: 16,
+        color: active ? const Color(0xFF424242) : const Color(0xFFBDBDBD),
+      ),
+    );
+  }
+}
+
+class _ThumbMotion {
+  const _ThumbMotion({
+    this.opacity = 1,
+    this.scaleX = 1,
+    this.scaleY = 1,
+    this.offset = Offset.zero,
+    this.turns = 0,
+    this.alignment = Alignment.center,
+  });
+
+  final double opacity;
+  final double scaleX;
+  final double scaleY;
+  final Offset offset;
+  final double turns;
+  final Alignment alignment;
+}
+
+_ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
+  const travel = 56.0;
+  return switch (type) {
+    PhotoAnimationType.none => const _ThumbMotion(),
+    PhotoAnimationType.fade => _ThumbMotion(opacity: 0.15 + 0.85 * t),
+    PhotoAnimationType.slightZoom => _ThumbMotion(
+      scaleX: 1.1 - 0.1 * t,
+      scaleY: 1.1 - 0.1 * t,
+    ),
+    PhotoAnimationType.zoomIn => _ThumbMotion(
+      scaleX: 0.72 + 0.28 * t,
+      scaleY: 0.72 + 0.28 * t,
+    ),
+    PhotoAnimationType.zoomOut => _ThumbMotion(
+      scaleX: 1.28 - 0.28 * t,
+      scaleY: 1.28 - 0.28 * t,
+    ),
+    PhotoAnimationType.shake => _ThumbMotion(
+      offset: Offset(math.sin(t * math.pi * 4) * 3, 0),
+    ),
+    PhotoAnimationType.shake2 => _ThumbMotion(
+      offset: Offset(
+        math.sin(t * math.pi * 6) * 4,
+        math.cos(t * math.pi * 4) * 2,
+      ),
+    ),
+    PhotoAnimationType.slideLeft => _ThumbMotion(
+      offset: Offset(-(1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.slideRight => _ThumbMotion(
+      offset: Offset((1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.slideUp => _ThumbMotion(
+      offset: Offset(0, (1 - t) * travel),
+    ),
+    PhotoAnimationType.slideDown => _ThumbMotion(
+      offset: Offset(0, -(1 - t) * travel),
+    ),
+    PhotoAnimationType.dynamicZoom => _ThumbMotion(
+      scaleX: 1 + 0.28 * t,
+      scaleY: 1 + 0.28 * t,
+    ),
+    PhotoAnimationType.dynamicZoomAlt => _ThumbMotion(
+      scaleX: 1.28 - 0.28 * t,
+      scaleY: 1.28 - 0.28 * t,
+    ),
+    PhotoAnimationType.wiper => _ThumbMotion(
+      offset: Offset((0.5 - t) * 20, 0),
+    ),
+    PhotoAnimationType.pendulum => _ThumbMotion(
+      offset: Offset(math.sin(t * math.pi) * 10, 0),
+    ),
+    PhotoAnimationType.upAndDown => _ThumbMotion(
+      offset: Offset(0, math.sin(t * math.pi * 2) * 6),
+    ),
+    PhotoAnimationType.leftAndRight => _ThumbMotion(
+      offset: Offset(math.sin(t * math.pi * 2) * 12, 0),
+    ),
+    PhotoAnimationType.spinRight => _ThumbMotion(turns: (1 - t) * 0.25),
+    PhotoAnimationType.spinLeft => _ThumbMotion(turns: -(1 - t) * 0.25),
+    PhotoAnimationType.spinUpper => _ThumbMotion(scaleY: 0.2 + 0.8 * t),
+    PhotoAnimationType.mirror => _ThumbMotion(scaleX: t < 0.5 ? 1 : -1),
+    PhotoAnimationType.mirrorOutside => _ThumbMotion(
+      scaleX: (t * 2 - 1).clamp(-1, 1),
+      offset: Offset((1 - t) * 22, 0),
+    ),
+    PhotoAnimationType.bottomOut => _ThumbMotion(
+      offset: Offset(0, (1 - t) * travel),
+    ),
+    PhotoAnimationType.leftOut => _ThumbMotion(
+      offset: Offset(-(1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.rightOut => _ThumbMotion(
+      offset: Offset((1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.topOut => _ThumbMotion(
+      offset: Offset(0, -(1 - t) * travel),
+    ),
+    PhotoAnimationType.dynamicZoomOut => _ThumbMotion(
+      scaleX: 0.45 + 0.55 * t,
+      scaleY: 0.45 + 0.55 * t,
+    ),
+    PhotoAnimationType.flipLeft => _ThumbMotion(
+      scaleX: math.max(0.05, t),
+      alignment: Alignment.centerLeft,
+    ),
+    PhotoAnimationType.flipLower => _ThumbMotion(
+      scaleY: math.max(0.05, t),
+      alignment: Alignment.bottomCenter,
+    ),
+    PhotoAnimationType.flipRight => _ThumbMotion(
+      scaleX: math.max(0.05, t),
+      alignment: Alignment.centerRight,
+    ),
+    PhotoAnimationType.slideOutTop => _ThumbMotion(
+      opacity: 0.2 + 0.8 * t,
+      offset: Offset(0, -(1 - t) * travel),
+    ),
+    PhotoAnimationType.slideOutBottom => _ThumbMotion(
+      opacity: 0.2 + 0.8 * t,
+      offset: Offset(0, (1 - t) * travel),
+    ),
+    PhotoAnimationType.rotateFade => _ThumbMotion(
+      opacity: 0.15 + 0.85 * t,
+      turns: (1 - t) * 0.5,
+    ),
+    PhotoAnimationType.flyOutLeft => _ThumbMotion(
+      opacity: 0.15 + 0.85 * t,
+      scaleX: 0.4 + 0.6 * t,
+      scaleY: 0.4 + 0.6 * t,
+      offset: Offset(-(1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.flyOutRight => _ThumbMotion(
+      opacity: 0.15 + 0.85 * t,
+      scaleX: 0.4 + 0.6 * t,
+      scaleY: 0.4 + 0.6 * t,
+      offset: Offset((1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.flyOutUp => _ThumbMotion(
+      opacity: 0.15 + 0.85 * t,
+      scaleX: 0.4 + 0.6 * t,
+      scaleY: 0.4 + 0.6 * t,
+      offset: Offset(0, -(1 - t) * travel),
+    ),
+  };
 }
