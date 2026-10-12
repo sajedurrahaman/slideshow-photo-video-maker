@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -43,6 +44,8 @@ enum _PhotoTool {
 
 enum _AnimationPhase { inAnimation, outAnimation }
 
+enum _LiveMode { idle, inPhase, outPhase, full }
+
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key});
 
@@ -57,6 +60,8 @@ class _EditorScreenState extends State<EditorScreen> {
   double? _durationSliderValue;
   double? _inDurationDrag;
   double? _outDurationDrag;
+  int _liveToken = 0;
+  _LiveMode _liveMode = _LiveMode.idle;
   final _textController = TextEditingController();
   final _stripController = ScrollController();
 
@@ -117,6 +122,19 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> _preview() async {
     final project = context.read<SlideshowProject>();
+    if (project.selectedPhotoIndex != null) {
+      if (project.isPreviewPlaying) {
+        project.stopPreviewPlayback();
+        setState(() => _liveMode = _LiveMode.idle);
+        return;
+      }
+      project.startLiveClip();
+      setState(() {
+        _liveToken++;
+        _liveMode = _LiveMode.full;
+      });
+      return;
+    }
     try {
       await project.togglePreviewPlayback();
     } catch (e) {
@@ -373,6 +391,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                 _tool = null;
                                 _photoTool = null;
                                 _durationSliderValue = null;
+                                _liveMode = _LiveMode.idle;
                               });
                               project.selectTimelinePhoto(photoIndex);
                             },
@@ -986,9 +1005,9 @@ class _EditorScreenState extends State<EditorScreen> {
         Expanded(
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 2),
+            padding: const EdgeInsets.fromLTRB(0, 0, 12, 2),
             itemCount: options.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            separatorBuilder: (_, _) => const SizedBox(width: 0),
             itemBuilder: (context, i) {
               final animation = options[i];
               final isSelected = selected == animation;
@@ -1003,6 +1022,16 @@ class _EditorScreenState extends State<EditorScreen> {
                     ),
                   };
                   project.updatePhoto(index, updated);
+                  final clearing = animation == PhotoAnimationType.none;
+                  if (!clearing) project.startLiveClip();
+                  setState(() {
+                    _liveToken++;
+                    _liveMode = clearing
+                        ? _LiveMode.idle
+                        : _animationPhase == _AnimationPhase.inAnimation
+                        ? _LiveMode.inPhase
+                        : _LiveMode.outPhase;
+                  });
                 },
                 child: SizedBox(
                   width: 78,
@@ -1091,7 +1120,7 @@ class _EditorScreenState extends State<EditorScreen> {
       color: AppColors.textDark,
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 2),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       child: Row(
         children: [
           const SizedBox(width: 24, child: Text('In', style: labelStyle)),
@@ -1266,7 +1295,7 @@ class _EditorScreenState extends State<EditorScreen> {
           _AnimationPhase.outAnimation => 'Fade out',
         },
         PhotoAnimationType.slightZoom => switch (phase) {
-          _AnimationPhase.inAnimation => 'Slight zoom in',
+          _AnimationPhase.inAnimation => 'Slight zoom',
           _ => 'Slight zoom',
         },
         PhotoAnimationType.zoomIn => 'Zoom in',
@@ -1274,27 +1303,27 @@ class _EditorScreenState extends State<EditorScreen> {
         PhotoAnimationType.shake => 'Shake 1',
         PhotoAnimationType.shake2 => 'Shake 2',
         PhotoAnimationType.mirror => switch (phase) {
-          _AnimationPhase.inAnimation => 'Mirror in',
+          _AnimationPhase.inAnimation => 'Mirror',
           _ => 'Mirror',
         },
         PhotoAnimationType.slideUp => switch (phase) {
-          _AnimationPhase.inAnimation => 'Slide up (inside)',
+          _AnimationPhase.inAnimation => 'Slide up',
           _ => 'Slide up',
         },
         PhotoAnimationType.slideRight => switch (phase) {
-          _AnimationPhase.inAnimation => 'Slide right (inside)',
+          _AnimationPhase.inAnimation => 'Slide right',
           _ => 'Slide right',
         },
         PhotoAnimationType.slideDown => switch (phase) {
-          _AnimationPhase.inAnimation => 'Slide down (inside)',
+          _AnimationPhase.inAnimation => 'Slide down',
           _ => 'Slide down',
         },
         PhotoAnimationType.slideLeft => switch (phase) {
-          _AnimationPhase.inAnimation => 'Slide left (inside)',
+          _AnimationPhase.inAnimation => 'Slide left',
           _ => 'Slide left',
         },
         PhotoAnimationType.dynamicZoom => switch (phase) {
-          _AnimationPhase.inAnimation => 'Dynamic zoom in',
+          _AnimationPhase.inAnimation => 'Dynamic zoom',
           _ => 'Dynamic zoom',
         },
         PhotoAnimationType.dynamicZoomAlt => 'Dynamic zoom',
@@ -1302,15 +1331,15 @@ class _EditorScreenState extends State<EditorScreen> {
         PhotoAnimationType.pendulum => 'Pendulum',
         PhotoAnimationType.upAndDown => 'Up and down',
         PhotoAnimationType.leftAndRight => 'Left and right',
-        PhotoAnimationType.spinRight => 'Spin right (inside)',
-        PhotoAnimationType.spinLeft => 'Spin left (inside)',
-        PhotoAnimationType.spinUpper => 'Spin upper (inside)',
-        PhotoAnimationType.mirrorOutside => 'Mirror (outside)',
+        PhotoAnimationType.spinRight => 'Spin right',
+        PhotoAnimationType.spinLeft => 'Spin left',
+        PhotoAnimationType.spinUpper => 'Spin upper',
+        PhotoAnimationType.mirrorOutside => 'Mirror',
         PhotoAnimationType.bottomOut => 'Bottom out',
         PhotoAnimationType.leftOut => 'Left out',
         PhotoAnimationType.rightOut => 'Right out',
         PhotoAnimationType.topOut => 'Top out',
-        PhotoAnimationType.dynamicZoomOut => 'Dynamic zoom out',
+        PhotoAnimationType.dynamicZoomOut => 'Dynamic zoom',
         PhotoAnimationType.flipLeft => 'Flip left',
         PhotoAnimationType.flipLower => 'Flip lower',
         PhotoAnimationType.flipRight => 'Flip right',
@@ -1375,42 +1404,70 @@ class _EditorScreenState extends State<EditorScreen> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
               child: Center(
-                child: AspectRatio(
+              child: AspectRatio(
                   aspectRatio: aspect,
-                  child: DecoratedBox(
+                child: DecoratedBox(
                     decoration: const BoxDecoration(color: Colors.black),
-                    child: ClipRRect(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          RepaintBoundary(
-                            child: ValueListenableBuilder<Uint8List?>(
-                              valueListenable: project.previewFrameListenable,
-                              builder: (context, bytes, _) {
-                                if (bytes != null) {
-                                  return Image.memory(
-                                    bytes,
-                                    fit: BoxFit.contain,
-                                    gaplessPlayback: true,
-                                    filterQuality: FilterQuality.low,
-                                  );
-                                }
-                                if (project.photos.isNotEmpty) {
-                                  return Image.file(
-                                    File(project.photos.first.path),
-                                    fit: BoxFit.contain,
-                                    gaplessPlayback: true,
-                                  );
-                                }
-                                return const Center(
-                                  child: Text(
-                                    'No preview',
-                                    style: TextStyle(color: Colors.white54),
+                  child: ClipRRect(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                          if (project.selectedPhotoIndex != null)
+                            _LiveClipPreview(
+                              key: ValueKey(project.selectedPhotoIndex),
+                              photoIndex: project.selectedPhotoIndex!,
+                              photo: project
+                                  .photos[project.selectedPhotoIndex!],
+                              backgroundArgb:
+                                  project
+                                      .photos[project.selectedPhotoIndex!]
+                                      .backgroundArgb ??
+                                  project.backgroundArgb,
+                              replayToken: _liveToken,
+                              mode: _liveMode,
+                              inSecOverride: _inDurationDrag,
+                              outSecOverride: _outDurationDrag,
+                              onFraction: (fraction) =>
+                                  project.setLivePreviewClock(
+                                    project.selectedPhotoIndex!,
+                                    fraction,
                                   ),
-                                );
+                              onFinished: () {
+                                project.finishLiveClip();
+                                if (mounted) {
+                                  setState(() => _liveMode = _LiveMode.idle);
+                                }
                               },
+                          )
+                        else
+                            RepaintBoundary(
+                              child: ValueListenableBuilder<Uint8List?>(
+                                valueListenable: project.previewFrameListenable,
+                                builder: (context, bytes, _) {
+                                  if (bytes != null) {
+                                    return Image.memory(
+                                      bytes,
+                                      fit: BoxFit.contain,
+                                      gaplessPlayback: true,
+                                      filterQuality: FilterQuality.low,
+                                    );
+                                  }
+                                  if (project.photos.isNotEmpty) {
+                                    return Image.file(
+                                      File(project.photos.first.path),
+                                      fit: BoxFit.contain,
+                                      gaplessPlayback: true,
+                                    );
+                                  }
+                                  return const Center(
+                            child: Text(
+                              'No preview',
+                              style: TextStyle(color: Colors.white54),
                             ),
-                          ),
+                                  );
+                                },
+                              ),
+                            ),
                           // Loading while transition preview frames are prepared.
                           if (project.isPreparingPreview)
                             Container(
@@ -1440,37 +1497,37 @@ class _EditorScreenState extends State<EditorScreen> {
                               ),
                             ),
                           // Export-only progress.
-                          if (project.isProcessing)
-                            Container(
-                              color: Colors.black54,
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    CircularProgressIndicator(
+                        if (project.isProcessing)
+                          Container(
+                            color: Colors.black54,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(
                                       color: AppColors.primary,
-                                      value: project.processProgress > 0
-                                          ? project.processProgress
-                                          : null,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
+                                    value: project.processProgress > 0
+                                        ? project.processProgress
+                                        : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
                                       'Exporting ${(project.processProgress * 100).toInt()}%',
                                       style: const TextStyle(
                                         color: Colors.white,
                                       ),
-                                    ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
-                        ],
-                      ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
+          ),
           ),
 
           if (project.selectedPhotoIndex != null) ...[
@@ -2005,7 +2062,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+        return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -2030,7 +2087,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -2165,6 +2222,405 @@ class _TitleCardPanelState extends State<_TitleCardPanel> {
   }
 }
 
+class _LiveClipPreview extends StatefulWidget {
+  const _LiveClipPreview({
+    super.key,
+    required this.photoIndex,
+    required this.photo,
+    required this.backgroundArgb,
+    required this.replayToken,
+    required this.mode,
+    required this.onFraction,
+    required this.onFinished,
+    this.inSecOverride,
+    this.outSecOverride,
+  });
+
+  final int photoIndex;
+  final SlideshowPhoto photo;
+  final int backgroundArgb;
+  final int replayToken;
+  final _LiveMode mode;
+  final double? inSecOverride;
+  final double? outSecOverride;
+  final ValueChanged<double> onFraction;
+  final VoidCallback onFinished;
+
+  @override
+  State<_LiveClipPreview> createState() => _LiveClipPreviewState();
+}
+
+class _LiveClipPreviewState extends State<_LiveClipPreview>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _clock;
+  int _run = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _clock = AnimationController(vsync: this, duration: _clipDuration);
+    _clock.value = _settledFraction();
+    _scheduleRun();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LiveClipPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _clock.duration = _clipDuration;
+    if (widget.replayToken != oldWidget.replayToken ||
+        widget.mode != oldWidget.mode) {
+      if (widget.mode == _LiveMode.idle &&
+          widget.replayToken == oldWidget.replayToken) {
+        _run++;
+        _clock
+          ..removeListener(_onTick)
+          ..stop();
+        return;
+      }
+      _scheduleRun();
+    }
+  }
+
+  @override
+  void dispose() {
+    _run++;
+    _clock
+      ..removeListener(_onTick)
+      ..dispose();
+    super.dispose();
+  }
+
+  Duration get _clipDuration {
+    final ms = (widget.photo.durationSec * 1000).round().clamp(100, 60000);
+    return Duration(milliseconds: ms);
+  }
+
+  (double, double) _windows() {
+    final photo = widget.photo;
+    final max = photo.durationSec < 0.1 ? 0.1 : photo.durationSec;
+    final hasIn = photo.animationIn != PhotoAnimationType.none;
+    final hasOut = photo.animationOut != PhotoAnimationType.none;
+    var inSec = widget.inSecOverride ?? photo.animationInDurationSec;
+    var outSec = widget.outSecOverride ?? photo.animationOutDurationSec;
+    inSec = hasIn ? inSec.clamp(0.1, max).toDouble() : 0;
+    outSec = hasOut ? outSec.clamp(0.1, max).toDouble() : 0;
+    if (hasIn && hasOut && inSec + outSec > max) {
+      outSec = (max - inSec).clamp(0.1, max).toDouble();
+      if (inSec + outSec > max) {
+        inSec = (max - outSec).clamp(0.1, max).toDouble();
+      }
+    }
+    return (inSec, outSec);
+  }
+
+  double _settledFraction() {
+    final total = widget.photo.durationSec;
+    if (total <= 0) return 1;
+    final (inSec, _) = _windows();
+    return (inSec / total).clamp(0.0, 1.0);
+  }
+
+  void _onTick() {
+    widget.onFraction(_clock.value);
+  }
+
+  void _setClock(double value) {
+    _clock.removeListener(_onTick);
+    _clock.value = value;
+  }
+
+  void _finish(int run) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || run != _run) return;
+      widget.onFinished();
+    });
+  }
+
+  void _scheduleRun() {
+    final run = ++_run;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || run != _run) return;
+      _startRun(run);
+    });
+  }
+
+  void _startRun(int run) {
+    _clock
+      ..removeListener(_onTick)
+      ..stop();
+    final total = widget.photo.durationSec <= 0 ? 0.1 : widget.photo.durationSec;
+    final (inSec, outSec) = _windows();
+    switch (widget.mode) {
+      case _LiveMode.idle:
+        _setClock(_settledFraction());
+      case _LiveMode.inPhase:
+        final end = (inSec / total).clamp(0.0, 1.0);
+        _setClock(0);
+        if (end <= 0.001) {
+          _finish(run);
+          return;
+        }
+        _clock
+          ..addListener(_onTick)
+          ..animateTo(
+            end,
+            duration: Duration(
+              milliseconds: (inSec * 1000).round().clamp(80, 60000),
+            ),
+          ).whenComplete(() {
+            if (!mounted || run != _run) return;
+            _finish(run);
+          });
+      case _LiveMode.outPhase:
+        final start = ((total - outSec) / total).clamp(0.0, 1.0);
+        _setClock(start);
+        if (outSec <= 0.001) {
+          _finish(run);
+          return;
+        }
+        _clock
+          ..addListener(_onTick)
+          ..animateTo(
+            1,
+            duration: Duration(
+              milliseconds: (outSec * 1000).round().clamp(80, 60000),
+            ),
+          ).whenComplete(() {
+            if (!mounted || run != _run) return;
+            _finish(run);
+          });
+      case _LiveMode.full:
+        _clock.duration = _clipDuration;
+        _setClock(0);
+        _clock
+          ..addListener(_onTick)
+          ..forward().whenComplete(() {
+            if (!mounted || run != _run) return;
+            _setClock(_settledFraction());
+            _finish(run);
+          });
+    }
+  }
+
+  _GpuMotion _motionFor(double fraction) {
+    final photo = widget.photo;
+    final total = photo.durationSec <= 0 ? 0.1 : photo.durationSec;
+    final (inSec, outSec) = _windows();
+    final tSec = fraction.clamp(0.0, 1.0) * total;
+    final outStart = total - outSec;
+    if (photo.animationIn != PhotoAnimationType.none &&
+        inSec > 0 &&
+        tSec < outStart) {
+      if (tSec <= inSec) {
+        return _gpuMotion(photo.animationIn, (tSec / inSec).clamp(0.0, 1.0));
+      }
+      return const _GpuMotion();
+    }
+    if (photo.animationOut != PhotoAnimationType.none &&
+        outSec > 0 &&
+        tSec >= outStart) {
+      final progress = ((tSec - outStart) / outSec).clamp(0.0, 1.0);
+      return _gpuMotion(photo.animationOut, 1 - progress);
+    }
+    return const _GpuMotion();
+  }
+
+  Widget _photoImage() {
+    Widget image = Image.file(
+      File(widget.photo.path),
+      fit: BoxFit.contain,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.low,
+    );
+    final turns = widget.photo.rotationQuarterTurns % 4;
+    if (turns != 0) {
+      image = Transform.rotate(angle: turns * math.pi / 2, child: image);
+    }
+    if (widget.photo.mirrored) {
+      image = Transform.flip(flipX: true, child: image);
+    }
+    if (widget.photo.flipped) {
+      image = Transform.flip(flipY: true, child: image);
+    }
+    return image;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Color(widget.backgroundArgb),
+      child: AnimatedBuilder(
+        animation: _clock,
+        builder: (context, child) {
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final size = constraints.biggest;
+              final motion = _motionFor(_clock.value);
+              if (motion.mirrorOpen != null) {
+                return _mirrorDoorOpen(
+                  open: motion.mirrorOpen!,
+                  size: size,
+                  image: _photoImage,
+                );
+              }
+              return ClipRect(
+                child: Opacity(
+                  opacity: motion.opacity.clamp(0.0, 1.0),
+                  child: Transform.translate(
+                    offset: Offset(motion.dx * size.width, motion.dy * size.height),
+                    child: Transform.rotate(
+                      angle: motion.degrees * math.pi / 180,
+                      child: Transform(
+                        alignment: motion.alignment,
+                        transform: Matrix4.diagonal3Values(
+                          motion.scaleX.clamp(0.02, 3),
+                          motion.scaleY.clamp(0.02, 3),
+                          1,
+                        ),
+                        child: child,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+        child: _photoImage(),
+      ),
+    );
+  }
+}
+
+class _GpuMotion {
+  const _GpuMotion({
+    this.opacity = 1,
+    this.scaleX = 1,
+    this.scaleY = 1,
+    this.dx = 0,
+    this.dy = 0,
+    this.degrees = 0,
+    this.alignment = Alignment.center,
+    this.mirrorOpen,
+  });
+
+  final double opacity;
+  final double scaleX;
+  final double scaleY;
+  final double dx;
+  final double dy;
+  final double degrees;
+  final Alignment alignment;
+  final double? mirrorOpen;
+}
+
+_GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
+  return switch (type) {
+    PhotoAnimationType.none => const _GpuMotion(),
+    PhotoAnimationType.fade => _GpuMotion(opacity: t),
+    PhotoAnimationType.slightZoom => _GpuMotion(
+      scaleX: 1.12 - 0.12 * t,
+      scaleY: 1.12 - 0.12 * t,
+    ),
+    PhotoAnimationType.zoomIn => _GpuMotion(
+      scaleX: 0.78 + 0.22 * t,
+      scaleY: 0.78 + 0.22 * t,
+    ),
+    PhotoAnimationType.zoomOut => _GpuMotion(
+      scaleX: 1.22 - 0.22 * t,
+      scaleY: 1.22 - 0.22 * t,
+    ),
+    PhotoAnimationType.shake => _GpuMotion(
+      dx: math.sin(t * math.pi * 8) * 0.035,
+    ),
+    PhotoAnimationType.shake2 => _GpuMotion(
+      dx: math.sin(t * math.pi * 12) * 0.05,
+      dy: math.cos(t * math.pi * 10) * 0.02,
+    ),
+    PhotoAnimationType.slideLeft => _GpuMotion(dx: -(1 - t)),
+    PhotoAnimationType.slideUp => _GpuMotion(dy: (1 - t)),
+    PhotoAnimationType.slideRight => _GpuMotion(dx: (1 - t)),
+    PhotoAnimationType.slideDown => _GpuMotion(dy: -(1 - t)),
+    PhotoAnimationType.dynamicZoom => _GpuMotion(
+      scaleX: 1 + 0.28 * t,
+      scaleY: 1 + 0.28 * t,
+    ),
+    PhotoAnimationType.dynamicZoomAlt => _GpuMotion(
+      scaleX: 1.28 - 0.28 * t,
+      scaleY: 1.28 - 0.28 * t,
+    ),
+    PhotoAnimationType.wiper => _GpuMotion(dx: (0.5 - t) * 0.35),
+    PhotoAnimationType.pendulum => _GpuMotion(
+      dx: math.sin(t * math.pi) * 0.12,
+    ),
+    PhotoAnimationType.upAndDown => _GpuMotion(
+      dy: math.sin(t * math.pi * 2) * 0.06,
+    ),
+    PhotoAnimationType.mirror || PhotoAnimationType.mirrorOutside => _GpuMotion(
+      mirrorOpen: t.clamp(0.0, 1.0),
+    ),
+    PhotoAnimationType.leftAndRight => _GpuMotion(
+      dx: math.sin(t * math.pi * 2) * (1 - t * 0.35) * 0.1,
+    ),
+    PhotoAnimationType.spinRight => _GpuMotion(degrees: (1 - t) * 70),
+    PhotoAnimationType.spinLeft => _GpuMotion(degrees: -(1 - t) * 70),
+    PhotoAnimationType.spinUpper => _GpuMotion(
+      scaleY: 0.15 + 0.85 * t,
+      alignment: Alignment.topCenter,
+    ),
+    PhotoAnimationType.bottomOut => _GpuMotion(dy: (1 - t)),
+    PhotoAnimationType.leftOut => _GpuMotion(dx: -(1 - t)),
+    PhotoAnimationType.rightOut => _GpuMotion(dx: (1 - t)),
+    PhotoAnimationType.topOut => _GpuMotion(dy: -(1 - t)),
+    PhotoAnimationType.dynamicZoomOut => _GpuMotion(
+      scaleX: 0.42 + 0.58 * t,
+      scaleY: 0.42 + 0.58 * t,
+    ),
+    PhotoAnimationType.flipLeft => _GpuMotion(
+      scaleX: math.max(0.02, t),
+      alignment: Alignment.centerLeft,
+    ),
+    PhotoAnimationType.flipRight => _GpuMotion(
+      scaleX: math.max(0.02, t),
+      alignment: Alignment.centerRight,
+    ),
+    PhotoAnimationType.flipLower => _GpuMotion(
+      scaleY: math.max(0.02, t),
+      alignment: Alignment.bottomCenter,
+    ),
+    PhotoAnimationType.slideOutTop => _GpuMotion(
+      opacity: 0.2 + 0.8 * t,
+      dy: -(1 - t),
+    ),
+    PhotoAnimationType.slideOutBottom => _GpuMotion(
+      opacity: 0.2 + 0.8 * t,
+      dy: (1 - t),
+    ),
+    PhotoAnimationType.rotateFade => _GpuMotion(
+      opacity: t,
+      degrees: (1 - t) * 160,
+    ),
+    PhotoAnimationType.flyOutLeft => _GpuMotion(
+      opacity: t,
+      scaleX: 0.35 + 0.65 * t,
+      scaleY: 0.35 + 0.65 * t,
+      dx: -(1 - t) * 0.9,
+    ),
+    PhotoAnimationType.flyOutRight => _GpuMotion(
+      opacity: t,
+      scaleX: 0.35 + 0.65 * t,
+      scaleY: 0.35 + 0.65 * t,
+      dx: (1 - t) * 0.9,
+    ),
+    PhotoAnimationType.flyOutUp => _GpuMotion(
+      opacity: t,
+      scaleX: 0.35 + 0.65 * t,
+      scaleY: 0.35 + 0.65 * t,
+      dy: -(1 - t) * 0.9,
+    ),
+  };
+}
+
 class _MotionThumb extends StatefulWidget {
   const _MotionThumb({required this.type, required this.phase});
 
@@ -2203,6 +2659,24 @@ class _MotionThumbState extends State<_MotionThumb>
         if (widget.phase == _AnimationPhase.outAnimation) {
           t = 1 - t;
         }
+        if (widget.type == PhotoAnimationType.mirror ||
+            widget.type == PhotoAnimationType.mirrorOutside) {
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              return _mirrorDoorOpen(
+                open: t,
+                size: constraints.biggest,
+                perspective: 0.012,
+                blurSigma: 8,
+                image: () => Image.asset(
+                  'assets/images/editor/animation_thumb.png',
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
+              );
+            },
+          );
+        }
         final motion = _thumbMotion(widget.type, t);
         return ClipRect(
           child: Opacity(
@@ -2232,6 +2706,85 @@ class _MotionThumbState extends State<_MotionThumb>
       ),
     );
   }
+}
+
+Widget _mirrorDoorOpen({
+  required double open,
+  required Size size,
+  required Widget Function() image,
+  double perspective = 0.0014,
+  double blurSigma = 22,
+}) {
+  if (size.width < 2 || size.height < 2) return image();
+  final angle = (1 - open.clamp(0.0, 1.0)) * math.pi / 2;
+  return ClipRect(
+    child: Stack(
+      clipBehavior: Clip.none,
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(
+              sigmaX: blurSigma,
+              sigmaY: blurSigma,
+            ),
+            child: image(),
+          ),
+        ),
+        _mirrorLeaf(
+          left: true,
+          angle: angle,
+          size: size,
+          perspective: perspective,
+          image: image,
+        ),
+        _mirrorLeaf(
+          left: false,
+          angle: angle,
+          size: size,
+          perspective: perspective,
+          image: image,
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _mirrorLeaf({
+  required bool left,
+  required double angle,
+  required Size size,
+  required double perspective,
+  required Widget Function() image,
+}) {
+  final half = size.width / 2;
+  return Positioned(
+    left: left ? 0 : half,
+    top: 0,
+    width: half,
+    height: size.height,
+    child: Transform(
+      alignment: left ? Alignment.centerRight : Alignment.centerLeft,
+      filterQuality: FilterQuality.medium,
+      transform: Matrix4.identity()
+        ..setEntry(3, 2, perspective)
+        ..rotateY(left ? -angle : angle),
+      child: ClipRect(
+        child: OverflowBox(
+          alignment: left ? Alignment.centerLeft : Alignment.centerRight,
+          minWidth: size.width,
+          maxWidth: size.width,
+          minHeight: size.height,
+          maxHeight: size.height,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: image(),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 enum _DurationHandle { inn, out }
@@ -2347,7 +2900,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-                Positioned(
+              Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -2407,9 +2960,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                    ),
-                  ),
-              ],
+                ),
+              ),
+            ],
             ),
           ),
         );
@@ -2518,9 +3071,7 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
       scaleX: 1.28 - 0.28 * t,
       scaleY: 1.28 - 0.28 * t,
     ),
-    PhotoAnimationType.wiper => _ThumbMotion(
-      offset: Offset((0.5 - t) * 20, 0),
-    ),
+    PhotoAnimationType.wiper => _ThumbMotion(offset: Offset((0.5 - t) * 20, 0)),
     PhotoAnimationType.pendulum => _ThumbMotion(
       offset: Offset(math.sin(t * math.pi) * 10, 0),
     ),

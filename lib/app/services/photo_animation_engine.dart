@@ -66,8 +66,8 @@ class PhotoAnimationEngine {
         final bob = (math.sin(t * math.pi * 2) * h * 0.06).round();
         return _place(image, w, h, 0, bob, backgroundArgb);
       case PhotoAnimationType.mirror:
-        final flipped = img.flipHorizontal(image);
-        return t < 0.5 ? image : flipped;
+      case PhotoAnimationType.mirrorOutside:
+        return _mirrorOpen(image, t);
       case PhotoAnimationType.leftAndRight:
         final sway = (math.sin(t * math.pi * 2) * (1 - t * 0.35) * w * 0.1)
             .round();
@@ -86,16 +86,6 @@ class PhotoAnimationEngine {
           interpolation: img.Interpolation.linear,
         );
         return _place(resized, w, h, 0, 0, backgroundArgb);
-      case PhotoAnimationType.mirrorOutside:
-        final shown = t < 0.5 ? img.flipHorizontal(image) : image;
-        return _place(
-          shown,
-          w,
-          h,
-          ((1 - t) * w * 0.55).round(),
-          0,
-          backgroundArgb,
-        );
       case PhotoAnimationType.bottomOut:
         return _place(image, w, h, 0, ((1 - t) * h).round(), backgroundArgb);
       case PhotoAnimationType.leftOut:
@@ -107,11 +97,32 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.dynamicZoomOut:
         return _zoom(image, 0.42 + 0.58 * t, backgroundArgb);
       case PhotoAnimationType.flipLeft:
-        return _hinge(image, t, 1, alignRight: false, alignBottom: false, backgroundArgb: backgroundArgb);
+        return _hinge(
+          image,
+          t,
+          1,
+          alignRight: false,
+          alignBottom: false,
+          backgroundArgb: backgroundArgb,
+        );
       case PhotoAnimationType.flipRight:
-        return _hinge(image, t, 1, alignRight: true, alignBottom: false, backgroundArgb: backgroundArgb);
+        return _hinge(
+          image,
+          t,
+          1,
+          alignRight: true,
+          alignBottom: false,
+          backgroundArgb: backgroundArgb,
+        );
       case PhotoAnimationType.flipLower:
-        return _hinge(image, 1, t, alignRight: false, alignBottom: true, backgroundArgb: backgroundArgb);
+        return _hinge(
+          image,
+          1,
+          t,
+          alignRight: false,
+          alignBottom: true,
+          backgroundArgb: backgroundArgb,
+        );
       case PhotoAnimationType.slideOutTop:
         return _place(
           _fade(image, 0.2 + 0.8 * t, backgroundArgb),
@@ -189,6 +200,59 @@ class PhotoAnimationEngine {
       (yDir * (1 - t) * h * 0.9).round(),
       backgroundArgb,
     );
+  }
+
+  static final Expando<img.Image> _blurredOriginals = Expando<img.Image>();
+
+  static img.Image _blurredOriginal(img.Image image) {
+    final cached = _blurredOriginals[image];
+    if (cached != null) return cached;
+    final w = image.width;
+    final h = image.height;
+    final tiny = img.copyResize(
+      image,
+      width: math.max(6, w ~/ 28),
+      height: math.max(6, h ~/ 28),
+      interpolation: img.Interpolation.average,
+    );
+    final plate = img.copyResize(
+      tiny,
+      width: w,
+      height: h,
+      interpolation: img.Interpolation.linear,
+    );
+    _blurredOriginals[image] = plate;
+    return plate;
+  }
+
+  /// Left and right halves swing open over the blurred original.
+  static img.Image _mirrorOpen(img.Image image, double t) {
+    final scale = math.cos((1 - t) * math.pi / 2).clamp(0.0, 1.0);
+    if (scale >= 0.995) return image;
+    final plate = _blurredOriginal(image);
+    if (scale <= 0.02) return img.Image.from(plate);
+    final w = image.width;
+    final h = image.height;
+    final out = img.Image.from(plate);
+    final mid = w ~/ 2;
+    final leftW = math.max(1, (mid * scale).round());
+    final rightSrcW = w - mid;
+    final rightW = math.max(1, (rightSrcW * scale).round());
+    final left = img.copyResize(
+      img.copyCrop(image, x: 0, y: 0, width: mid, height: h),
+      width: leftW,
+      height: h,
+      interpolation: img.Interpolation.linear,
+    );
+    final right = img.copyResize(
+      img.copyCrop(image, x: mid, y: 0, width: rightSrcW, height: h),
+      width: rightW,
+      height: h,
+      interpolation: img.Interpolation.linear,
+    );
+    img.compositeImage(out, left, dstX: mid - leftW, dstY: 0);
+    img.compositeImage(out, right, dstX: mid, dstY: 0);
+    return out;
   }
 
   static img.Image _spin(img.Image image, double degrees, int backgroundArgb) {

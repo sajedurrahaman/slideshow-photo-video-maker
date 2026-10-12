@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
@@ -100,6 +101,9 @@ class SlideshowProject extends ChangeNotifier {
 
   /// In-memory JPEG frames for smooth editor preview (no % overlay).
   final List<Uint8List> _previewMemoryFrames = [];
+  final List<img.Image?> _decodedPreview = [];
+  final List<String> _decodedPreviewKeys = [];
+  final List<int> _previewSegmentCounts = [];
   String? _previewCacheKey;
   int _previewGeneration = 0;
   Timer? _previewTimer;
@@ -274,6 +278,7 @@ class SlideshowProject extends ChangeNotifier {
       ..addAll(list);
     generatedFrames = [];
     _setPreviewFrame(null);
+    _clearDecodedPreview();
     _invalidatePreviewCache();
     selectedPhotoIndex = null;
     notifyListeners();
@@ -290,10 +295,8 @@ class SlideshowProject extends ChangeNotifier {
       previewFrameIndex = frameIndex;
       _setPreviewPosition(frameIndex / previewFps);
       _setPreviewFrame(_previewMemoryFrames[frameIndex]);
-    } else if (photos.length < AppConstants.minPhotos) {
+    } else {
       unawaited(_refreshPhotoPreview(index));
-    } else if (!isPreparingPreview) {
-      unawaited(preparePreviewFrames());
     }
     notifyListeners();
   }
@@ -313,14 +316,26 @@ class SlideshowProject extends ChangeNotifier {
 
   void updatePhoto(int index, SlideshowPhoto photo) {
     if (index < 0 || index >= photos.length) return;
+    final previous = photos[index];
     _recordHistory();
     photos[index] = photo;
     generatedFrames = [];
     stopPreviewPlayback();
-    _invalidatePreviewCache();
+    if (_samePreviewPixels(previous, photo)) {
+      // Animation and duration stay on the GPU. Export bakes frames later.
+      _invalidatePreviewCache();
+      notifyListeners();
+      return;
+    }
     notifyListeners();
-    if (photos.length >= AppConstants.minPhotos) {
-      unawaited(preparePreviewFrames());
+    final canSplice =
+        _previewSegmentCounts.length == photos.length &&
+        _previewMemoryFrames.isNotEmpty &&
+        isPreviewReady;
+    if (canSplice) {
+      unawaited(_resplicePhotoPreview(index));
+    } else if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames(showLoading: false));
     } else {
       unawaited(_refreshPhotoPreview(index));
     }
@@ -357,6 +372,7 @@ class SlideshowProject extends ChangeNotifier {
     _recordHistory();
     final item = photos.removeAt(oldIndex);
     photos.insert(newIndex, item);
+    _clearDecodedPreview();
     notifyListeners();
   }
 
@@ -374,6 +390,7 @@ class SlideshowProject extends ChangeNotifier {
     }
     generatedFrames = [];
     stopPreviewPlayback();
+    _clearDecodedPreview();
     _invalidatePreviewCache();
     notifyListeners();
     if (photos.length >= AppConstants.minPhotos) {
@@ -441,12 +458,45 @@ class SlideshowProject extends ChangeNotifier {
 
   void _invalidatePreviewCache() {
     _previewMemoryFrames.clear();
+    _previewSegmentCounts.clear();
     _previewCacheKey = null;
     isPreviewReady = false;
   }
 
+  String _previewPixelKey(SlideshowPhoto photo) {
+    final (w, h) = previewSize;
+    return '${photo.path}|${photo.filter.index}|${photo.backgroundArgb}|'
+        '${photo.cropAspectRatio}|${photo.mirrored}|${photo.flipped}|'
+        '${photo.rotationQuarterTurns}|$backgroundArgb|${w}x$h|'
+        '${selectedFrameAsset ?? ''}|${overlays.length}';
+  }
+
+  bool _samePreviewPixels(SlideshowPhoto a, SlideshowPhoto b) =>
+      _previewPixelKey(a) == _previewPixelKey(b);
+
+  void _clearDecodedPreview() {
+    _decodedPreview.clear();
+    _decodedPreviewKeys.clear();
+  }
+
+  Future<img.Image> _cachedPreviewPhoto(int index, int w, int h) async {
+    final key = _previewPixelKey(photos[index]);
+    while (_decodedPreview.length <= index) {
+      _decodedPreview.add(null);
+      _decodedPreviewKeys.add('');
+    }
+    final cached = _decodedPreview[index];
+    if (cached != null && _decodedPreviewKeys[index] == key) return cached;
+    final image = await _preparePhoto(photos[index], w, h);
+    _decodedPreview[index] = image;
+    _decodedPreviewKeys[index] = key;
+    return image;
+  }
+
   /// Build frames in background after transition select (shows loading UI).
-  Future<void> preparePreviewFrames() async {
+  /// Duration and animation edits pass [showLoading] false so the current
+  /// frame stays on screen while only the changed work runs.
+  Future<void> preparePreviewFrames({bool showLoading = true}) async {
     if (photos.length < AppConstants.minPhotos || isProcessing) {
       isPreviewReady = false;
       isPreparingPreview = false;
@@ -463,13 +513,25 @@ class SlideshowProject extends ChangeNotifier {
     }
 
     final generation = ++_previewGeneration;
-    isPreparingPreview = true;
-    isPreviewReady = false;
-    notifyListeners();
+    if (showLoading) {
+      isPreparingPreview = true;
+      isPreviewReady = false;
+      notifyListeners();
+    }
 
     try {
-      await _buildPreviewMemoryFrames(generation: generation, cacheKey: key);
-      if (generation != _previewGeneration) return;
+      final built = await _buildPreviewMemoryFrames(
+        generation: generation,
+        cacheKey: key,
+      );
+      if (generation != _previewGeneration || built == null) return;
+      _previewMemoryFrames
+        ..clear()
+        ..addAll(built.frames);
+      _previewSegmentCounts
+        ..clear()
+        ..addAll(built.counts);
+      _previewCacheKey = key;
       isPreviewReady = _previewMemoryFrames.isNotEmpty;
       if (isPreviewReady) {
         final selectedStart = selectedPhotoIndex == null
@@ -523,11 +585,66 @@ class SlideshowProject extends ChangeNotifier {
     _previewGeneration++;
     _previewTimer?.cancel();
     _previewTimer = null;
-    if (isPreviewPlaying) {
+    final wasPreparing = isPreparingPreview;
+    isPreparingPreview = false;
+    if (isPreviewPlaying || wasPreparing) {
       isPreviewPlaying = false;
       isPlaying = false;
       notifyListeners();
     }
+  }
+
+  /// Selected-photo motion plays on the GPU. No JPEG frames.
+  void startLiveClip() {
+    _previewTimer?.cancel();
+    _previewTimer = null;
+    _previewGeneration++;
+    isPreviewPlaying = true;
+    isPlaying = true;
+    notifyListeners();
+  }
+
+  void finishLiveClip() {
+    if (!isPreviewPlaying && !isPlaying) return;
+    isPreviewPlaying = false;
+    isPlaying = false;
+    notifyListeners();
+  }
+
+  int? _pendingClockPhoto;
+  double? _pendingClockFraction;
+  bool _clockCallbackScheduled = false;
+
+  void setLivePreviewClock(int photoIndex, double clipFraction) {
+    if (photoIndex < 0 || photoIndex >= photos.length) return;
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      _pendingClockPhoto = photoIndex;
+      _pendingClockFraction = clipFraction;
+      if (_clockCallbackScheduled) return;
+      _clockCallbackScheduled = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _clockCallbackScheduled = false;
+        final index = _pendingClockPhoto;
+        final fraction = _pendingClockFraction;
+        _pendingClockPhoto = null;
+        _pendingClockFraction = null;
+        if (index == null || fraction == null || index >= photos.length) {
+          return;
+        }
+        _applyLivePreviewClock(index, fraction);
+      });
+      return;
+    }
+    _applyLivePreviewClock(photoIndex, clipFraction);
+  }
+
+  void _applyLivePreviewClock(int photoIndex, double clipFraction) {
+    final start = photoFrameStartIndex(photoIndex);
+    final clipFrames = frameCountForDuration(photos[photoIndex].durationSec);
+    final frame = start + clipFraction.clamp(0.0, 1.0) * clipFrames;
+    _setPreviewPosition(frame / previewFps);
   }
 
   /// Play only when frames are ready — otherwise wait for prepare.
@@ -599,59 +716,22 @@ class SlideshowProject extends ChangeNotifier {
     });
   }
 
-  Future<void> _buildPreviewMemoryFrames({
+  Future<({List<Uint8List> frames, List<int> counts})?> _buildPreviewMemoryFrames({
     required int generation,
     required String cacheKey,
   }) async {
-    _previewMemoryFrames.clear();
+    final frames = <Uint8List>[];
+    final counts = <int>[];
     final (w, h) = previewSize;
     final decoded = <img.Image>[];
-    for (final photo in photos) {
-      if (generation != _previewGeneration) return;
-      decoded.add(await _preparePhoto(photo, w, h));
+    for (var i = 0; i < photos.length; i++) {
+      if (generation != _previewGeneration) return null;
+      decoded.add(await _cachedPreviewPhoto(i, w, h));
     }
-    if (decoded.length < 2) return;
+    if (decoded.length < 2) return null;
 
-    final effect = selectedSlideTransition.type;
-    final pairs = decoded.length - 1;
-    final overlayFrames = isEffectOverlayEnabled
-        ? await EffectOverlayService.previewFrames(width: w, height: h)
-        : const <File>[];
-    var renderedFrameIndex = 0;
-
-    Uint8List? lastBytes;
-    img.Image? lastSource;
-
-    Future<void> pushFrame(img.Image image) async {
-      if (generation != _previewGeneration) return;
-      // Reuse identical consecutive frames (hold) — same bytes = no re-decode blink.
-      if (overlayFrames.isEmpty &&
-          identical(image, lastSource) &&
-          lastBytes != null) {
-        _previewMemoryFrames.add(lastBytes!);
-        return;
-      }
-      final baked = await _finalize(image);
-      var composed = baked;
-      if (overlayFrames.isNotEmpty) {
-        final effectTime = renderedFrameIndex / previewFps;
-        final effectIndex =
-            ((effectTime * EffectOverlayService.previewFps).floor()) %
-            overlayFrames.length;
-        final effectBytes = await overlayFrames[effectIndex].readAsBytes();
-        final effectFrame = TransitionEngine.decode(effectBytes);
-        if (effectFrame != null) {
-          composed = EffectOverlayService.screenBlend(composed, effectFrame);
-        }
-      }
-      renderedFrameIndex++;
-      final bytes = Uint8List.fromList(
-        TransitionEngine.encodeJpeg(composed, quality: 70),
-      );
-      lastSource = image;
-      lastBytes = bytes;
-      _previewMemoryFrames.add(bytes);
-    }
+    final overlays = await _loadPreviewOverlays(w, h);
+    final cursor = <int>[0];
 
     if (startingCard != null) {
       final cardImg = await FrameCompositor.makeTitleCard(
@@ -660,71 +740,32 @@ class SlideshowProject extends ChangeNotifier {
         h: h,
       );
       final n = frameCountForDuration(startingCard!.durationSec).clamp(4, 300);
-      for (var i = 0; i < n; i++) {
-        if (generation != _previewGeneration) return;
-        await pushFrame(cardImg);
-      }
+      final cardFrames = await _encodeStill(
+        cardImg,
+        n,
+        generation,
+        overlays: overlays,
+        frameCursor: cursor,
+      );
+      if (cardFrames == null) return null;
+      frames.addAll(cardFrames);
     }
 
     for (var i = 0; i < decoded.length; i++) {
-      if (generation != _previewGeneration) return;
-      final photo = photos[i];
-      final totalFrames = frameCountForDuration(photo.durationSec);
-      final transitionFrames = i < pairs && effect != SlideTransitionType.none
-          ? math.min(AppConstants.framesPerTransition, totalFrames)
-          : 0;
-      final background = photo.backgroundArgb ?? backgroundArgb;
-      final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
-      final soloFrames = totalFrames - transitionFrames;
-
-      for (var hold = 0; hold < soloFrames; hold++) {
-        if (generation != _previewGeneration) return;
-        await pushFrame(
-          _animatePhotoFrame(
-            source: decoded[i],
-            photo: photo,
-            frameIndex: hold,
-            totalFrames: totalFrames,
-            inFrames: inFrames,
-            outFrames: outFrames,
-            background: background,
-          ),
-        );
-      }
-
-      if (transitionFrames > 0) {
-        final option = selectedSlideTransition;
-        for (var t = 0; t < transitionFrames; t++) {
-          if (generation != _previewGeneration) return;
-          final progress = (t + 1) / transitionFrames;
-          final fromFrame = _animatePhotoFrame(
-            source: decoded[i],
-            photo: photo,
-            frameIndex: soloFrames + t,
-            totalFrames: totalFrames,
-            inFrames: inFrames,
-            outFrames: outFrames,
-            background: background,
-          );
-          final toFrame = decoded[i + 1];
-          final blended = TransitionEngine.apply(
-            from: fromFrame,
-            to: toFrame,
-            type: effect,
-            progress: progress,
-            gridCols: option.gridCols,
-            gridRows: option.gridRows,
-            reverseDiagonal: option.reverseDiagonal,
-            topToBottom: option.topToBottom,
-            pivotNx: option.pivotNx,
-            pivotNy: option.pivotNy,
-          );
-          await pushFrame(blended);
-        }
-      }
+      if (generation != _previewGeneration) return null;
+      final segment = await _renderPhotoSegment(
+        index: i,
+        decoded: decoded,
+        generation: generation,
+        overlays: overlays,
+        frameCursor: cursor,
+      );
+      if (segment == null) return null;
+      counts.add(segment.length);
+      frames.addAll(segment);
     }
 
-    if (generation != _previewGeneration) return;
+    if (generation != _previewGeneration) return null;
     if (endingCard != null) {
       final cardImg = await FrameCompositor.makeTitleCard(
         card: endingCard!,
@@ -732,16 +773,209 @@ class SlideshowProject extends ChangeNotifier {
         h: h,
       );
       final n = frameCountForDuration(endingCard!.durationSec).clamp(4, 300);
-      for (var i = 0; i < n; i++) {
-        if (generation != _previewGeneration) return;
-        await pushFrame(cardImg);
-      }
+      final cardFrames = await _encodeStill(
+        cardImg,
+        n,
+        generation,
+        overlays: overlays,
+        frameCursor: cursor,
+      );
+      if (cardFrames == null) return null;
+      frames.addAll(cardFrames);
     }
 
-    if (generation == _previewGeneration) {
-      _previewCacheKey = cacheKey;
+    if (generation != _previewGeneration) return null;
+    _previewCacheKey = cacheKey;
+    return (frames: frames, counts: counts);
+  }
+
+  Future<void> _resplicePhotoPreview(int index) async {
+    if (isEffectOverlayEnabled ||
+        index < 0 ||
+        index >= photos.length ||
+        _previewSegmentCounts.length != photos.length) {
+      unawaited(preparePreviewFrames(showLoading: false));
+      return;
+    }
+    final generation = ++_previewGeneration;
+    try {
+      final (w, h) = previewSize;
+      final decoded = <img.Image>[];
+      for (var i = 0; i < photos.length; i++) {
+        if (generation != _previewGeneration) return;
+        decoded.add(await _cachedPreviewPhoto(i, w, h));
+      }
+      final segment = await _renderPhotoSegment(
+        index: index,
+        decoded: decoded,
+        generation: generation,
+      );
+      if (segment == null || generation != _previewGeneration) return;
+      final start = photoFrameStartIndex(index);
+      final oldCount = _previewSegmentCounts[index];
+      final end = math.min(start + oldCount, _previewMemoryFrames.length);
+      if (start < 0 || start > _previewMemoryFrames.length) {
+        unawaited(preparePreviewFrames(showLoading: false));
+        return;
+      }
+      _previewMemoryFrames.replaceRange(start, end, segment);
+      _previewSegmentCounts[index] = segment.length;
+      _previewCacheKey = _buildPreviewCacheKey();
+      isPreviewReady = _previewMemoryFrames.isNotEmpty;
+      final frameIndex = start.clamp(0, _previewMemoryFrames.length - 1).toInt();
+      previewFrameIndex = frameIndex;
+      _setPreviewPosition(frameIndex / previewFps);
+      _setPreviewFrame(_previewMemoryFrames[frameIndex]);
+      notifyListeners();
+    } catch (_) {
+      if (generation == _previewGeneration) {
+        unawaited(preparePreviewFrames(showLoading: false));
+      }
     }
   }
+
+  Future<List<img.Image>> _loadPreviewOverlays(int w, int h) async {
+    if (!isEffectOverlayEnabled) return const [];
+    final files = await EffectOverlayService.previewFrames(width: w, height: h);
+    final images = <img.Image>[];
+    for (final file in files) {
+      final decoded = TransitionEngine.decode(await file.readAsBytes());
+      if (decoded != null) images.add(decoded);
+    }
+    return images;
+  }
+
+  Future<Uint8List> _jpegFrame(
+    img.Image image,
+    List<img.Image> overlays,
+    List<int> frameCursor,
+  ) async {
+    final baked = await _finalize(image);
+    var composed = baked;
+    if (overlays.isNotEmpty) {
+      final effectIndex =
+          ((frameCursor[0] / previewFps) * EffectOverlayService.previewFps)
+              .floor() %
+          overlays.length;
+      composed = EffectOverlayService.screenBlend(composed, overlays[effectIndex]);
+    }
+    frameCursor[0] = frameCursor[0] + 1;
+    return Uint8List.fromList(TransitionEngine.encodeJpeg(composed, quality: 70));
+  }
+
+  Future<List<Uint8List>?> _encodeStill(
+    img.Image image,
+    int count,
+    int generation, {
+    List<img.Image> overlays = const [],
+    List<int>? frameCursor,
+  }) async {
+    if (generation != _previewGeneration) return null;
+    final cursor = frameCursor ?? <int>[0];
+    if (overlays.isEmpty) {
+      final bytes = await _jpegFrame(image, overlays, cursor);
+      cursor[0] = cursor[0] + count - 1;
+      return List<Uint8List>.filled(count, bytes);
+    }
+    final frames = <Uint8List>[];
+    for (var i = 0; i < count; i++) {
+      if (generation != _previewGeneration) return null;
+      frames.add(await _jpegFrame(image, overlays, cursor));
+    }
+    return frames;
+  }
+
+  Future<List<Uint8List>?> _renderPhotoSegment({
+    required int index,
+    required List<img.Image> decoded,
+    required int generation,
+    List<img.Image> overlays = const [],
+    List<int>? frameCursor,
+  }) async {
+    if (generation != _previewGeneration) return null;
+    final photo = photos[index];
+    final effect = selectedSlideTransition.type;
+    final pairs = decoded.length - 1;
+    final totalFrames = frameCountForDuration(photo.durationSec);
+    final transitionFrames = index < pairs && effect != SlideTransitionType.none
+        ? math.min(AppConstants.framesPerTransition, totalFrames)
+        : 0;
+    final background = photo.backgroundArgb ?? backgroundArgb;
+    final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
+    final soloFrames = totalFrames - transitionFrames;
+    final frames = <Uint8List>[];
+    final cursor = frameCursor ?? <int>[0];
+    Uint8List? lastBytes;
+    img.Image? lastSource;
+
+    Future<bool> pushFrame(img.Image image) async {
+      if (generation != _previewGeneration) return false;
+      if (overlays.isEmpty && identical(image, lastSource) && lastBytes != null) {
+        frames.add(lastBytes!);
+        cursor[0] = cursor[0] + 1;
+        return true;
+      }
+      final bytes = await _jpegFrame(image, overlays, cursor);
+      if (generation != _previewGeneration) return false;
+      lastSource = image;
+      lastBytes = bytes;
+      frames.add(bytes);
+      return true;
+    }
+
+    for (var hold = 0; hold < soloFrames; hold++) {
+      if (generation != _previewGeneration) return null;
+      final kept = await pushFrame(
+        _animatePhotoFrame(
+          source: decoded[index],
+          photo: photo,
+          frameIndex: hold,
+          totalFrames: totalFrames,
+          inFrames: inFrames,
+          outFrames: outFrames,
+          background: background,
+        ),
+      );
+      if (!kept) return null;
+      // Let taps and frames run. A tight image loop ANRs Android and the
+      // process is killed ("Lost connection to device").
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    if (transitionFrames > 0) {
+      final option = selectedSlideTransition;
+      for (var t = 0; t < transitionFrames; t++) {
+        if (generation != _previewGeneration) return null;
+        final progress = (t + 1) / transitionFrames;
+        final fromFrame = _animatePhotoFrame(
+          source: decoded[index],
+          photo: photo,
+          frameIndex: soloFrames + t,
+          totalFrames: totalFrames,
+          inFrames: inFrames,
+          outFrames: outFrames,
+          background: background,
+        );
+        final blended = TransitionEngine.apply(
+          from: fromFrame,
+          to: decoded[index + 1],
+          type: effect,
+          progress: progress,
+          gridCols: option.gridCols,
+          gridRows: option.gridRows,
+          reverseDiagonal: option.reverseDiagonal,
+          topToBottom: option.topToBottom,
+          pivotNx: option.pivotNx,
+          pivotNy: option.pivotNy,
+        );
+        final kept = await pushFrame(blended);
+        if (!kept) return null;
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+    return frames;
+  }
+
 
   void selectFrame(String? assetPath) {
     selectedFrameAsset = assetPath;
