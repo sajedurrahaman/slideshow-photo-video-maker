@@ -2463,26 +2463,50 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
                   image: _photoImage,
                 );
               }
-              return ClipRect(
-                child: Opacity(
-                  opacity: motion.opacity.clamp(0.0, 1.0),
-                  child: Transform.translate(
-                    offset: Offset(motion.dx * size.width, motion.dy * size.height),
-                    child: Transform.rotate(
-                      angle: motion.degrees * math.pi / 180,
-                      child: Transform(
-                        alignment: motion.alignment,
-                        transform: Matrix4.diagonal3Values(
-                          motion.scaleX.clamp(0.02, 3),
-                          motion.scaleY.clamp(0.02, 3),
-                          1,
-                        ),
-                        child: child,
+              Widget framed = Opacity(
+                opacity: motion.opacity.clamp(0.0, 1.0),
+                child: Transform.translate(
+                  offset: Offset(motion.dx * size.width, motion.dy * size.height),
+                  child: Transform.rotate(
+                    alignment: motion.alignment,
+                    angle: motion.degrees * math.pi / 180,
+                    child: Transform(
+                      alignment: motion.alignment,
+                      transform: Matrix4.diagonal3Values(
+                        motion.scaleX.clamp(0.02, 3),
+                        motion.scaleY.clamp(0.02, 3),
+                        1,
                       ),
+                      child: child,
                     ),
                   ),
                 ),
               );
+              if (motion.blurX > 0.4 || motion.blurY > 0.4) {
+                framed = ImageFiltered(
+                  imageFilter: ui.ImageFilter.blur(
+                    sigmaX: motion.blurX,
+                    sigmaY: motion.blurY,
+                  ),
+                  child: framed,
+                );
+              }
+              if (motion.plateBlur > 0.4) {
+                framed = Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ImageFiltered(
+                      imageFilter: ui.ImageFilter.blur(
+                        sigmaX: motion.plateBlur,
+                        sigmaY: motion.plateBlur,
+                      ),
+                      child: _photoImage(),
+                    ),
+                    framed,
+                  ],
+                );
+              }
+              return ClipRect(child: framed);
             },
           );
         },
@@ -2501,6 +2525,9 @@ class _GpuMotion {
     this.dy = 0,
     this.degrees = 0,
     this.alignment = Alignment.center,
+    this.blurX = 0,
+    this.blurY = 0,
+    this.plateBlur = 0,
     this.mirrorOpen,
   });
 
@@ -2511,7 +2538,24 @@ class _GpuMotion {
   final double dy;
   final double degrees;
   final Alignment alignment;
+  final double blurX;
+  final double blurY;
+  final double plateBlur;
   final double? mirrorOpen;
+}
+
+({double progress, double scale, double dx, double dy, double blur}) _wiperPose(
+  double t,
+) {
+  final progress = 1 - math.pow(1 - t, 2.4).toDouble();
+  final sweep = 1 - progress;
+  return (
+    progress: progress,
+    scale: 1.7 - 0.7 * progress,
+    dx: -0.14 * math.sin(sweep * math.pi),
+    dy: -0.24 * sweep,
+    blur: 26 * sweep,
+  );
 }
 
 _GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
@@ -2531,7 +2575,7 @@ _GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
       scaleY: 1.22 - 0.22 * t,
     ),
     PhotoAnimationType.shake => _GpuMotion(
-      dx: math.sin(t * math.pi * 8) * 0.035,
+      degrees: math.sin(t * math.pi * 8) * 8,
     ),
     PhotoAnimationType.shake2 => _GpuMotion(
       dx: math.sin(t * math.pi * 12) * 0.05,
@@ -2549,9 +2593,11 @@ _GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
       scaleX: 1.28 - 0.28 * t,
       scaleY: 1.28 - 0.28 * t,
     ),
-    PhotoAnimationType.wiper => _GpuMotion(dx: (0.5 - t) * 0.35),
+    PhotoAnimationType.wiper => _wiperGpu(t),
     PhotoAnimationType.pendulum => _GpuMotion(
-      dx: math.sin(t * math.pi) * 0.12,
+      degrees: math.sin(t * math.pi * 2) * 14,
+      alignment: Alignment.topCenter,
+      plateBlur: 8,
     ),
     PhotoAnimationType.upAndDown => _GpuMotion(
       dy: math.sin(t * math.pi * 2) * 0.06,
@@ -2678,26 +2724,54 @@ class _MotionThumbState extends State<_MotionThumb>
           );
         }
         final motion = _thumbMotion(widget.type, t);
-        return ClipRect(
-          child: Opacity(
-            opacity: motion.opacity,
-            child: Transform.translate(
-              offset: motion.offset,
-              child: Transform.rotate(
-                angle: motion.turns * math.pi * 2,
-                child: Transform(
-                  alignment: motion.alignment,
-                  transform: Matrix4.diagonal3Values(
-                    motion.scaleX,
-                    motion.scaleY,
-                    1,
-                  ),
-                  child: child,
+        Widget framed = Opacity(
+          opacity: motion.opacity,
+          child: Transform.translate(
+            offset: motion.offset,
+            child: Transform.rotate(
+              alignment: motion.alignment,
+              angle: motion.turns * math.pi * 2,
+              child: Transform(
+                alignment: motion.alignment,
+                transform: Matrix4.diagonal3Values(
+                  motion.scaleX,
+                  motion.scaleY,
+                  1,
                 ),
+                child: child,
               ),
             ),
           ),
         );
+        if (motion.blur > 0.4) {
+          framed = ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(
+              sigmaX: motion.blur,
+              sigmaY: motion.blur * 0.22,
+            ),
+            child: framed,
+          );
+        }
+        if (motion.plateBlur > 0.4) {
+          framed = Stack(
+            fit: StackFit.expand,
+            children: [
+              ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(
+                  sigmaX: motion.plateBlur,
+                  sigmaY: motion.plateBlur,
+                ),
+                child: Image.asset(
+                  'assets/images/editor/animation_thumb.png',
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
+              ),
+              framed,
+            ],
+          );
+        }
+        return ClipRect(child: framed);
       },
       child: Image.asset(
         'assets/images/editor/animation_thumb.png',
@@ -3015,6 +3089,8 @@ class _ThumbMotion {
     this.offset = Offset.zero,
     this.turns = 0,
     this.alignment = Alignment.center,
+    this.blur = 0,
+    this.plateBlur = 0,
   });
 
   final double opacity;
@@ -3023,6 +3099,30 @@ class _ThumbMotion {
   final Offset offset;
   final double turns;
   final Alignment alignment;
+  final double blur;
+  final double plateBlur;
+}
+
+_GpuMotion _wiperGpu(double t) {
+  final pose = _wiperPose(t);
+  return _GpuMotion(
+    scaleX: pose.scale,
+    scaleY: pose.scale,
+    dx: pose.dx,
+    dy: pose.dy,
+    blurX: pose.blur,
+    blurY: pose.blur * 0.22,
+  );
+}
+
+_ThumbMotion _wiperThumb(double t) {
+  final pose = _wiperPose(t);
+  return _ThumbMotion(
+    scaleX: pose.scale,
+    scaleY: pose.scale,
+    offset: Offset(pose.dx * 52, pose.dy * 52),
+    blur: pose.blur * 0.35,
+  );
 }
 
 _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
@@ -3043,7 +3143,7 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
       scaleY: 1.28 - 0.28 * t,
     ),
     PhotoAnimationType.shake => _ThumbMotion(
-      offset: Offset(math.sin(t * math.pi * 4) * 3, 0),
+      turns: math.sin(t * math.pi * 8) * 8 / 360,
     ),
     PhotoAnimationType.shake2 => _ThumbMotion(
       offset: Offset(
@@ -3071,9 +3171,11 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
       scaleX: 1.28 - 0.28 * t,
       scaleY: 1.28 - 0.28 * t,
     ),
-    PhotoAnimationType.wiper => _ThumbMotion(offset: Offset((0.5 - t) * 20, 0)),
+    PhotoAnimationType.wiper => _wiperThumb(t),
     PhotoAnimationType.pendulum => _ThumbMotion(
-      offset: Offset(math.sin(t * math.pi) * 10, 0),
+      turns: math.sin(t * math.pi * 2) * 14 / 360,
+      alignment: Alignment.topCenter,
+      plateBlur: 3,
     ),
     PhotoAnimationType.upAndDown => _ThumbMotion(
       offset: Offset(0, math.sin(t * math.pi * 2) * 6),

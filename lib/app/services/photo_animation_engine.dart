@@ -32,8 +32,11 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.zoomOut:
         return _zoom(image, 1.22 - 0.22 * t, backgroundArgb);
       case PhotoAnimationType.shake:
-        final dx = (math.sin(t * math.pi * 8) * w * 0.035).round();
-        return _place(image, w, h, dx, 0, backgroundArgb);
+        return _spin(
+          image,
+          math.sin(t * math.pi * 8) * 8,
+          backgroundArgb,
+        );
       case PhotoAnimationType.shake2:
         final sx = (math.sin(t * math.pi * 12) * w * 0.05).round();
         final sy = (math.cos(t * math.pi * 10) * h * 0.02).round();
@@ -51,17 +54,9 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.dynamicZoomAlt:
         return _zoom(image, 1.28 - 0.28 * t, backgroundArgb);
       case PhotoAnimationType.wiper:
-        return _place(
-          image,
-          w,
-          h,
-          ((0.5 - t) * w * 0.35).round(),
-          0,
-          backgroundArgb,
-        );
+        return _wiper(image, t, backgroundArgb);
       case PhotoAnimationType.pendulum:
-        final swing = (math.sin(t * math.pi) * w * 0.12).round();
-        return _place(image, w, h, swing, 0, backgroundArgb);
+        return _pendulum(image, math.sin(t * math.pi * 2) * 14);
       case PhotoAnimationType.upAndDown:
         final bob = (math.sin(t * math.pi * 2) * h * 0.06).round();
         return _place(image, w, h, 0, bob, backgroundArgb);
@@ -255,6 +250,55 @@ class PhotoAnimationEngine {
     return out;
   }
 
+  static final Expando<img.Image> _lightBlurs = Expando<img.Image>();
+
+  /// Soft blur of the original, still recognizable.
+  static img.Image _lightBlur(img.Image image) {
+    final cached = _lightBlurs[image];
+    if (cached != null) return cached;
+    final w = image.width;
+    final h = image.height;
+    final tiny = img.copyResize(
+      image,
+      width: math.max(18, w ~/ 6),
+      height: math.max(18, h ~/ 6),
+      interpolation: img.Interpolation.average,
+    );
+    final plate = img.copyResize(
+      tiny,
+      width: w,
+      height: h,
+      interpolation: img.Interpolation.linear,
+    );
+    _lightBlurs[image] = plate;
+    return plate;
+  }
+
+  /// Top-center stays fixed. The bottom swings left and right.
+  static img.Image _pendulum(img.Image image, double degrees) {
+    if (degrees.abs() < 0.4) return image;
+    final angle = degrees * math.pi / 180;
+    final cosA = math.cos(angle);
+    final sinA = math.sin(angle);
+    final w = image.width;
+    final h = image.height;
+    final out = img.Image.from(_lightBlur(image));
+    final px = (w - 1) / 2;
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final dx = x - px;
+        final dy = y.toDouble();
+        final sx = px + dx * cosA + dy * sinA;
+        final sy = -dx * sinA + dy * cosA;
+        final ix = sx.round();
+        final iy = sy.round();
+        if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+        out.setPixel(x, y, image.getPixel(ix, iy));
+      }
+    }
+    return out;
+  }
+
   static img.Image _spin(img.Image image, double degrees, int backgroundArgb) {
     if (degrees.abs() < 0.5) return image;
     final rotated = img.copyRotate(image, angle: degrees);
@@ -280,6 +324,42 @@ class PhotoAnimationEngine {
         ..b = (bb + (pixel.b - bb) * amount).round().clamp(0, 255);
     }
     return out;
+  }
+
+  /// Zoomed crop sweeps up from the bottom, with a sideways smear, then settles sharp.
+  static img.Image _wiper(img.Image image, double t, int backgroundArgb) {
+    final p = 1 - math.pow(1 - t, 2.4).toDouble();
+    final scale = 1.7 - 0.7 * p;
+    final w = image.width;
+    final h = image.height;
+    final sw = math.max(1, (w * scale).round());
+    final sh = math.max(1, (h * scale).round());
+    final resized = img.copyResize(
+      image,
+      width: sw,
+      height: sh,
+      interpolation: img.Interpolation.linear,
+    );
+    final dx = ((w - sw) / 2 - 0.14 * math.sin((1 - p) * math.pi) * w).round();
+    final dy = ((h - sh) / 2 - 0.24 * (1 - p) * h).round();
+    var frame = _place(resized, w, h, dx, dy, backgroundArgb);
+    final blur = 1 - p;
+    if (blur > 0.12) {
+      final narrow = math.max(8, (w * (1 - 0.62 * blur)).round());
+      final squeezed = img.copyResize(
+        frame,
+        width: narrow,
+        height: h,
+        interpolation: img.Interpolation.average,
+      );
+      frame = img.copyResize(
+        squeezed,
+        width: w,
+        height: h,
+        interpolation: img.Interpolation.linear,
+      );
+    }
+    return frame;
   }
 
   static img.Image _zoom(img.Image image, double scale, int backgroundArgb) {
