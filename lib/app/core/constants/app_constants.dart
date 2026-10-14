@@ -14,39 +14,55 @@ class AppConstants {
 
 enum AspectPreset {
   square,
+  fourFive,
   portrait9x16,
   landscape16x9,
-  fourFive,
+  threeFour,
+  fourThree,
+  twoThree,
+  threeTwo,
+  oneTwo,
+  twoOne,
 }
 
 extension AspectPresetX on AspectPreset {
   String get label => switch (this) {
+        AspectPreset.threeFour => '3:4',
+        AspectPreset.fourThree => '4:3',
+        AspectPreset.twoThree => '2:3',
+        AspectPreset.threeTwo => '3:2',
         AspectPreset.square => '1:1',
+        AspectPreset.fourFive => '4:5',
         AspectPreset.portrait9x16 => '9:16',
         AspectPreset.landscape16x9 => '16:9',
-        AspectPreset.fourFive => '4:5',
+        AspectPreset.oneTwo => '1:2',
+        AspectPreset.twoOne => '2:1',
       };
 
   double get ratio => switch (this) {
+        AspectPreset.threeFour => 3 / 4,
+        AspectPreset.fourThree => 4 / 3,
+        AspectPreset.twoThree => 2 / 3,
+        AspectPreset.threeTwo => 3 / 2,
         AspectPreset.square => 1,
+        AspectPreset.fourFive => 4 / 5,
         AspectPreset.portrait9x16 => 9 / 16,
         AspectPreset.landscape16x9 => 16 / 9,
-        AspectPreset.fourFive => 4 / 5,
+        AspectPreset.oneTwo => 1 / 2,
+        AspectPreset.twoOne => 2 / 1,
       };
 
-  /// Longest edge ~720 for export speed; scales with quality multiplier.
+  /// Longest edge follows export quality. The other edge keeps [ratio].
   (int, int) sizeForQuality(ExportQuality quality) {
     final long = switch (quality) {
       ExportQuality.p480 => 480,
       ExportQuality.p720 => 720,
       ExportQuality.p1080 => 1080,
     };
-    return switch (this) {
-      AspectPreset.square => (long, long),
-      AspectPreset.portrait9x16 => ((long * 9 / 16).round(), long),
-      AspectPreset.landscape16x9 => (long, (long * 9 / 16).round()),
-      AspectPreset.fourFive => ((long * 4 / 5).round(), long),
-    };
+    final r = ratio;
+    if ((r - 1).abs() < 0.001) return (long, long);
+    if (r > 1) return (long, (long / r).round());
+    return ((long * r).round(), long);
   }
 }
 

@@ -50,13 +50,18 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.slideDown:
         return _place(image, w, h, 0, -((1 - t) * h).round(), backgroundArgb);
       case PhotoAnimationType.dynamicZoom:
-        return _zoom(image, 1.0 + 0.28 * t, backgroundArgb);
+        return _wiper(image, t, backgroundArgb);
+      case PhotoAnimationType.wiper:
+        return _swing(
+          image,
+          math.sin(t * math.pi * 2) * 14,
+          fromTop: false,
+          scale: 1.34 - 0.34 * t,
+        );
       case PhotoAnimationType.dynamicZoomAlt:
         return _zoom(image, 1.28 - 0.28 * t, backgroundArgb);
-      case PhotoAnimationType.wiper:
-        return _wiper(image, t, backgroundArgb);
       case PhotoAnimationType.pendulum:
-        return _pendulum(image, math.sin(t * math.pi * 2) * 14);
+        return _swing(image, math.sin(t * math.pi * 2) * 14, fromTop: true);
       case PhotoAnimationType.upAndDown:
         final bob = (math.sin(t * math.pi * 2) * h * 0.06).round();
         return _place(image, w, h, 0, bob, backgroundArgb);
@@ -68,19 +73,29 @@ class PhotoAnimationEngine {
             .round();
         return _place(image, w, h, sway, 0, backgroundArgb);
       case PhotoAnimationType.spinRight:
-        return _spin(image, (1 - t) * 70, backgroundArgb);
-      case PhotoAnimationType.spinLeft:
-        return _spin(image, -(1 - t) * 70, backgroundArgb);
-      case PhotoAnimationType.spinUpper:
-        final scale = 0.15 + 0.85 * t;
-        final sh = math.max(1, (h * scale).round());
-        final resized = img.copyResize(
+        return _spinTravel(
           image,
-          width: w,
-          height: sh,
-          interpolation: img.Interpolation.linear,
+          (1 - t) * 180,
+          ((1 - t) * w * 1.15).round(),
+          0,
+          backgroundArgb,
         );
-        return _place(resized, w, h, 0, 0, backgroundArgb);
+      case PhotoAnimationType.spinLeft:
+        return _spinTravel(
+          image,
+          -(1 - t) * 180,
+          -((1 - t) * w * 1.15).round(),
+          0,
+          backgroundArgb,
+        );
+      case PhotoAnimationType.spinUpper:
+        return _spinTravel(
+          image,
+          -(1 - t) * 180,
+          0,
+          -((1 - t) * h * 1.15).round(),
+          backgroundArgb,
+        );
       case PhotoAnimationType.bottomOut:
         return _place(image, w, h, 0, ((1 - t) * h).round(), backgroundArgb);
       case PhotoAnimationType.leftOut:
@@ -90,33 +105,30 @@ class PhotoAnimationEngine {
       case PhotoAnimationType.topOut:
         return _place(image, w, h, 0, -((1 - t) * h).round(), backgroundArgb);
       case PhotoAnimationType.dynamicZoomOut:
-        return _zoom(image, 0.42 + 0.58 * t, backgroundArgb);
+        return _wiper(image, t, backgroundArgb);
       case PhotoAnimationType.flipLeft:
-        return _hinge(
+        return _spinTravel(
           image,
-          t,
-          1,
-          alignRight: false,
-          alignBottom: false,
-          backgroundArgb: backgroundArgb,
+          -(1 - t) * 180,
+          -((1 - t) * w * 1.15).round(),
+          0,
+          backgroundArgb,
         );
       case PhotoAnimationType.flipRight:
-        return _hinge(
+        return _spinTravel(
           image,
-          t,
-          1,
-          alignRight: true,
-          alignBottom: false,
-          backgroundArgb: backgroundArgb,
+          (1 - t) * 180,
+          ((1 - t) * w * 1.15).round(),
+          0,
+          backgroundArgb,
         );
       case PhotoAnimationType.flipLower:
-        return _hinge(
+        return _spinTravel(
           image,
-          1,
-          t,
-          alignRight: false,
-          alignBottom: true,
-          backgroundArgb: backgroundArgb,
+          (1 - t) * 180,
+          0,
+          ((1 - t) * h * 1.15).round(),
+          backgroundArgb,
         );
       case PhotoAnimationType.slideOutTop:
         return _place(
@@ -141,59 +153,87 @@ class PhotoAnimationEngine {
           _fade(image, t, backgroundArgb),
           (1 - t) * 160,
           backgroundArgb,
+          underlay: _lightBlur(image),
         );
       case PhotoAnimationType.flyOutLeft:
-        return _fly(image, t, -1, 0, backgroundArgb);
+        return _flySpin(image, t, backgroundArgb, spinSign: -1, x: -1, y: -1);
       case PhotoAnimationType.flyOutRight:
-        return _fly(image, t, 1, 0, backgroundArgb);
+        return _flySpin(image, t, backgroundArgb, spinSign: 1, x: 1, y: -1);
       case PhotoAnimationType.flyOutUp:
-        return _fly(image, t, 0, -1, backgroundArgb);
+        return _flySpin(
+          image,
+          t,
+          backgroundArgb,
+          spinSign: -1,
+          x: 0,
+          y: -1,
+          yTravel: 0.42,
+        );
     }
   }
 
-  static img.Image _hinge(
+  /// Spins around the center, then shifts off the frame.
+  static img.Image _spinTravel(
     img.Image image,
-    double scaleX,
-    double scaleY, {
-    required bool alignRight,
-    required bool alignBottom,
-    required int backgroundArgb,
+    double degrees,
+    int dx,
+    int dy,
+    int backgroundArgb,
+  ) {
+    if (degrees.abs() < 0.5 && dx == 0 && dy == 0) return image;
+    final spun = degrees.abs() < 0.5
+        ? image
+        : img.copyRotate(image, angle: degrees);
+    return _place(
+      spun,
+      image.width,
+      image.height,
+      dx + (image.width - spun.width) ~/ 2,
+      dy + (image.height - spun.height) ~/ 2,
+      backgroundArgb,
+      underlay: _lightBlur(image),
+    );
+  }
+
+  /// Spins, pinches through an edge, then shrinks along [x] and [y].
+  static img.Image _flySpin(
+    img.Image image,
+    double t,
+    int backgroundArgb, {
+    required double spinSign,
+    required double x,
+    required double y,
+    double xTravel = 0.36,
+    double yTravel = 0.2,
   }) {
+    final exit = (1 - t).clamp(0.0, 1.0);
+    final spin = 1 - math.pow(1 - math.min(exit / 0.5, 1.0), 1.8).toDouble();
+    final flip = math.min(exit / 0.62, 1.0);
+    final pinch = math.cos(flip * math.pi).abs().clamp(0.012, 1.0);
+    final scale = 1 - math.pow(exit, 1.05).toDouble() * 0.84;
+    final drift = math.pow(math.max(exit - 0.28, 0) / 0.72, 1.35).toDouble();
+    final degrees = spinSign * spin * 52;
     final w = image.width;
     final h = image.height;
-    final sx = scaleX.clamp(0.02, 1.0);
-    final sy = scaleY.clamp(0.02, 1.0);
-    final sw = math.max(1, (w * sx).round());
-    final sh = math.max(1, (h * sy).round());
-    final resized = img.copyResize(
+    final sw = math.max(1, (w * scale).round());
+    final sh = math.max(1, (h * scale * pinch).round());
+    var frame = img.copyResize(
       image,
       width: sw,
       height: sh,
       interpolation: img.Interpolation.linear,
     );
-    final dx = alignRight ? w - sw : 0;
-    final dy = alignBottom ? h - sh : (h - sh) ~/ 2;
-    return _place(resized, w, h, dx, dy, backgroundArgb);
-  }
-
-  static img.Image _fly(
-    img.Image image,
-    double t,
-    int xDir,
-    int yDir,
-    int backgroundArgb,
-  ) {
-    final faded = _fade(image, t, backgroundArgb);
-    final scaled = _zoom(faded, 0.35 + 0.65 * t, backgroundArgb);
-    final w = image.width;
-    final h = image.height;
+    if (degrees.abs() > 0.4) {
+      frame = img.copyRotate(frame, angle: degrees);
+    }
     return _place(
-      scaled,
+      frame,
       w,
       h,
-      (xDir * (1 - t) * w * 0.9).round(),
-      (yDir * (1 - t) * h * 0.9).round(),
+      ((w - frame.width) / 2 + x * drift * w * xTravel).round(),
+      ((h - frame.height) / 2 + y * drift * h * yTravel).round(),
       backgroundArgb,
+      underlay: _lightBlur(image),
     );
   }
 
@@ -274,9 +314,15 @@ class PhotoAnimationEngine {
     return plate;
   }
 
-  /// Top-center stays fixed. The bottom swings left and right.
-  static img.Image _pendulum(img.Image image, double degrees) {
-    if (degrees.abs() < 0.4) return image;
+  /// [fromTop] keeps the top center fixed. Otherwise the bottom center stays fixed.
+  static img.Image _swing(
+    img.Image image,
+    double degrees, {
+    required bool fromTop,
+    double scale = 1,
+  }) {
+    final zoom = scale < 0.02 ? 0.02 : scale;
+    if (degrees.abs() < 0.4 && (zoom - 1).abs() < 0.01) return image;
     final angle = degrees * math.pi / 180;
     final cosA = math.cos(angle);
     final sinA = math.sin(angle);
@@ -284,12 +330,13 @@ class PhotoAnimationEngine {
     final h = image.height;
     final out = img.Image.from(_lightBlur(image));
     final px = (w - 1) / 2;
+    final py = fromTop ? 0.0 : (h - 1).toDouble();
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         final dx = x - px;
-        final dy = y.toDouble();
-        final sx = px + dx * cosA + dy * sinA;
-        final sy = -dx * sinA + dy * cosA;
+        final dy = y - py;
+        final sx = px + (dx * cosA + dy * sinA) / zoom;
+        final sy = py + (-dx * sinA + dy * cosA) / zoom;
         final ix = sx.round();
         final iy = sy.round();
         if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
@@ -299,7 +346,12 @@ class PhotoAnimationEngine {
     return out;
   }
 
-  static img.Image _spin(img.Image image, double degrees, int backgroundArgb) {
+  static img.Image _spin(
+    img.Image image,
+    double degrees,
+    int backgroundArgb, {
+    img.Image? underlay,
+  }) {
     if (degrees.abs() < 0.5) return image;
     final rotated = img.copyRotate(image, angle: degrees);
     return _place(
@@ -309,18 +361,21 @@ class PhotoAnimationEngine {
       (image.width - rotated.width) ~/ 2,
       (image.height - rotated.height) ~/ 2,
       backgroundArgb,
+      underlay: underlay ?? _lightBlur(image),
     );
   }
 
   static img.Image _fade(img.Image image, double amount, int backgroundArgb) {
+    final plate = _lightBlur(image);
     final out = image.clone();
-    final br = (backgroundArgb >> 16) & 0xFF;
-    final bg = (backgroundArgb >> 8) & 0xFF;
-    final bb = backgroundArgb & 0xFF;
     for (final pixel in out) {
+      final bg = plate.getPixel(pixel.x, pixel.y);
+      final br = bg.r.toInt();
+      final bgc = bg.g.toInt();
+      final bb = bg.b.toInt();
       pixel
         ..r = (br + (pixel.r - br) * amount).round().clamp(0, 255)
-        ..g = (bg + (pixel.g - bg) * amount).round().clamp(0, 255)
+        ..g = (bgc + (pixel.g - bgc) * amount).round().clamp(0, 255)
         ..b = (bb + (pixel.b - bb) * amount).round().clamp(0, 255);
     }
     return out;
@@ -342,7 +397,15 @@ class PhotoAnimationEngine {
     );
     final dx = ((w - sw) / 2 - 0.14 * math.sin((1 - p) * math.pi) * w).round();
     final dy = ((h - sh) / 2 - 0.24 * (1 - p) * h).round();
-    var frame = _place(resized, w, h, dx, dy, backgroundArgb);
+    var frame = _place(
+      resized,
+      w,
+      h,
+      dx,
+      dy,
+      backgroundArgb,
+      underlay: _lightBlur(image),
+    );
     final blur = 1 - p;
     if (blur > 0.12) {
       final narrow = math.max(8, (w * (1 - 0.62 * blur)).round());
@@ -362,7 +425,12 @@ class PhotoAnimationEngine {
     return frame;
   }
 
-  static img.Image _zoom(img.Image image, double scale, int backgroundArgb) {
+  static img.Image _zoom(
+    img.Image image,
+    double scale,
+    int backgroundArgb, {
+    img.Image? underlay,
+  }) {
     final w = image.width;
     final h = image.height;
     final sw = (w * scale).round().clamp(1, w * 2);
@@ -373,7 +441,15 @@ class PhotoAnimationEngine {
       height: sh,
       interpolation: img.Interpolation.linear,
     );
-    return _place(resized, w, h, (w - sw) ~/ 2, (h - sh) ~/ 2, backgroundArgb);
+    return _place(
+      resized,
+      w,
+      h,
+      (w - sw) ~/ 2,
+      (h - sh) ~/ 2,
+      backgroundArgb,
+      underlay: underlay ?? _lightBlur(image),
+    );
   }
 
   static img.Image _place(
@@ -382,18 +458,30 @@ class PhotoAnimationEngine {
     int height,
     int dx,
     int dy,
-    int backgroundArgb,
-  ) {
-    final out = img.Image(width: width, height: height, numChannels: 4);
-    img.fill(
-      out,
-      color: img.ColorRgba8(
-        (backgroundArgb >> 16) & 0xFF,
-        (backgroundArgb >> 8) & 0xFF,
-        backgroundArgb & 0xFF,
-        255,
-      ),
-    );
+    int backgroundArgb, {
+    img.Image? underlay,
+  }) {
+    final plate = underlay != null &&
+            underlay.width == width &&
+            underlay.height == height
+        ? underlay
+        : (source.width == width && source.height == height)
+        ? _lightBlur(source)
+        : null;
+    final out = plate != null
+        ? img.Image.from(plate)
+        : img.Image(width: width, height: height, numChannels: 4);
+    if (plate == null) {
+      img.fill(
+        out,
+        color: img.ColorRgba8(
+          (backgroundArgb >> 16) & 0xFF,
+          (backgroundArgb >> 8) & 0xFF,
+          backgroundArgb & 0xFF,
+          255,
+        ),
+      );
+    }
     for (var y = 0; y < height; y++) {
       final sy = y - dy;
       if (sy < 0 || sy >= source.height) continue;

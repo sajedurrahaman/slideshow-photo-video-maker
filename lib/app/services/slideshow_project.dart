@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
@@ -21,22 +22,52 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
 
   final filter = PhotoFilterPreset.values[args['filter'] as int];
   var filtered = FrameCompositor.applyFilter(decoded, filter);
-  final cropAspectRatio = args['cropAspectRatio'] as double;
-  if (cropAspectRatio > 0) {
-    final sourceAspectRatio = filtered.width / filtered.height;
-    var cropWidth = filtered.width;
-    var cropHeight = filtered.height;
-    if (sourceAspectRatio > cropAspectRatio) {
-      cropWidth = (filtered.height * cropAspectRatio).round();
-    } else {
-      cropHeight = (filtered.width / cropAspectRatio).round();
+  final cropLeft = (args['cropLeft'] as num?)?.toDouble() ?? 0;
+  final cropTop = (args['cropTop'] as num?)?.toDouble() ?? 0;
+  final cropWidthN = (args['cropWidth'] as num?)?.toDouble() ?? 1;
+  final cropHeightN = (args['cropHeight'] as num?)?.toDouble() ?? 1;
+  final hasRect =
+      cropLeft > 0.001 ||
+      cropTop > 0.001 ||
+      cropWidthN < 0.999 ||
+      cropHeightN < 0.999;
+  if (hasRect) {
+    final x = (cropLeft * filtered.width).round().clamp(0, filtered.width - 1);
+    final y = (cropTop * filtered.height).round().clamp(0, filtered.height - 1);
+    final cw = (cropWidthN * filtered.width).round().clamp(1, filtered.width - x);
+    final ch = (cropHeightN * filtered.height)
+        .round()
+        .clamp(1, filtered.height - y);
+    filtered = img.copyCrop(filtered, x: x, y: y, width: cw, height: ch);
+  } else {
+    final cropAspectRatio = args['cropAspectRatio'] as double;
+    if (cropAspectRatio > 0) {
+      final sourceAspectRatio = filtered.width / filtered.height;
+      var cropWidth = filtered.width;
+      var cropHeight = filtered.height;
+      if (sourceAspectRatio > cropAspectRatio) {
+        cropWidth = (filtered.height * cropAspectRatio).round();
+      } else {
+        cropHeight = (filtered.width / cropAspectRatio).round();
+      }
+      filtered = img.copyCrop(
+        filtered,
+        x: (filtered.width - cropWidth) ~/ 2,
+        y: (filtered.height - cropHeight) ~/ 2,
+        width: cropWidth,
+        height: cropHeight,
+      );
     }
-    filtered = img.copyCrop(
+  }
+  final cropDegrees = (args['cropDegrees'] as num?)?.toDouble() ?? 0;
+  if (cropDegrees.abs() > 0.05) {
+    if (filtered.numChannels < 4) {
+      filtered = filtered.convert(numChannels: 4);
+    }
+    filtered = img.copyRotate(
       filtered,
-      x: (filtered.width - cropWidth) ~/ 2,
-      y: (filtered.height - cropHeight) ~/ 2,
-      width: cropWidth,
-      height: cropHeight,
+      angle: cropDegrees,
+      interpolation: img.Interpolation.linear,
     );
   }
   if (args['mirrored'] as bool) img.flipHorizontal(filtered);
@@ -55,6 +86,10 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
     w: args['width'] as int,
     h: args['height'] as int,
     bgArgb: args['photoBackground'] as int,
+    blurPlate: args['blurBytes'] is Uint8List
+        ? img.decodeImage(args['blurBytes'] as Uint8List)
+        : null,
+    blurLevel: args['backgroundBlurLevel'] as int? ?? 0,
   );
   return Uint8List.fromList(img.encodeJpg(canvas, quality: 90));
 }
@@ -314,6 +349,27 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
+  void applyBackgroundToAll(int sourceIndex) {
+    if (sourceIndex < 0 || sourceIndex >= photos.length) return;
+    final source = photos[sourceIndex];
+    _recordHistory();
+    for (var i = 0; i < photos.length; i++) {
+      photos[i] = photos[i].copyWith(
+        backgroundArgb: source.backgroundArgb,
+        clearBackgroundArgb: source.backgroundArgb == null,
+        backgroundBlurLevel: source.backgroundBlurLevel,
+        clearBackgroundBlur: source.backgroundBlurLevel == null,
+      );
+    }
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames(showLoading: false));
+    }
+  }
+
   void updatePhoto(int index, SlideshowPhoto photo) {
     if (index < 0 || index >= photos.length) return;
     final previous = photos[index];
@@ -466,7 +522,10 @@ class SlideshowProject extends ChangeNotifier {
   String _previewPixelKey(SlideshowPhoto photo) {
     final (w, h) = previewSize;
     return '${photo.path}|${photo.filter.index}|${photo.backgroundArgb}|'
-        '${photo.cropAspectRatio}|${photo.mirrored}|${photo.flipped}|'
+        '${photo.backgroundBlurLevel}|'
+        '${photo.cropAspectRatio}|${photo.cropLeft}|${photo.cropTop}|'
+        '${photo.cropWidth}|${photo.cropHeight}|${photo.cropDegrees}|'
+        '${photo.mirrored}|${photo.flipped}|'
         '${photo.rotationQuarterTurns}|$backgroundArgb|${w}x$h|'
         '${selectedFrameAsset ?? ''}|${overlays.length}';
   }
@@ -557,7 +616,9 @@ class SlideshowProject extends ChangeNotifier {
           .map(
             (e) =>
                 '${e.path}:${e.filter.name}:${e.durationSec}:'
-                '${e.backgroundArgb}:${e.cropAspectRatio}:${e.mirrored}:'
+                '${e.backgroundArgb}:${e.backgroundBlurLevel}:${e.cropAspectRatio}:'
+                '${e.cropLeft}:${e.cropTop}:${e.cropWidth}:${e.cropHeight}:'
+                '${e.cropDegrees}:${e.mirrored}:'
                 '${e.flipped}:${e.rotationQuarterTurns}:'
                 '${e.animationIn.name}:${e.animationOut.name}:'
                 '${e.animationLoop.name}:'
@@ -1002,12 +1063,12 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   void setAspect(AspectPreset preset) {
+    if (aspectRatio == preset) return;
     aspectRatio = preset;
     generatedFrames = [];
     stopPreviewPlayback();
     _invalidatePreviewCache();
     notifyListeners();
-    unawaited(preparePreviewFrames());
   }
 
   void setExportQuality(ExportQuality q) {
@@ -1019,6 +1080,37 @@ class SlideshowProject extends ChangeNotifier {
   void setBackground(int argb) {
     backgroundArgb = argb;
     notifyListeners();
+  }
+
+  /// One undo step. Used by the editor Ratio/BG sheet when no photo is selected.
+  void setAllPhotoBackgrounds({
+    int? color,
+    int? blurLevel,
+    bool clearBlur = false,
+  }) {
+    if (photos.isEmpty) {
+      if (color != null) {
+        backgroundArgb = color;
+        notifyListeners();
+      }
+      return;
+    }
+    _recordHistory();
+    if (color != null) backgroundArgb = color;
+    for (var i = 0; i < photos.length; i++) {
+      photos[i] = photos[i].copyWith(
+        backgroundArgb: color,
+        backgroundBlurLevel: blurLevel,
+        clearBackgroundBlur: clearBlur,
+      );
+    }
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames(showLoading: false));
+    }
   }
 
   void setGlobalFilter(PhotoFilterPreset filter) {
@@ -1066,17 +1158,34 @@ class SlideshowProject extends ChangeNotifier {
     // Full-resolution JPEG decode, filtering and resize can take long enough
     // to trigger an Android ANR when run on the UI isolate (especially after
     // selecting several recent photos). Do that work in a worker isolate.
-    final preparedBytes = await compute(_preparePhotoInWorker, {
+    final workerArgs = <String, Object>{
       'bytes': bytes,
       'filter': photo.filter.index,
       'width': w,
       'height': h,
       'photoBackground': photo.backgroundArgb ?? backgroundArgb,
       'cropAspectRatio': photo.cropAspectRatio ?? 0.0,
+      'cropLeft': photo.cropLeft,
+      'cropTop': photo.cropTop,
+      'cropWidth': photo.cropWidth,
+      'cropHeight': photo.cropHeight,
+      'cropDegrees': photo.cropDegrees,
       'mirrored': photo.mirrored,
       'flipped': photo.flipped,
       'rotationQuarterTurns': photo.rotationQuarterTurns,
-    });
+    };
+    final blurLevel = photo.backgroundBlurLevel;
+    if (blurLevel != null) {
+      final thumb = await rootBundle.load(
+        'assets/images/editor/animation_thumb.png',
+      );
+      workerArgs['blurBytes'] = thumb.buffer.asUint8List(
+        thumb.offsetInBytes,
+        thumb.lengthInBytes,
+      );
+      workerArgs['backgroundBlurLevel'] = blurLevel;
+    }
+    final preparedBytes = await compute(_preparePhotoInWorker, workerArgs);
     final prepared = TransitionEngine.decode(preparedBytes);
     if (prepared == null) {
       throw Exception('Could not decode ${photo.path}');

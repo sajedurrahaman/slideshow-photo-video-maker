@@ -14,6 +14,7 @@ import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
+import 'crop_screen.dart';
 import '../widgets/editTool_sheet.dart';
 
 enum EditorTool {
@@ -44,6 +45,8 @@ enum _PhotoTool {
 
 enum _AnimationPhase { inAnimation, outAnimation }
 
+enum _CanvasSheetTab { ratio, background }
+
 enum _LiveMode { idle, inPhase, outPhase, full }
 
 class EditorScreen extends StatefulWidget {
@@ -57,6 +60,7 @@ class _EditorScreenState extends State<EditorScreen> {
   EditorTool? _tool;
   _PhotoTool? _photoTool;
   _AnimationPhase _animationPhase = _AnimationPhase.inAnimation;
+  _CanvasSheetTab _canvasSheetTab = _CanvasSheetTab.background;
   double? _durationSliderValue;
   double? _inDurationDrag;
   double? _outDurationDrag;
@@ -418,8 +422,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                                 ),
                                               ),
                                             ),
-                                            child: Image.file(
-                                              File(photo.path),
+                                            child: CroppedPhotoView(
+                                              photo: photo,
                                               fit: BoxFit.fill,
                                             ),
                                           ),
@@ -623,7 +627,14 @@ class _EditorScreenState extends State<EditorScreen> {
                   _dismissTool();
                   return;
                 }
-                setState(() => _tool = t);
+                setState(() {
+                  _tool = t;
+                  if (t == EditorTool.ratio) {
+                    _canvasSheetTab = _CanvasSheetTab.ratio;
+                  } else if (t == EditorTool.bg) {
+                    _canvasSheetTab = _CanvasSheetTab.background;
+                  }
+                });
                 if (t == EditorTool.slide) {
                   final p = context.read<SlideshowProject>();
                   if (!p.isPreviewReady && !p.isPreparingPreview) {
@@ -770,6 +781,10 @@ class _EditorScreenState extends State<EditorScreen> {
       await _replaceSelectedPhoto(project, index, photo);
       return;
     }
+    if (tool == _PhotoTool.crop) {
+      context.push('/crop');
+      return;
+    }
 
     setState(() {
       _photoTool = tool;
@@ -828,8 +843,40 @@ class _EditorScreenState extends State<EditorScreen> {
       height: height,
       compactHeader: compactContent,
       showTopDivider: !compactContent,
+      center: tool == _PhotoTool.background
+          ? _canvasTabHeader(compact: compactContent)
+          : null,
+      beforeConfirm:
+          tool == _PhotoTool.background &&
+              _canvasSheetTab == _CanvasSheetTab.background
+          ? IconButton(
+              onPressed: () {
+                project.applyBackgroundToAll(index);
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    const SnackBar(
+                      content: Text('Background applied to all images'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+              },
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              constraints: compactContent
+                  ? const BoxConstraints(minWidth: 32, minHeight: 20)
+                  : null,
+              icon: const _ApplyAllIcon(),
+            )
+          : null,
       onClose: () => setState(() => _photoTool = null),
-      onConfirm: () => setState(() => _photoTool = null),
+      onConfirm: () {
+        if (tool == _PhotoTool.background &&
+            _canvasSheetTab == _CanvasSheetTab.ratio) {
+          project.setAspect(project.aspectRatio);
+        }
+        setState(() => _photoTool = null);
+      },
       child: switch (tool) {
         _PhotoTool.duration => _photoDurationPanel(
           project,
@@ -852,6 +899,56 @@ class _EditorScreenState extends State<EditorScreen> {
         _PhotoTool.crop => _photoCropPanel(project, index, photo),
         _ => const SizedBox.shrink(),
       },
+    );
+  }
+
+  Widget _editorCanvasSheet(
+    SlideshowProject project, {
+    required double height,
+  }) {
+    final photo = project.photos.isEmpty ? null : project.photos.first;
+    return SectionSheet(
+      title: 'Background',
+      height: height,
+      compactHeader: true,
+      showTopDivider: false,
+      center: _canvasTabHeader(compact: true),
+      beforeConfirm: _canvasSheetTab == _CanvasSheetTab.background &&
+              photo != null
+          ? IconButton(
+              onPressed: () {
+                project.applyBackgroundToAll(0);
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    const SnackBar(
+                      content: Text('Background applied to all images'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+              },
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 20),
+              icon: const _ApplyAllIcon(),
+            )
+          : null,
+      onClose: _dismissTool,
+      onConfirm: () {
+        if (_canvasSheetTab == _CanvasSheetTab.ratio) {
+          project.setAspect(project.aspectRatio);
+        }
+        _dismissTool();
+      },
+      child: _canvasSheetTab == _CanvasSheetTab.ratio
+          ? _canvasRatioRow(project)
+          : _canvasBackgroundBody(
+              project,
+              0,
+              photo,
+              compact: true,
+              applyToAll: true,
+            ),
     );
   }
 
@@ -1165,68 +1262,330 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  static const _canvasColors = <int>[
+    0xFFFFFFFF,
+    0xFFE0E0E0,
+    0xFFBDBDBD,
+    0xFF9E9E9E,
+    0xFF757575,
+    0xFF616161,
+    0xFF424242,
+    0xFF212121,
+    0xFF000000,
+    0xFFFFCDD2,
+    0xFFF8BBD0,
+    0xFFF48FB1,
+    0xFFEC407A,
+    0xFFE91E63,
+    0xFFC2185B,
+    0xFFF44336,
+    0xFFE53935,
+    0xFFD32F2F,
+    0xFFC62828,
+    0xFFB71C1C,
+    0xFFFFF8E1,
+    0xFFFFF59D,
+    0xFFFFEE58,
+    0xFFFFC107,
+    0xFFFF9800,
+    0xFFFF5722,
+    0xFFE65100,
+    0xFFE1BEE7,
+    0xFFCE93D8,
+    0xFFBA68C8,
+    0xFFAB47BC,
+    0xFF8E24AA,
+    0xFF6A1B9A,
+    0xFF4A148C,
+    0xFFE3F2FD,
+    0xFFBBDEFB,
+    0xFF90CAF9,
+    0xFF64B5F6,
+    0xFF42A5F5,
+    0xFF1E88E5,
+    0xFF1565C0,
+    0xFF0D47A1,
+    0xFFE0F7FA,
+    0xFF80DEEA,
+    0xFF4DD0E1,
+    0xFF00BCD4,
+    0xFF0097A7,
+    0xFF006064,
+    0xFFF1F8E9,
+    0xFFDCEDC8,
+    0xFFC5E1A5,
+    0xFFAED581,
+    0xFF8BC34A,
+    0xFF689F38,
+    0xFF33691E,
+    0xFF1B5E20,
+    0xFFF9FBE7,
+    0xFFF0F4C3,
+    0xFFE6EE9C,
+    0xFFDCE775,
+    0xFFD4E157,
+    0xFFC0CA33,
+    0xFFEFEBE9,
+    0xFFD7CCC8,
+    0xFFBCAAA4,
+    0xFFA1887F,
+    0xFF8D6E63,
+    0xFF6D4C41,
+    0xFF4E342E,
+    0xFF3E2723,
+  ];
+
+  static const _blurSigmas = <double>[0, 1.2, 2.4, 4, 6.5];
+
+  Widget _canvasTabHeader({required bool compact}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final tab in _CanvasSheetTab.values)
+          InkWell(
+            onTap: () => setState(() => _canvasSheetTab = tab),
+            child: Padding(
+              final photoSelected =
+                  context.read<SlideshowProject>().selectedPhotoIndex != null;
+              if (!photoSelected &&
+                  (_tool == EditorTool.ratio || _tool == EditorTool.bg)) {
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    tab == _CanvasSheetTab.ratio ? 'Ratio' : 'Background',
+                    style: TextStyle(
+                      fontSize: compact ? 14 : 15,
+                      fontWeight: FontWeight.w600,
+                      color: _canvasSheetTab == tab
+                          ? AppColors.textDark
+                          : AppColors.textMuted,
+                    ),
+                  ),
+                  Container(
+                    width: tab == _CanvasSheetTab.ratio ? 28 : 72,
+                    height: 2,
+                    color: _canvasSheetTab == tab
+                        ? AppColors.textDark
+                        : Colors.transparent,
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _photoBackgroundPanel(
     SlideshowProject project,
     int index,
     SlideshowPhoto photo, {
     bool compact = false,
   }) {
-    const colors = <int?>[
-      null,
-      0xFFFFFFFF,
-      0xFFBDBDBD,
-      0xFF424242,
-      0xFF000000,
-      0xFFFFCDD2,
-      0xFFFF8A80,
-      0xFFFF5252,
-      0xFF80DEEA,
-      0xFF90CAF9,
-      0xFFB39DDB,
-      0xFFA5D6A7,
-    ];
+    return _canvasSheetTab == _CanvasSheetTab.ratio
+        ? _canvasRatioRow(project)
+        : _canvasBackgroundBody(project, index, photo, compact: compact);
+  }
+
+  Widget _canvasRatioRow(SlideshowProject project) {
     return ListView.separated(
       scrollDirection: Axis.horizontal,
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: compact ? 4 : 20),
-      itemCount: colors.length,
-      separatorBuilder: (_, _) => SizedBox(width: compact ? 8 : 12),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      itemCount: AspectPreset.values.length,
+      separatorBuilder: (_, _) => const SizedBox(width: 10),
       itemBuilder: (context, i) {
-        final color = colors[i];
-        final active = photo.backgroundArgb == color;
-        return InkWell(
-          onTap: () => project.updatePhoto(
-            index,
-            color == null
-                ? photo.copyWith(clearBackgroundArgb: true)
-                : photo.copyWith(backgroundArgb: color),
-          ),
-          child: Column(
-            children: [
-              Container(
-                width: compact ? 36 : 48,
-                height: compact ? 36 : 48,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: color == null ? Colors.white : Color(color),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: active ? AppColors.primary : AppColors.border,
-                    width: active ? 3 : 1,
+        final preset = AspectPreset.values[i];
+        final selected = project.aspectRatio == preset;
+        return GestureDetector(
+          onTap: () => project.setAspect(preset),
+          child: SizedBox(
+            width: 64,
+            child: Column(
+              children: [
+                Container(
+                  width: 58,
+                  height: 58,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F3F3),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: selected
+                          ? AppColors.primary
+                          : const Color(0xFFE0E0E0),
+                      width: selected ? 2 : 1,
+                    ),
+                  ),
+                  child: _ratioGlyph(preset.ratio),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  preset.label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected
+                        ? AppColors.primaryDark
+                        : AppColors.textDark,
                   ),
                 ),
-                child: color == null
-                    ? const Icon(Icons.auto_awesome_motion, size: 18)
-                    : null,
-              ),
-              SizedBox(height: compact ? 2 : 5),
-              Text(
-                color == null ? 'Default' : _backgroundName(color),
-                style: TextStyle(fontSize: compact ? 9 : 10),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+
+  Widget _ratioGlyph(double ratio) {
+    const box = 28.0;
+    final width = ratio >= 1 ? box : box * ratio;
+    final height = ratio >= 1 ? box / ratio : box;
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(color: const Color(0xFF9E9E9E), width: 1.4),
+      ),
+    );
+  }
+
+  Widget _canvasBackgroundBody(
+    SlideshowProject project,
+    int index,
+    SlideshowPhoto photo, {
+    required bool compact,
+  }) {
+    final labelStyle = TextStyle(
+      fontSize: compact ? 12 : 13,
+      fontWeight: FontWeight.w600,
+      color: AppColors.textDark,
+    SlideshowPhoto? photo, {
+    required bool compact,
+    bool applyToAll = false,
+      padding: const EdgeInsets.only(bottom: 8),
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 16),
+          child: Text('Blur', style: labelStyle),
+        ),
+        const SizedBox(height: 6),
+        SizedBox(
+          height: compact ? 48 : 56,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            children: [
+              for (var level = 0; level < _blurSigmas.length; level++) ...[
+                if (level > 0) const SizedBox(width: 10),
+                _blurChoice(
+                  sigma: _blurSigmas[level],
+                  selected: photo.backgroundBlurLevel == level,
+                  onTap: () => project.updatePhoto(
+                    index,
+                    photo.copyWith(backgroundBlurLevel: level),
+                  ),
+                ),
+              ],
+                  selected: photo?.backgroundBlurLevel == level,
+                  onTap: () {
+                    if (applyToAll) {
+                      project.setAllPhotoBackgrounds(blurLevel: level);
+                    } else if (photo != null) {
+                      project.updatePhoto(
+                        index,
+                        photo.copyWith(backgroundBlurLevel: level),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.only(left: 16),
+          child: Text('Color', style: labelStyle),
+        ),
+        const SizedBox(height: 6),
+        SizedBox(
+          height: compact ? 35 : 38,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: _canvasColors.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 4),
+            itemBuilder: (context, i) {
+              final color = _canvasColors[i];
+              final selected =
+                  photo != null &&
+                  photo.backgroundBlurLevel == null &&
+                  photo.backgroundArgb == color;
+              return GestureDetector(
+                onTap: () {
+                  if (applyToAll) {
+                    project.setAllPhotoBackgrounds(
+                      color: color,
+                      clearBlur: true,
+                    );
+                  } else if (photo != null) {
+                    project.updatePhoto(
+                      index,
+                      photo.copyWith(
+                        backgroundArgb: color,
+                        clearBackgroundBlur: true,
+                      ),
+                    );
+                  }
+                },
+                      color: selected
+                          ? AppColors.primary
+                          : const Color(0xFFBDBDBD),
+                      width: selected ? 2 : 0.6,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _blurChoice({
+    required double sigma,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    Widget image = Image.asset(
+      'assets/images/editor/animation_thumb.png',
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+    );
+    if (sigma > 0.4) {
+      image = ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        child: image,
+      );
+    }
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? AppColors.primary : const Color(0xFFBDBDBD),
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: ClipRRect(borderRadius: BorderRadius.circular(7), child: image),
+      ),
     );
   }
 
@@ -1327,7 +1686,7 @@ class _EditorScreenState extends State<EditorScreen> {
           _ => 'Dynamic zoom',
         },
         PhotoAnimationType.dynamicZoomAlt => 'Dynamic zoom',
-        PhotoAnimationType.wiper => 'Wipe',
+        PhotoAnimationType.wiper => 'Wiper',
         PhotoAnimationType.pendulum => 'Pendulum',
         PhotoAnimationType.upAndDown => 'Up and down',
         PhotoAnimationType.leftAndRight => 'Left and right',
@@ -1350,21 +1709,6 @@ class _EditorScreenState extends State<EditorScreen> {
         PhotoAnimationType.flyOutRight => 'Fly out right',
         PhotoAnimationType.flyOutUp => 'Fly out up',
       };
-
-  String _backgroundName(int color) => switch (color) {
-    0xFFFFFFFF => 'White',
-    0xFFBDBDBD => 'Gray',
-    0xFF424242 => 'Dark',
-    0xFF000000 => 'Black',
-    0xFFFFCDD2 => 'Rose',
-    0xFFFF8A80 => 'Coral',
-    0xFFFF5252 => 'Red',
-    0xFF80DEEA => 'Cyan',
-    0xFF90CAF9 => 'Blue',
-    0xFFB39DDB => 'Violet',
-    0xFFA5D6A7 => 'Green',
-    _ => 'Color',
-  };
 
   @override
   Widget build(BuildContext context) {
@@ -1404,25 +1748,28 @@ class _EditorScreenState extends State<EditorScreen> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
               child: Center(
-              child: AspectRatio(
+                child: AspectRatio(
                   aspectRatio: aspect,
-                child: DecoratedBox(
+                  child: DecoratedBox(
                     decoration: const BoxDecoration(color: Colors.black),
-                  child: ClipRRect(
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
+                    child: ClipRRect(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
                           if (project.selectedPhotoIndex != null)
                             _LiveClipPreview(
                               key: ValueKey(project.selectedPhotoIndex),
                               photoIndex: project.selectedPhotoIndex!,
-                              photo: project
-                                  .photos[project.selectedPhotoIndex!],
+                              photo:
+                                  project.photos[project.selectedPhotoIndex!],
                               backgroundArgb:
                                   project
                                       .photos[project.selectedPhotoIndex!]
                                       .backgroundArgb ??
                                   project.backgroundArgb,
+                              backgroundBlurLevel: project
+                                  .photos[project.selectedPhotoIndex!]
+                                  .backgroundBlurLevel,
                               replayToken: _liveToken,
                               mode: _liveMode,
                               inSecOverride: _inDurationDrag,
@@ -1438,8 +1785,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                   setState(() => _liveMode = _LiveMode.idle);
                                 }
                               },
-                          )
-                        else
+                            )
+                          else
                             RepaintBoundary(
                               child: ValueListenableBuilder<Uint8List?>(
                                 valueListenable: project.previewFrameListenable,
@@ -1460,10 +1807,10 @@ class _EditorScreenState extends State<EditorScreen> {
                                     );
                                   }
                                   return const Center(
-                            child: Text(
-                              'No preview',
-                              style: TextStyle(color: Colors.white54),
-                            ),
+                                    child: Text(
+                                      'No preview',
+                                      style: TextStyle(color: Colors.white54),
+                                    ),
                                   );
                                 },
                               ),
@@ -1497,37 +1844,37 @@ class _EditorScreenState extends State<EditorScreen> {
                               ),
                             ),
                           // Export-only progress.
-                        if (project.isProcessing)
-                          Container(
-                            color: Colors.black54,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  CircularProgressIndicator(
+                          if (project.isProcessing)
+                            Container(
+                              color: Colors.black54,
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    CircularProgressIndicator(
                                       color: AppColors.primary,
-                                    value: project.processProgress > 0
-                                        ? project.processProgress
-                                        : null,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
+                                      value: project.processProgress > 0
+                                          ? project.processProgress
+                                          : null,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
                                       'Exporting ${(project.processProgress * 100).toInt()}%',
                                       style: const TextStyle(
                                         color: Colors.white,
                                       ),
-                                  ),
-                                ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
           ),
 
           if (project.selectedPhotoIndex != null) ...[
@@ -1558,6 +1905,19 @@ class _EditorScreenState extends State<EditorScreen> {
               SectionSheet(
                 title: _toolLabel(_tool!),
                 height: 180,
+          ] else if (_tool == EditorTool.ratio || _tool == EditorTool.bg) ...[
+            _idleToolPanel(
+              project,
+              height:
+                  _timelineHeaderHeight +
+                  inlineSheetHeight +
+                  _photoToolbarHeight,
+              timelineHeaderHeight: _timelineHeaderHeight,
+              timelineContent: _editorCanvasSheet(
+                project,
+                height: inlineSheetHeight + _photoToolbarHeight,
+              ),
+            ),
                 headerRow: _previewRow(project),
                 onClose: _dismissTool,
                 onConfirm: _dismissTool,
@@ -2062,7 +2422,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-        return Padding(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -2087,7 +2447,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-          padding: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -2228,6 +2588,7 @@ class _LiveClipPreview extends StatefulWidget {
     required this.photoIndex,
     required this.photo,
     required this.backgroundArgb,
+    required this.backgroundBlurLevel,
     required this.replayToken,
     required this.mode,
     required this.onFraction,
@@ -2239,6 +2600,7 @@ class _LiveClipPreview extends StatefulWidget {
   final int photoIndex;
   final SlideshowPhoto photo;
   final int backgroundArgb;
+  final int? backgroundBlurLevel;
   final int replayToken;
   final _LiveMode mode;
   final double? inSecOverride;
@@ -2348,7 +2710,9 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
     _clock
       ..removeListener(_onTick)
       ..stop();
-    final total = widget.photo.durationSec <= 0 ? 0.1 : widget.photo.durationSec;
+    final total = widget.photo.durationSec <= 0
+        ? 0.1
+        : widget.photo.durationSec;
     final (inSec, outSec) = _windows();
     switch (widget.mode) {
       case _LiveMode.idle:
@@ -2425,12 +2789,28 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
     return const _GpuMotion();
   }
 
-  Widget _photoImage() {
-    Widget image = Image.file(
-      File(widget.photo.path),
-      fit: BoxFit.contain,
+  Widget _blurFill(int level) {
+    const sigmas = <double>[0, 4, 7, 11, 16];
+    final sigma = sigmas[level.clamp(0, sigmas.length - 1)];
+    Widget image = Image.asset(
+      'assets/images/editor/animation_thumb.png',
+      fit: BoxFit.cover,
       gaplessPlayback: true,
       filterQuality: FilterQuality.low,
+    );
+    if (sigma > 0.4) {
+      image = ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        child: image,
+      );
+    }
+    return image;
+  }
+
+  Widget _photoImage() {
+    Widget image = CroppedPhotoView(
+      photo: widget.photo,
+      fit: BoxFit.contain,
     );
     final turns = widget.photo.rotationQuarterTurns % 4;
     if (turns != 0) {
@@ -2447,71 +2827,76 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: Color(widget.backgroundArgb),
-      child: AnimatedBuilder(
-        animation: _clock,
-        builder: (context, child) {
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              final size = constraints.biggest;
-              final motion = _motionFor(_clock.value);
-              if (motion.mirrorOpen != null) {
-                return _mirrorDoorOpen(
-                  open: motion.mirrorOpen!,
-                  size: size,
-                  image: _photoImage,
-                );
-              }
-              Widget framed = Opacity(
-                opacity: motion.opacity.clamp(0.0, 1.0),
-                child: Transform.translate(
-                  offset: Offset(motion.dx * size.width, motion.dy * size.height),
-                  child: Transform.rotate(
-                    alignment: motion.alignment,
-                    angle: motion.degrees * math.pi / 180,
-                    child: Transform(
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (widget.backgroundBlurLevel != null)
+          _blurFill(widget.backgroundBlurLevel!)
+        else
+          ColoredBox(color: Color(widget.backgroundArgb)),
+        AnimatedBuilder(
+          animation: _clock,
+          builder: (context, child) {
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final size = constraints.biggest;
+                final motion = _motionFor(_clock.value);
+                if (motion.mirrorOpen != null) {
+                  return _mirrorDoorOpen(
+                    open: motion.mirrorOpen!,
+                    size: size,
+                    image: _photoImage,
+                  );
+                }
+                Widget framed = Opacity(
+                  opacity: motion.opacity.clamp(0.0, 1.0),
+                  child: Transform.translate(
+                    offset: Offset(
+                      motion.dx * size.width,
+                      motion.dy * size.height,
+                    ),
+                    child: Transform.rotate(
                       alignment: motion.alignment,
-                      transform: Matrix4.diagonal3Values(
-                        motion.scaleX.clamp(0.02, 3),
-                        motion.scaleY.clamp(0.02, 3),
-                        1,
+                      angle: motion.degrees * math.pi / 180,
+                      child: Transform(
+                        alignment: motion.alignment,
+                        transform: Matrix4.diagonal3Values(
+                          motion.scaleX.clamp(0.008, 3),
+                          motion.scaleY.clamp(0.008, 3),
+                          1,
+                        ),
+                        child: child,
                       ),
-                      child: child,
                     ),
                   ),
-                ),
-              );
-              if (motion.blurX > 0.4 || motion.blurY > 0.4) {
-                framed = ImageFiltered(
-                  imageFilter: ui.ImageFilter.blur(
-                    sigmaX: motion.blurX,
-                    sigmaY: motion.blurY,
-                  ),
-                  child: framed,
                 );
-              }
-              if (motion.plateBlur > 0.4) {
-                framed = Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ImageFiltered(
-                      imageFilter: ui.ImageFilter.blur(
-                        sigmaX: motion.plateBlur,
-                        sigmaY: motion.plateBlur,
-                      ),
-                      child: _photoImage(),
+                if (motion.blurX > 0.4 || motion.blurY > 0.4) {
+                  framed = ImageFiltered(
+                    imageFilter: ui.ImageFilter.blur(
+                      sigmaX: motion.blurX,
+                      sigmaY: motion.blurY,
                     ),
-                    framed,
-                  ],
+                    child: framed,
+                  );
+                }
+                return ClipRect(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ImageFiltered(
+                        imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                        child: _photoImage(),
+                      ),
+                      framed,
+                    ],
+                  ),
                 );
-              }
-              return ClipRect(child: framed);
-            },
-          );
-        },
-        child: _photoImage(),
-      ),
+              },
+            );
+          },
+          child: _photoImage(),
+        ),
+      ],
     );
   }
 }
@@ -2527,7 +2912,6 @@ class _GpuMotion {
     this.alignment = Alignment.center,
     this.blurX = 0,
     this.blurY = 0,
-    this.plateBlur = 0,
     this.mirrorOpen,
   });
 
@@ -2540,7 +2924,6 @@ class _GpuMotion {
   final Alignment alignment;
   final double blurX;
   final double blurY;
-  final double plateBlur;
   final double? mirrorOpen;
 }
 
@@ -2585,19 +2968,20 @@ _GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
     PhotoAnimationType.slideUp => _GpuMotion(dy: (1 - t)),
     PhotoAnimationType.slideRight => _GpuMotion(dx: (1 - t)),
     PhotoAnimationType.slideDown => _GpuMotion(dy: -(1 - t)),
-    PhotoAnimationType.dynamicZoom => _GpuMotion(
-      scaleX: 1 + 0.28 * t,
-      scaleY: 1 + 0.28 * t,
+    PhotoAnimationType.dynamicZoom => _wiperGpu(t),
+    PhotoAnimationType.wiper => _GpuMotion(
+      degrees: math.sin(t * math.pi * 2) * 14,
+      scaleX: 1.34 - 0.34 * t,
+      scaleY: 1.34 - 0.34 * t,
+      alignment: Alignment.bottomCenter,
     ),
     PhotoAnimationType.dynamicZoomAlt => _GpuMotion(
       scaleX: 1.28 - 0.28 * t,
       scaleY: 1.28 - 0.28 * t,
     ),
-    PhotoAnimationType.wiper => _wiperGpu(t),
     PhotoAnimationType.pendulum => _GpuMotion(
       degrees: math.sin(t * math.pi * 2) * 14,
       alignment: Alignment.topCenter,
-      plateBlur: 8,
     ),
     PhotoAnimationType.upAndDown => _GpuMotion(
       dy: math.sin(t * math.pi * 2) * 0.06,
@@ -2608,31 +2992,34 @@ _GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
     PhotoAnimationType.leftAndRight => _GpuMotion(
       dx: math.sin(t * math.pi * 2) * (1 - t * 0.35) * 0.1,
     ),
-    PhotoAnimationType.spinRight => _GpuMotion(degrees: (1 - t) * 70),
-    PhotoAnimationType.spinLeft => _GpuMotion(degrees: -(1 - t) * 70),
+    PhotoAnimationType.spinRight => _GpuMotion(
+      degrees: (1 - t) * 180,
+      dx: (1 - t) * 1.15,
+    ),
+    PhotoAnimationType.spinLeft => _GpuMotion(
+      degrees: -(1 - t) * 180,
+      dx: -(1 - t) * 1.15,
+    ),
     PhotoAnimationType.spinUpper => _GpuMotion(
-      scaleY: 0.15 + 0.85 * t,
-      alignment: Alignment.topCenter,
+      degrees: -(1 - t) * 180,
+      dy: -(1 - t) * 1.15,
     ),
     PhotoAnimationType.bottomOut => _GpuMotion(dy: (1 - t)),
     PhotoAnimationType.leftOut => _GpuMotion(dx: -(1 - t)),
     PhotoAnimationType.rightOut => _GpuMotion(dx: (1 - t)),
     PhotoAnimationType.topOut => _GpuMotion(dy: -(1 - t)),
-    PhotoAnimationType.dynamicZoomOut => _GpuMotion(
-      scaleX: 0.42 + 0.58 * t,
-      scaleY: 0.42 + 0.58 * t,
-    ),
+    PhotoAnimationType.dynamicZoomOut => _wiperGpu(t),
     PhotoAnimationType.flipLeft => _GpuMotion(
-      scaleX: math.max(0.02, t),
-      alignment: Alignment.centerLeft,
+      degrees: -(1 - t) * 180,
+      dx: -(1 - t) * 1.15,
     ),
     PhotoAnimationType.flipRight => _GpuMotion(
-      scaleX: math.max(0.02, t),
-      alignment: Alignment.centerRight,
+      degrees: (1 - t) * 180,
+      dx: (1 - t) * 1.15,
     ),
     PhotoAnimationType.flipLower => _GpuMotion(
-      scaleY: math.max(0.02, t),
-      alignment: Alignment.bottomCenter,
+      degrees: (1 - t) * 180,
+      dy: (1 - t) * 1.15,
     ),
     PhotoAnimationType.slideOutTop => _GpuMotion(
       opacity: 0.2 + 0.8 * t,
@@ -2646,23 +3033,14 @@ _GpuMotion _gpuMotion(PhotoAnimationType type, double t) {
       opacity: t,
       degrees: (1 - t) * 160,
     ),
-    PhotoAnimationType.flyOutLeft => _GpuMotion(
-      opacity: t,
-      scaleX: 0.35 + 0.65 * t,
-      scaleY: 0.35 + 0.65 * t,
-      dx: -(1 - t) * 0.9,
-    ),
-    PhotoAnimationType.flyOutRight => _GpuMotion(
-      opacity: t,
-      scaleX: 0.35 + 0.65 * t,
-      scaleY: 0.35 + 0.65 * t,
-      dx: (1 - t) * 0.9,
-    ),
-    PhotoAnimationType.flyOutUp => _GpuMotion(
-      opacity: t,
-      scaleX: 0.35 + 0.65 * t,
-      scaleY: 0.35 + 0.65 * t,
-      dy: -(1 - t) * 0.9,
+    PhotoAnimationType.flyOutLeft => _flyOutGpu(t, spinSign: -1, x: -1, y: -1),
+    PhotoAnimationType.flyOutRight => _flyOutGpu(t, spinSign: 1, x: 1, y: -1),
+    PhotoAnimationType.flyOutUp => _flyOutGpu(
+      t,
+      spinSign: -1,
+      x: 0,
+      y: -1,
+      yTravel: 0.42,
     ),
   };
 }
@@ -2752,15 +3130,12 @@ class _MotionThumbState extends State<_MotionThumb>
             child: framed,
           );
         }
-        if (motion.plateBlur > 0.4) {
-          framed = Stack(
+        return ClipRect(
+          child: Stack(
             fit: StackFit.expand,
             children: [
               ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(
-                  sigmaX: motion.plateBlur,
-                  sigmaY: motion.plateBlur,
-                ),
+                imageFilter: ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3),
                 child: Image.asset(
                   'assets/images/editor/animation_thumb.png',
                   fit: BoxFit.cover,
@@ -2769,9 +3144,8 @@ class _MotionThumbState extends State<_MotionThumb>
               ),
               framed,
             ],
-          );
-        }
-        return ClipRect(child: framed);
+          ),
+        );
       },
       child: Image.asset(
         'assets/images/editor/animation_thumb.png',
@@ -2974,7 +3348,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-              Positioned(
+                Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -3034,9 +3408,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                ),
-              ),
-            ],
+                    ),
+                  ),
+              ],
             ),
           ),
         );
@@ -3090,7 +3464,6 @@ class _ThumbMotion {
     this.turns = 0,
     this.alignment = Alignment.center,
     this.blur = 0,
-    this.plateBlur = 0,
   });
 
   final double opacity;
@@ -3100,7 +3473,79 @@ class _ThumbMotion {
   final double turns;
   final Alignment alignment;
   final double blur;
-  final double plateBlur;
+}
+
+/// Spins flat, pinches through a diagonal edge, then shrinks along [x] and [y].
+({double scale, double pinch, double degrees, double dx, double dy})
+_flyOutPose(
+  double t, {
+  required double spinSign,
+  required double x,
+  required double y,
+  double xTravel = 0.36,
+  double yTravel = 0.2,
+}) {
+  final exit = (1 - t).clamp(0.0, 1.0);
+  final spin = 1 - math.pow(1 - math.min(exit / 0.5, 1.0), 1.8).toDouble();
+  final flip = math.min(exit / 0.62, 1.0);
+  final shrink = math.pow(exit, 1.05).toDouble();
+  final drift = math.pow(math.max(exit - 0.28, 0) / 0.72, 1.35).toDouble();
+  return (
+    scale: 1 - shrink * 0.84,
+    pinch: math.cos(flip * math.pi).abs().clamp(0.012, 1.0),
+    degrees: spinSign * spin * 52,
+    dx: x * drift * xTravel,
+    dy: y * drift * yTravel,
+  );
+}
+
+_GpuMotion _flyOutGpu(
+  double t, {
+  required double spinSign,
+  required double x,
+  required double y,
+  double xTravel = 0.36,
+  double yTravel = 0.2,
+}) {
+  final pose = _flyOutPose(
+    t,
+    spinSign: spinSign,
+    x: x,
+    y: y,
+    xTravel: xTravel,
+    yTravel: yTravel,
+  );
+  return _GpuMotion(
+    scaleX: pose.scale,
+    scaleY: pose.scale * pose.pinch,
+    degrees: pose.degrees,
+    dx: pose.dx,
+    dy: pose.dy,
+  );
+}
+
+_ThumbMotion _flyOutThumb(
+  double t, {
+  required double spinSign,
+  required double x,
+  required double y,
+  double xTravel = 0.36,
+  double yTravel = 0.2,
+}) {
+  final pose = _flyOutPose(
+    t,
+    spinSign: spinSign,
+    x: x,
+    y: y,
+    xTravel: xTravel,
+    yTravel: yTravel,
+  );
+  return _ThumbMotion(
+    scaleX: pose.scale,
+    scaleY: pose.scale * pose.pinch,
+    turns: pose.degrees / 360,
+    offset: Offset(pose.dx * 72, pose.dy * 72),
+  );
 }
 
 _GpuMotion _wiperGpu(double t) {
@@ -3163,19 +3608,20 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
     PhotoAnimationType.slideDown => _ThumbMotion(
       offset: Offset(0, -(1 - t) * travel),
     ),
-    PhotoAnimationType.dynamicZoom => _ThumbMotion(
-      scaleX: 1 + 0.28 * t,
-      scaleY: 1 + 0.28 * t,
+    PhotoAnimationType.dynamicZoom => _wiperThumb(t),
+    PhotoAnimationType.wiper => _ThumbMotion(
+      turns: math.sin(t * math.pi * 2) * 14 / 360,
+      scaleX: 1.34 - 0.34 * t,
+      scaleY: 1.34 - 0.34 * t,
+      alignment: Alignment.bottomCenter,
     ),
     PhotoAnimationType.dynamicZoomAlt => _ThumbMotion(
       scaleX: 1.28 - 0.28 * t,
       scaleY: 1.28 - 0.28 * t,
     ),
-    PhotoAnimationType.wiper => _wiperThumb(t),
     PhotoAnimationType.pendulum => _ThumbMotion(
       turns: math.sin(t * math.pi * 2) * 14 / 360,
       alignment: Alignment.topCenter,
-      plateBlur: 3,
     ),
     PhotoAnimationType.upAndDown => _ThumbMotion(
       offset: Offset(0, math.sin(t * math.pi * 2) * 6),
@@ -3183,9 +3629,18 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
     PhotoAnimationType.leftAndRight => _ThumbMotion(
       offset: Offset(math.sin(t * math.pi * 2) * 12, 0),
     ),
-    PhotoAnimationType.spinRight => _ThumbMotion(turns: (1 - t) * 0.25),
-    PhotoAnimationType.spinLeft => _ThumbMotion(turns: -(1 - t) * 0.25),
-    PhotoAnimationType.spinUpper => _ThumbMotion(scaleY: 0.2 + 0.8 * t),
+    PhotoAnimationType.spinRight => _ThumbMotion(
+      turns: (1 - t) * 0.5,
+      offset: Offset((1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.spinLeft => _ThumbMotion(
+      turns: -(1 - t) * 0.5,
+      offset: Offset(-(1 - t) * travel, 0),
+    ),
+    PhotoAnimationType.spinUpper => _ThumbMotion(
+      turns: -(1 - t) * 0.5,
+      offset: Offset(0, -(1 - t) * travel),
+    ),
     PhotoAnimationType.mirror => _ThumbMotion(scaleX: t < 0.5 ? 1 : -1),
     PhotoAnimationType.mirrorOutside => _ThumbMotion(
       scaleX: (t * 2 - 1).clamp(-1, 1),
@@ -3203,21 +3658,18 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
     PhotoAnimationType.topOut => _ThumbMotion(
       offset: Offset(0, -(1 - t) * travel),
     ),
-    PhotoAnimationType.dynamicZoomOut => _ThumbMotion(
-      scaleX: 0.45 + 0.55 * t,
-      scaleY: 0.45 + 0.55 * t,
-    ),
+    PhotoAnimationType.dynamicZoomOut => _wiperThumb(t),
     PhotoAnimationType.flipLeft => _ThumbMotion(
-      scaleX: math.max(0.05, t),
-      alignment: Alignment.centerLeft,
+      turns: -(1 - t) * 0.5,
+      offset: Offset(-(1 - t) * travel, 0),
     ),
     PhotoAnimationType.flipLower => _ThumbMotion(
-      scaleY: math.max(0.05, t),
-      alignment: Alignment.bottomCenter,
+      turns: (1 - t) * 0.5,
+      offset: Offset(0, (1 - t) * travel),
     ),
     PhotoAnimationType.flipRight => _ThumbMotion(
-      scaleX: math.max(0.05, t),
-      alignment: Alignment.centerRight,
+      turns: (1 - t) * 0.5,
+      offset: Offset((1 - t) * travel, 0),
     ),
     PhotoAnimationType.slideOutTop => _ThumbMotion(
       opacity: 0.2 + 0.8 * t,
@@ -3231,23 +3683,73 @@ _ThumbMotion _thumbMotion(PhotoAnimationType type, double t) {
       opacity: 0.15 + 0.85 * t,
       turns: (1 - t) * 0.5,
     ),
-    PhotoAnimationType.flyOutLeft => _ThumbMotion(
-      opacity: 0.15 + 0.85 * t,
-      scaleX: 0.4 + 0.6 * t,
-      scaleY: 0.4 + 0.6 * t,
-      offset: Offset(-(1 - t) * travel, 0),
+    PhotoAnimationType.flyOutLeft => _flyOutThumb(
+      t,
+      spinSign: -1,
+      x: -1,
+      y: -1,
     ),
-    PhotoAnimationType.flyOutRight => _ThumbMotion(
-      opacity: 0.15 + 0.85 * t,
-      scaleX: 0.4 + 0.6 * t,
-      scaleY: 0.4 + 0.6 * t,
-      offset: Offset((1 - t) * travel, 0),
-    ),
-    PhotoAnimationType.flyOutUp => _ThumbMotion(
-      opacity: 0.15 + 0.85 * t,
-      scaleX: 0.4 + 0.6 * t,
-      scaleY: 0.4 + 0.6 * t,
-      offset: Offset(0, -(1 - t) * travel),
+    PhotoAnimationType.flyOutRight => _flyOutThumb(t, spinSign: 1, x: 1, y: -1),
+    PhotoAnimationType.flyOutUp => _flyOutThumb(
+      t,
+      spinSign: -1,
+      x: 0,
+      y: -1,
+      yTravel: 0.42,
     ),
   };
+}
+
+class _ApplyAllIcon extends StatelessWidget {
+  const _ApplyAllIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return const CustomPaint(
+      size: Size(22, 22),
+      painter: _ApplyAllIconPainter(),
+    );
+  }
+}
+
+class _ApplyAllIconPainter extends CustomPainter {
+  const _ApplyAllIconPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = const Color(0xFF212121)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeJoin = StrokeJoin.round;
+    final check = Paint()
+      ..color = const Color(0xFF212121)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.7
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    void diamond(Offset center, double halfW, double halfH) {
+      final path = Path()
+        ..moveTo(center.dx, center.dy - halfH)
+        ..lineTo(center.dx + halfW, center.dy)
+        ..lineTo(center.dx, center.dy + halfH)
+        ..lineTo(center.dx - halfW, center.dy)
+        ..close();
+      canvas.drawPath(path, stroke);
+    }
+
+    diamond(const Offset(9, 5.2), 6.2, 2.6);
+    diamond(const Offset(9, 9.2), 6.2, 2.6);
+    diamond(const Offset(8.2, 13.4), 5.4, 2.4);
+
+    final mark = Path()
+      ..moveTo(12.2, 16.2)
+      ..lineTo(14.4, 18.4)
+      ..lineTo(19.2, 12.6);
+    canvas.drawPath(mark, check);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

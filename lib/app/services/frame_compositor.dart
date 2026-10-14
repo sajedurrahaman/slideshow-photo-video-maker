@@ -47,16 +47,36 @@ class FrameCompositor {
     required int w,
     required int h,
     required int bgArgb,
+    img.Image? blurPlate,
+    int blurLevel = 0,
   }) {
-    final canvas = img.Image(width: w, height: h);
-    final a = (bgArgb >> 24) & 0xFF;
-    final r = (bgArgb >> 16) & 0xFF;
-    final g = (bgArgb >> 8) & 0xFF;
-    final b = bgArgb & 0xFF;
-    img.fill(
-      canvas,
-      color: img.ColorRgba8(r, g, b, a == 0 ? 255 : a),
-    );
+    final img.Image canvas;
+    if (blurPlate != null) {
+      final plate = blurLevel <= 0
+          ? blurPlate
+          : img.copyResize(
+              blurPlate,
+              width: (w / (4 + blurLevel * 2)).round().clamp(12, w),
+              height: (h / (4 + blurLevel * 2)).round().clamp(12, h),
+              interpolation: img.Interpolation.average,
+            );
+      canvas = img.copyResize(
+        plate,
+        width: w,
+        height: h,
+        interpolation: img.Interpolation.linear,
+      );
+    } else {
+      canvas = img.Image(width: w, height: h);
+      final a = (bgArgb >> 24) & 0xFF;
+      final r = (bgArgb >> 16) & 0xFF;
+      final g = (bgArgb >> 8) & 0xFF;
+      final b = bgArgb & 0xFF;
+      img.fill(
+        canvas,
+        color: img.ColorRgba8(r, g, b, a == 0 ? 255 : a),
+      );
+    }
 
     final scale = (w / src.width < h / src.height)
         ? w / src.width

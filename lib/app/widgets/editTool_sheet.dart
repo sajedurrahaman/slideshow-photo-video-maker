@@ -106,19 +106,23 @@ class SectionSheet extends StatelessWidget {
     this.headerRow,
     this.onClose,
     this.onConfirm,
+    this.beforeConfirm,
     this.compactHeader = false,
     this.showTopDivider = true,
+    this.center,
   });
 
   final String title;
   final Widget child;
   final double height;
+  final Widget? center;
 
   /// Optional row shown at the top of the sheet (e.g. preview controls).
   /// Built by the parent so this widget stays free of project/state logic.
   final Widget? headerRow;
   final VoidCallback? onClose;
   final VoidCallback? onConfirm;
+  final Widget? beforeConfirm;
   final bool compactHeader;
   final bool showTopDivider;
 
@@ -155,25 +159,29 @@ class SectionSheet extends StatelessWidget {
                       : null,
                   icon: const Icon(Icons.close, color: AppColors.textDark),
                 ),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.primary,
-                    // decorationColor: AppColors.primary,
-                    // decorationThickness: 2,
-                    // decorationStyle: TextDecorationStyle.solid,
-                  ),
-                ),
-                IconButton(
-                  onPressed: onConfirm,
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  constraints: compactHeader
-                      ? const BoxConstraints(minWidth: 32, minHeight: 20)
-                      : null,
-                  icon: const Icon(Icons.check, color: AppColors.primary),
+                center ??
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ?beforeConfirm,
+                    IconButton(
+                      onPressed: onConfirm,
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                      constraints: compactHeader
+                          ? const BoxConstraints(minWidth: 32, minHeight: 20)
+                          : null,
+                      icon: const Icon(Icons.check, color: AppColors.primary),
+                    ),
+                  ],
                 ),
               ],
             ),

@@ -407,7 +407,15 @@ class SlideshowPhoto {
   final PhotoFilterPreset filter;
   final double durationSec;
   final int? backgroundArgb;
+
+  /// 0 is the sharp thumb fill. 1–4 add more blur. Null keeps a solid color.
+  final int? backgroundBlurLevel;
   final double? cropAspectRatio;
+  final double cropLeft;
+  final double cropTop;
+  final double cropWidth;
+  final double cropHeight;
+  final double cropDegrees;
   final bool mirrored;
   final bool flipped;
   final int rotationQuarterTurns;
@@ -424,7 +432,13 @@ class SlideshowPhoto {
     this.filter = PhotoFilterPreset.original,
     this.durationSec = AppConstants.defaultDurationSec,
     this.backgroundArgb,
+    this.backgroundBlurLevel,
     this.cropAspectRatio,
+    this.cropLeft = 0,
+    this.cropTop = 0,
+    this.cropWidth = 1,
+    this.cropHeight = 1,
+    this.cropDegrees = 0,
     this.mirrored = false,
     this.flipped = false,
     this.rotationQuarterTurns = 0,
@@ -442,8 +456,15 @@ class SlideshowPhoto {
     double? durationSec,
     int? backgroundArgb,
     bool clearBackgroundArgb = false,
+    int? backgroundBlurLevel,
+    bool clearBackgroundBlur = false,
     double? cropAspectRatio,
     bool clearCropAspectRatio = false,
+    double? cropLeft,
+    double? cropTop,
+    double? cropWidth,
+    double? cropHeight,
+    double? cropDegrees,
     bool? mirrored,
     bool? flipped,
     int? rotationQuarterTurns,
@@ -462,9 +483,17 @@ class SlideshowPhoto {
       backgroundArgb: clearBackgroundArgb
           ? null
           : backgroundArgb ?? this.backgroundArgb,
+      backgroundBlurLevel: clearBackgroundBlur
+          ? null
+          : backgroundBlurLevel ?? this.backgroundBlurLevel,
       cropAspectRatio: clearCropAspectRatio
           ? null
           : cropAspectRatio ?? this.cropAspectRatio,
+      cropLeft: cropLeft ?? this.cropLeft,
+      cropTop: cropTop ?? this.cropTop,
+      cropWidth: cropWidth ?? this.cropWidth,
+      cropHeight: cropHeight ?? this.cropHeight,
+      cropDegrees: cropDegrees ?? this.cropDegrees,
       mirrored: mirrored ?? this.mirrored,
       flipped: flipped ?? this.flipped,
       rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
