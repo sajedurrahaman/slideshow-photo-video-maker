@@ -4,7 +4,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
@@ -81,15 +80,14 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
     );
   }
 
+  final blurLevel = args['backgroundBlurLevel'] as int?;
   final canvas = FrameCompositor.placeOnCanvas(
     src: filtered,
     w: args['width'] as int,
     h: args['height'] as int,
     bgArgb: args['photoBackground'] as int,
-    blurPlate: args['blurBytes'] is Uint8List
-        ? img.decodeImage(args['blurBytes'] as Uint8List)
-        : null,
-    blurLevel: args['backgroundBlurLevel'] as int? ?? 0,
+    blurPlate: blurLevel != null ? filtered : null,
+    blurLevel: blurLevel ?? 0,
   );
   return Uint8List.fromList(img.encodeJpg(canvas, quality: 90));
 }
@@ -1176,13 +1174,6 @@ class SlideshowProject extends ChangeNotifier {
     };
     final blurLevel = photo.backgroundBlurLevel;
     if (blurLevel != null) {
-      final thumb = await rootBundle.load(
-        'assets/images/editor/animation_thumb.png',
-      );
-      workerArgs['blurBytes'] = thumb.buffer.asUint8List(
-        thumb.offsetInBytes,
-        thumb.lengthInBytes,
-      );
       workerArgs['backgroundBlurLevel'] = blurLevel;
     }
     final preparedBytes = await compute(_preparePhotoInWorker, workerArgs);

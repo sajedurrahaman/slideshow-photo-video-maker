@@ -1343,12 +1343,19 @@ class _EditorScreenState extends State<EditorScreen> {
       children: [
         for (final tab in _CanvasSheetTab.values)
           InkWell(
-            onTap: () => setState(() => _canvasSheetTab = tab),
-            child: Padding(
+            onTap: () => setState(() {
+              _canvasSheetTab = tab;
               final photoSelected =
                   context.read<SlideshowProject>().selectedPhotoIndex != null;
               if (!photoSelected &&
                   (_tool == EditorTool.ratio || _tool == EditorTool.bg)) {
+                _tool = tab == _CanvasSheetTab.ratio
+                    ? EditorTool.ratio
+                    : EditorTool.bg;
+              }
+            }),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1455,16 +1462,16 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _canvasBackgroundBody(
     SlideshowProject project,
     int index,
-    SlideshowPhoto photo, {
+    SlideshowPhoto? photo, {
     required bool compact,
+    bool applyToAll = false,
   }) {
     final labelStyle = TextStyle(
       fontSize: compact ? 12 : 13,
       fontWeight: FontWeight.w600,
       color: AppColors.textDark,
-    SlideshowPhoto? photo, {
-    required bool compact,
-    bool applyToAll = false,
+    );
+    return ListView(
       padding: const EdgeInsets.only(bottom: 8),
       children: [
         Padding(
@@ -1482,13 +1489,6 @@ class _EditorScreenState extends State<EditorScreen> {
                 if (level > 0) const SizedBox(width: 10),
                 _blurChoice(
                   sigma: _blurSigmas[level],
-                  selected: photo.backgroundBlurLevel == level,
-                  onTap: () => project.updatePhoto(
-                    index,
-                    photo.copyWith(backgroundBlurLevel: level),
-                  ),
-                ),
-              ],
                   selected: photo?.backgroundBlurLevel == level,
                   onTap: () {
                     if (applyToAll) {
@@ -1541,6 +1541,13 @@ class _EditorScreenState extends State<EditorScreen> {
                     );
                   }
                 },
+                child: Container(
+                  width: compact ? 34 : 32,
+                  height: compact ? 28 : 32,
+                  decoration: BoxDecoration(
+                    color: Color(color),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
                       color: selected
                           ? AppColors.primary
                           : const Color(0xFFBDBDBD),
@@ -1732,13 +1739,25 @@ class _EditorScreenState extends State<EditorScreen> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: TealPillButton(
-              label: 'Export',
-              enabled:
-                  project.photos.length >= AppConstants.minPhotos &&
-                  !project.isProcessing,
-              onPressed: () => context.push('/export'),
-            ),
+            child: project.selectedPhotoIndex != null
+                ? TealPillButton(
+                    label: 'Done',
+                    onPressed: () {
+                      setState(() {
+                        _photoTool = null;
+                        _tool = null;
+                        _liveMode = _LiveMode.idle;
+                      });
+                      project.clearTimelinePhotoSelection();
+                    },
+                  )
+                : TealPillButton(
+                    label: 'Export',
+                    enabled:
+                        project.photos.length >= AppConstants.minPhotos &&
+                        !project.isProcessing,
+                    onPressed: () => context.push('/export'),
+                  ),
           ),
         ],
       ),
@@ -1898,13 +1917,6 @@ class _EditorScreenState extends State<EditorScreen> {
               _photoEditorToolbar(project)
             else if (!photoToolReplacesTimeline)
               _photoEditSheet(project),
-          ] else ...[
-            if (_tool == null)
-              _idleToolPanel(project)
-            else
-              SectionSheet(
-                title: _toolLabel(_tool!),
-                height: 180,
           ] else if (_tool == EditorTool.ratio || _tool == EditorTool.bg) ...[
             _idleToolPanel(
               project,
@@ -1918,6 +1930,13 @@ class _EditorScreenState extends State<EditorScreen> {
                 height: inlineSheetHeight + _photoToolbarHeight,
               ),
             ),
+          ] else ...[
+            if (_tool == null)
+              _idleToolPanel(project)
+            else
+              SectionSheet(
+                title: _toolLabel(_tool!),
+                height: 180,
                 headerRow: _previewRow(project),
                 onClose: _dismissTool,
                 onConfirm: _dismissTool,
@@ -2792,25 +2811,24 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
   Widget _blurFill(int level) {
     const sigmas = <double>[0, 4, 7, 11, 16];
     final sigma = sigmas[level.clamp(0, sigmas.length - 1)];
-    Widget image = Image.asset(
-      'assets/images/editor/animation_thumb.png',
-      fit: BoxFit.cover,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.low,
-    );
+    Widget image = _photoImage(fit: BoxFit.cover);
     if (sigma > 0.4) {
       image = ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        imageFilter: ui.ImageFilter.blur(
+          sigmaX: sigma,
+          sigmaY: sigma,
+          tileMode: TileMode.mirror,
+        ),
         child: image,
       );
     }
-    return image;
+    return ClipRect(child: image);
   }
 
-  Widget _photoImage() {
+  Widget _photoImage({BoxFit fit = BoxFit.contain}) {
     Widget image = CroppedPhotoView(
       photo: widget.photo,
-      fit: BoxFit.contain,
+      fit: fit,
     );
     final turns = widget.photo.rotationQuarterTurns % 4;
     if (turns != 0) {
