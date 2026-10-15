@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
@@ -44,7 +45,7 @@ const _ratios = <_RatioChoice>[
 const _cyan = Color(0xFF00C6D7);
 const _scaleYellow = Color(0xFFD6E04A);
 
-enum _Grip { move, tl, tr, bl, br }
+enum _Grip { move, tl, tr, bl, br, top, right, bottom, left }
 
 class _CropScreenState extends State<CropScreen> {
   String? _path;
@@ -64,6 +65,7 @@ class _CropScreenState extends State<CropScreen> {
 
   double _boxW = 1;
   double _boxH = 1;
+  Rect _cropView = Rect.zero;
   _Grip? _grip;
 
   @override
@@ -80,10 +82,10 @@ class _CropScreenState extends State<CropScreen> {
     final photo = project.photos[index];
     _index = index;
     _path = photo.path;
-    _left = photo.cropLeft;
-    _top = photo.cropTop;
-    _width = photo.cropWidth.clamp(0.08, 1);
-    _height = photo.cropHeight.clamp(0.08, 1);
+    _left = photo.cropLeft.clamp(-2.0, 2.0);
+    _top = photo.cropTop.clamp(-2.0, 2.0);
+    _width = photo.cropWidth.clamp(0.12, 4.0);
+    _height = photo.cropHeight.clamp(0.12, 4.0);
     _degrees = photo.cropDegrees.clamp(-45, 45);
     if (photo.cropWidth > 0.999 &&
         photo.cropHeight > 0.999 &&
@@ -140,14 +142,12 @@ class _CropScreenState extends State<CropScreen> {
     late double nw;
     late double nh;
     if (imgAspect > ratio) {
-      nh = 1;
-      nw = ratio / imgAspect;
-    } else {
       nw = 1;
       nh = imgAspect / ratio;
+    } else {
+      nh = 1;
+      nw = ratio / imgAspect;
     }
-    nw = nw.clamp(0.08, 1);
-    nh = nh.clamp(0.08, 1);
     _left = (1 - nw) / 2;
     _top = (1 - nh) / 2;
     _width = nw;
@@ -190,12 +190,7 @@ class _CropScreenState extends State<CropScreen> {
   Offset _toImage(Offset delta) => delta;
 
   _Grip? _hit(Offset local) {
-    final rect = Rect.fromLTWH(
-      _left * _boxW,
-      _top * _boxH,
-      _width * _boxW,
-      _height * _boxH,
-    );
+    final rect = _cropView;
     const reach = 28.0;
     final corners = <_Grip, Offset>{
       _Grip.tl: rect.topLeft,
@@ -206,6 +201,13 @@ class _CropScreenState extends State<CropScreen> {
     for (final entry in corners.entries) {
       if ((local - entry.value).distance <= reach) return entry.key;
     }
+    const edge = 24.0;
+    final insideX = local.dx >= rect.left - edge && local.dx <= rect.right + edge;
+    final insideY = local.dy >= rect.top - edge && local.dy <= rect.bottom + edge;
+    if ((local.dy - rect.top).abs() <= edge && insideX) return _Grip.top;
+    if ((local.dy - rect.bottom).abs() <= edge && insideX) return _Grip.bottom;
+    if ((local.dx - rect.left).abs() <= edge && insideY) return _Grip.left;
+    if ((local.dx - rect.right).abs() <= edge && insideY) return _Grip.right;
     if (rect.inflate(6).contains(local)) return _Grip.move;
     return null;
   }
@@ -222,8 +224,8 @@ class _CropScreenState extends State<CropScreen> {
     final dy = local.dy / _boxH;
     setState(() {
       if (grip == _Grip.move) {
-        _left = (_left + dx).clamp(0.0, 1 - _width);
-        _top = (_top + dy).clamp(0.0, 1 - _height);
+        _left = (_left + dx).clamp(-2.0, 3.0 - _width);
+        _top = (_top + dy).clamp(-2.0, 3.0 - _height);
       } else if (_aspect == null) {
         _resizeFree(grip, dx, dy);
       } else {
@@ -237,14 +239,14 @@ class _CropScreenState extends State<CropScreen> {
     var t = _top;
     var r = _left + _width;
     var b = _top + _height;
-    if (grip == _Grip.tl || grip == _Grip.bl) l += dx;
-    if (grip == _Grip.tr || grip == _Grip.br) r += dx;
-    if (grip == _Grip.tl || grip == _Grip.tr) t += dy;
-    if (grip == _Grip.bl || grip == _Grip.br) b += dy;
-    l = l.clamp(0.0, r - 0.08);
-    r = r.clamp(l + 0.08, 1.0);
-    t = t.clamp(0.0, b - 0.08);
-    b = b.clamp(t + 0.08, 1.0);
+    if (grip == _Grip.tl || grip == _Grip.bl || grip == _Grip.left) l += dx;
+    if (grip == _Grip.tr || grip == _Grip.br || grip == _Grip.right) r += dx;
+    if (grip == _Grip.tl || grip == _Grip.tr || grip == _Grip.top) t += dy;
+    if (grip == _Grip.bl || grip == _Grip.br || grip == _Grip.bottom) b += dy;
+    l = l.clamp(-2.0, r - 0.12);
+    r = r.clamp(l + 0.12, 3.0);
+    t = t.clamp(-2.0, b - 0.12);
+    b = b.clamp(t + 0.12, 3.0);
     _left = l;
     _top = t;
     _width = r - l;
@@ -254,6 +256,13 @@ class _CropScreenState extends State<CropScreen> {
   void _resizeLocked(_Grip grip, double dx, double dy) {
     final aspect = _aspect;
     if (aspect == null) return;
+    if (grip == _Grip.top ||
+        grip == _Grip.bottom ||
+        grip == _Grip.left ||
+        grip == _Grip.right) {
+      _resizeLockedEdge(grip, dx, dy, aspect);
+      return;
+    }
     final anchorRight = grip == _Grip.tl || grip == _Grip.bl;
     final anchorBottom = grip == _Grip.tl || grip == _Grip.tr;
     final ax = anchorRight ? _left + _width : _left;
@@ -262,51 +271,110 @@ class _CropScreenState extends State<CropScreen> {
     var nw = _width + (anchorRight ? -dx : dx);
     var nh = _height + (anchorBottom ? -dy : dy);
     if (dx.abs() >= dy.abs()) {
-      nw = nw.clamp(0.08, 1.0);
+      nw = nw.clamp(0.12, 4.0);
       nh = nw * imgAspect / aspect;
     } else {
-      nh = nh.clamp(0.08, 1.0);
+      nh = nh.clamp(0.12, 4.0);
       nw = nh * aspect / imgAspect;
     }
-    if (nh > 1) {
-      nh = 1;
+    if (nh > 4) {
+      nh = 4;
       nw = nh * aspect / imgAspect;
     }
-    if (nw > 1) {
-      nw = 1;
+    if (nw > 4) {
+      nw = 4;
       nh = nw * imgAspect / aspect;
     }
     var l = anchorRight ? ax - nw : ax;
     var t = anchorBottom ? ay - nh : ay;
-    if (l < 0 || t < 0 || l + nw > 1 || t + nh > 1) {
-      l = l.clamp(0.0, 1.0);
-      t = t.clamp(0.0, 1.0);
-      nw = math.min(nw, 1 - l);
-      nh = nw * imgAspect / aspect;
-      if (t + nh > 1) {
-        nh = 1 - t;
-        nw = nh * aspect / imgAspect;
-        if (anchorRight) l = ax - nw;
-      }
-      if (l < 0 || t < 0 || l + nw > 1.001 || t + nh > 1.001 || nw < 0.08) {
-        return;
-      }
-    }
+    if (l < -2) l = -2;
+    if (t < -2) t = -2;
+    if (l + nw > 3) l = 3 - nw;
+    if (t + nh > 3) t = 3 - nh;
     _left = l;
     _top = t;
     _width = nw;
     _height = nh;
   }
 
-  Rect _imageBox(Size space) {
-    final aspect = _imgW / _imgH;
+  void _resizeLockedEdge(_Grip grip, double dx, double dy, double aspect) {
+    final imgAspect = _imgW / _imgH;
+    final horizontal = grip == _Grip.left || grip == _Grip.right;
+    var nw = _width;
+    var nh = _height;
+    if (horizontal) {
+      nw = (_width + (grip == _Grip.left ? -dx : dx)).clamp(0.12, 4.0);
+      nh = nw * imgAspect / aspect;
+    } else {
+      nh = (_height + (grip == _Grip.top ? -dy : dy)).clamp(0.12, 4.0);
+      nw = nh * aspect / imgAspect;
+    }
+    if (nh > 4) {
+      nh = 4;
+      nw = nh * aspect / imgAspect;
+    }
+    if (nw > 4) {
+      nw = 4;
+      nh = nw * imgAspect / aspect;
+    }
+    final l = switch (grip) {
+      _Grip.left => _left + _width - nw,
+      _Grip.right => _left,
+      _ => _left + (_width - nw) / 2,
+    };
+    final t = switch (grip) {
+      _Grip.top => _top + _height - nh,
+      _Grip.bottom => _top,
+      _ => _top + (_height - nh) / 2,
+    };
+    _left = l.clamp(-2.0, 3.0 - nw);
+    _top = t.clamp(-2.0, 3.0 - nh);
+    _width = nw;
+    _height = nh;
+  }
+
+  double _coverScale() {
+    final rad = _degrees.abs() * math.pi / 180;
+    final c = math.cos(rad);
+    final s = math.sin(rad);
+    final w = _imgW;
+    final h = _imgH;
+    if (w <= 0 || h <= 0) return 1;
+    final scaleW = (w * c + h * s) / w;
+    final scaleH = (w * s + h * c) / h;
+    return math.max(scaleW, scaleH);
+  }
+
+  Rect _fittedCrop(Size space) {
+    final cropPxW = math.max(_width * _imgW, 1);
+    final cropPxH = math.max(_height * _imgH, 1);
     var w = space.width;
-    var h = w / aspect;
+    var h = w * cropPxH / cropPxW;
     if (h > space.height) {
       h = space.height;
-      w = h * aspect;
+      w = h * cropPxW / cropPxH;
     }
     return Rect.fromLTWH((space.width - w) / 2, (space.height - h) / 2, w, h);
+  }
+
+  Rect _imageInside(Rect crop, double imageW, double imageH) {
+    final zoom = math.max(_width, _height);
+    if (zoom <= 1.001) {
+      return Rect.fromLTWH(
+        crop.left - _left * imageW,
+        crop.top - _top * imageH,
+        imageW,
+        imageH,
+      );
+    }
+    final fittedW = imageW * zoom;
+    final fittedH = imageH * zoom;
+    return Rect.fromLTWH(
+      crop.left + (crop.width - fittedW) / 2,
+      crop.top + (crop.height - fittedH) / 2,
+      fittedW,
+      fittedH,
+    );
   }
 
   @override
@@ -328,22 +396,18 @@ class _CropScreenState extends State<CropScreen> {
                             math.max(constraints.maxWidth - 36, 1),
                             math.max(constraints.maxHeight - 36, 1),
                           );
-                          final box = _imageBox(space)
-                              .shift(const Offset(18, 18));
-                          _boxW = box.width;
-                          _boxH = box.height;
-                          return Stack(
-                            children: [
-                              Positioned.fromRect(
-                                rect: box,
-                                child: GestureDetector(
-                                  onPanStart: _onPanStart,
-                                  onPanUpdate: _onPanUpdate,
-                                  onPanEnd: (_) => _grip = null,
-                                  child: _cropStage(path, box.size),
-                                ),
-                              ),
-                            ],
+                          final crop = _fittedCrop(space).shift(const Offset(18, 18));
+                          final imageW = crop.width / _width;
+                          final imageH = crop.height / _height;
+                          final image = _imageInside(crop, imageW, imageH);
+                          _boxW = imageW;
+                          _boxH = imageH;
+                          _cropView = crop;
+                          return GestureDetector(
+                            onPanStart: _onPanStart,
+                            onPanUpdate: _onPanUpdate,
+                            onPanEnd: (_) => _grip = null,
+                            child: _cropStage(path, crop, image),
                           );
                         },
                       ),
@@ -356,68 +420,57 @@ class _CropScreenState extends State<CropScreen> {
     );
   }
 
-  Widget _cropStage(String path, Size size) {
-    final crop = Rect.fromLTWH(
-      _left * size.width,
-      _top * size.height,
-      _width * size.width,
-      _height * size.height,
-    );
-    final turned = Transform.rotate(
-      angle: _degrees * math.pi / 180,
-      child: Image.file(
-        File(path),
-        width: size.width,
-        height: size.height,
-        fit: BoxFit.fill,
-        gaplessPlayback: true,
+  Widget _cropStage(String path, Rect crop, Rect image) {
+    final photo = Transform.scale(
+      scale: _coverScale(),
+      child: Transform.rotate(
+        angle: _degrees * math.pi / 180,
+        child: Image.file(
+          File(path),
+          width: image.width,
+          height: image.height,
+          fit: BoxFit.fill,
+          gaplessPlayback: true,
+        ),
       ),
     );
-    return SizedBox(
-      width: size.width,
-      height: size.height,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          turned,
-          Positioned.fill(
-            child: ColoredBox(color: Colors.white.withValues(alpha: 0.55)),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fromRect(
+          rect: crop,
+          child: const ColoredBox(color: Colors.black),
+        ),
+        ClipRect(
+          clipper: _RectClipper(crop),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Positioned.fromRect(rect: image, child: photo),
+            ],
           ),
-          ClipRect(
-            clipper: _RectClipper(crop),
-            child: Transform.rotate(
-              angle: _degrees * math.pi / 180,
-              child: Image.file(
-                File(path),
-                width: size.width,
-                height: size.height,
-                fit: BoxFit.fill,
-                gaplessPlayback: true,
+        ),
+        CustomPaint(painter: _CropGridPainter(crop)),
+        for (final corner in <Offset>[
+          crop.topLeft,
+          crop.topRight,
+          crop.bottomLeft,
+          crop.bottomRight,
+        ])
+          Positioned(
+            left: corner.dx - 7,
+            top: corner.dy - 7,
+            child: Container(
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(
+                color: AppColors.primary,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
               ),
             ),
           ),
-          CustomPaint(size: size, painter: _CropGridPainter(crop)),
-          for (final corner in <Alignment>[
-            Alignment.topLeft,
-            Alignment.topRight,
-            Alignment.bottomLeft,
-            Alignment.bottomRight,
-          ])
-            Positioned(
-              left: corner.x < 0 ? crop.left - 7 : crop.right - 7,
-              top: corner.y < 0 ? crop.top - 7 : crop.bottom - 7,
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 1.5),
-                ),
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 
@@ -759,10 +812,10 @@ class CroppedPhotoView extends StatelessWidget {
   final BoxFit fit;
 
   bool get _hasCrop {
-    return photo.cropLeft > 0.001 ||
-        photo.cropTop > 0.001 ||
-        photo.cropWidth < 0.999 ||
-        photo.cropHeight < 0.999 ||
+    return photo.cropLeft.abs() > 0.001 ||
+        photo.cropTop.abs() > 0.001 ||
+        (photo.cropWidth - 1).abs() > 0.001 ||
+        (photo.cropHeight - 1).abs() > 0.001 ||
         photo.cropDegrees.abs() > 0.05;
   }
 
@@ -776,28 +829,165 @@ class CroppedPhotoView extends StatelessWidget {
         filterQuality: FilterQuality.low,
       );
     }
-    Widget image = Image.file(
-      File(photo.path),
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.low,
-    );
-    if (photo.cropDegrees.abs() > 0.05) {
-      image = Transform.rotate(
-        angle: photo.cropDegrees * math.pi / 180,
-        child: image,
-      );
-    }
-    image = ClipRect(
-      child: Align(
-        alignment: Alignment(
-          ((photo.cropLeft + photo.cropWidth / 2) * 2 - 1).clamp(-1.0, 1.0),
-          ((photo.cropTop + photo.cropHeight / 2) * 2 - 1).clamp(-1.0, 1.0),
+    return FittedBox(
+      fit: fit,
+      child: _CropFrame(
+        left: photo.cropLeft,
+        top: photo.cropTop,
+        width: photo.cropWidth.clamp(0.05, 8),
+        height: photo.cropHeight.clamp(0.05, 8),
+        radians: photo.cropDegrees * math.pi / 180,
+        child: Image.file(
+          File(photo.path),
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.low,
         ),
-        widthFactor: photo.cropWidth.clamp(0.02, 1.0),
-        heightFactor: photo.cropHeight.clamp(0.02, 1.0),
-        child: image,
       ),
     );
-    return FittedBox(fit: fit, child: image);
+  }
+}
+
+class _CropFrame extends SingleChildRenderObjectWidget {
+  const _CropFrame({
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.radians,
+    required super.child,
+  });
+
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+  final double radians;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderCropFrame(
+      left: left,
+      top: top,
+      width: width,
+      height: height,
+      radians: radians,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderCropFrame renderObject,
+  ) {
+    renderObject
+      ..left = left
+      ..top = top
+      ..width = width
+      ..height = height
+      ..radians = radians;
+  }
+}
+
+class _RenderCropFrame extends RenderProxyBox {
+  _RenderCropFrame({
+    required this._left,
+    required this._top,
+    required this._width,
+    required this._height,
+    required this._radians,
+  });
+
+  double _left;
+  double _top;
+  double _width;
+  double _height;
+  double _radians;
+
+  set left(double value) {
+    if (_left == value) return;
+    _left = value;
+    markNeedsLayout();
+  }
+
+  set top(double value) {
+    if (_top == value) return;
+    _top = value;
+    markNeedsLayout();
+  }
+
+  set width(double value) {
+    if (_width == value) return;
+    _width = value;
+    markNeedsLayout();
+  }
+
+  set height(double value) {
+    if (_height == value) return;
+    _height = value;
+    markNeedsLayout();
+  }
+
+  set radians(double value) {
+    if (_radians == value) return;
+    _radians = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void performLayout() {
+    final child = this.child;
+    if (child == null) {
+      size = Size.zero;
+      return;
+    }
+    child.layout(const BoxConstraints(), parentUsesSize: true);
+    size = Size(
+      math.max(child.size.width * _width, 1),
+      math.max(child.size.height * _height, 1),
+    );
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child == null || child.size.width <= 0 || child.size.height <= 0) {
+      return;
+    }
+    context.canvas.drawRect(
+      offset & size,
+      Paint()..color = const Color(0xFF000000),
+    );
+    final image = child.size;
+    final c = math.cos(_radians.abs());
+    final s = math.sin(_radians.abs());
+    final cover = math.max(
+      (image.width * c + image.height * s) / image.width,
+      (image.width * s + image.height * c) / image.height,
+    );
+    final zoom = math.max(_width, _height);
+    final fitted = zoom > 1.001;
+    final scale = cover * (fitted ? zoom : 1);
+    final center = fitted
+        ? Offset(size.width / 2, size.height / 2)
+        : Offset(
+            -_left * image.width + image.width / 2,
+            -_top * image.height + image.height / 2,
+          );
+    final matrix = Matrix4.identity()
+      ..translateByDouble(offset.dx + center.dx, offset.dy + center.dy, 0, 1)
+      ..rotateZ(_radians)
+      ..scaleByDouble(scale, scale, 1, 1)
+      ..translateByDouble(-image.width / 2, -image.height / 2, 0, 1);
+    context.pushClipRect(needsCompositing, offset, Offset.zero & size, (
+      context,
+      _,
+    ) {
+      context.pushTransform(needsCompositing, Offset.zero, matrix, (
+        context,
+        _,
+      ) {
+        child.paint(context, Offset.zero);
+      });
+    });
   }
 }

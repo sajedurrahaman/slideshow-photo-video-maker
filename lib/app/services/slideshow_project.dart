@@ -26,41 +26,63 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
   final cropWidthN = (args['cropWidth'] as num?)?.toDouble() ?? 1;
   final cropHeightN = (args['cropHeight'] as num?)?.toDouble() ?? 1;
   final hasRect =
-      cropLeft > 0.001 ||
-      cropTop > 0.001 ||
+      cropLeft < -0.001 ||
+      cropTop < -0.001 ||
+      cropLeft + cropWidthN > 1.001 ||
+      cropTop + cropHeightN > 1.001 ||
       cropWidthN < 0.999 ||
       cropHeightN < 0.999;
   final cropDegrees = (args['cropDegrees'] as num?)?.toDouble() ?? 0;
-  if (cropDegrees.abs() > 0.05) {
+  if (cropDegrees.abs() > 0.05 || hasRect) {
     final srcW = filtered.width.toDouble();
     final srcH = filtered.height.toDouble();
-    final leftPx = cropLeft * srcW;
-    final topPx = cropTop * srcH;
-    final widthPx = (cropWidthN * srcW).clamp(1, srcW);
-    final heightPx = (cropHeightN * srcH).clamp(1, srcH);
-    if (filtered.numChannels < 4) {
-      filtered = filtered.convert(numChannels: 4);
-    }
-    filtered = img.copyRotate(
-      filtered,
-      angle: cropDegrees,
-      interpolation: img.Interpolation.linear,
+    final outW = (cropWidthN * srcW).round().clamp(1, 8000);
+    final outH = (cropHeightN * srcH).round().clamp(1, 8000);
+    final rad = cropDegrees.abs() * math.pi / 180;
+    final cosA = math.cos(rad);
+    final sinA = math.sin(rad);
+    final cover = math.max(
+      (srcW * cosA + srcH * sinA) / srcW,
+      (srcW * sinA + srcH * cosA) / srcH,
     );
-    final rawX = filtered.width / 2 + (leftPx - srcW / 2);
-    final rawY = filtered.height / 2 + (topPx - srcH / 2);
-    final x = rawX.round().clamp(0, filtered.width - 1);
-    final y = rawY.round().clamp(0, filtered.height - 1);
-    final cw = widthPx.round().clamp(1, filtered.width - x);
-    final ch = heightPx.round().clamp(1, filtered.height - y);
-    filtered = img.copyCrop(filtered, x: x, y: y, width: cw, height: ch);
-  } else if (hasRect) {
-    final x = (cropLeft * filtered.width).round().clamp(0, filtered.width - 1);
-    final y = (cropTop * filtered.height).round().clamp(0, filtered.height - 1);
-    final cw = (cropWidthN * filtered.width).round().clamp(1, filtered.width - x);
-    final ch = (cropHeightN * filtered.height)
-        .round()
-        .clamp(1, filtered.height - y);
-    filtered = img.copyCrop(filtered, x: x, y: y, width: cw, height: ch);
+    final zoom = math.max(cropWidthN, cropHeightN);
+    final scale = cover * (zoom > 1.001 ? zoom : 1);
+    var picture = filtered;
+    if (scale > 1.01) {
+      picture = img.copyResize(
+        picture,
+        width: (srcW * scale).round(),
+        height: (srcH * scale).round(),
+        interpolation: img.Interpolation.linear,
+      );
+    }
+    if (cropDegrees.abs() > 0.05) {
+      if (picture.numChannels < 4) {
+        picture = picture.convert(numChannels: 4);
+      }
+      picture = img.copyRotate(
+        picture,
+        angle: cropDegrees,
+        interpolation: img.Interpolation.linear,
+      );
+    }
+    final centerX = zoom > 1.001
+        ? outW / 2
+        : -cropLeft * srcW + srcW / 2;
+    final centerY = zoom > 1.001
+        ? outH / 2
+        : -cropTop * srcH + srcH / 2;
+    final canvas = img.Image(width: outW, height: outH, numChannels: 4);
+    img.fill(canvas, color: img.ColorRgba8(0, 0, 0, 255));
+    img.compositeImage(
+      canvas,
+      picture,
+      dstX: (centerX - picture.width / 2).round(),
+      dstY: (centerY - picture.height / 2).round(),
+      dstW: picture.width,
+      dstH: picture.height,
+    );
+    filtered = canvas;
   } else {
     final cropAspectRatio = args['cropAspectRatio'] as double;
     if (cropAspectRatio > 0) {
