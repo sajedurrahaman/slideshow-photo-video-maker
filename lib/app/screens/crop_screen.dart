@@ -42,6 +42,7 @@ const _ratios = <_RatioChoice>[
 ];
 
 const _cyan = Color(0xFF00C6D7);
+const _scaleYellow = Color(0xFFD6E04A);
 
 enum _Grip { move, tl, tr, bl, br }
 
@@ -186,12 +187,7 @@ class _CropScreenState extends State<CropScreen> {
     context.pop();
   }
 
-  Offset _toImage(Offset delta) {
-    final a = -_degrees * math.pi / 180;
-    final c = math.cos(a);
-    final s = math.sin(a);
-    return Offset(delta.dx * c - delta.dy * s, delta.dx * s + delta.dy * c);
-  }
+  Offset _toImage(Offset delta) => delta;
 
   _Grip? _hit(Offset local) {
     final rect = Rect.fromLTWH(
@@ -310,16 +306,6 @@ class _CropScreenState extends State<CropScreen> {
       h = space.height;
       w = h * aspect;
     }
-    final rad = _degrees.abs() * math.pi / 180;
-    final c = math.cos(rad);
-    final s = math.sin(rad);
-    final bw = w * c + h * s;
-    final bh = w * s + h * c;
-    if (bw > 0 && bh > 0) {
-      final scale = math.min(space.width / bw, space.height / bh);
-      w *= scale;
-      h *= scale;
-    }
     return Rect.fromLTWH((space.width - w) / 2, (space.height - h) / 2, w, h);
   }
 
@@ -350,14 +336,11 @@ class _CropScreenState extends State<CropScreen> {
                             children: [
                               Positioned.fromRect(
                                 rect: box,
-                                child: Transform.rotate(
-                                  angle: _degrees * math.pi / 180,
-                                  child: GestureDetector(
-                                    onPanStart: _onPanStart,
-                                    onPanUpdate: _onPanUpdate,
-                                    onPanEnd: (_) => _grip = null,
-                                    child: _cropStage(path, box.size),
-                                  ),
+                                child: GestureDetector(
+                                  onPanStart: _onPanStart,
+                                  onPanUpdate: _onPanUpdate,
+                                  onPanEnd: (_) => _grip = null,
+                                  child: _cropStage(path, box.size),
                                 ),
                               ),
                             ],
@@ -380,30 +363,37 @@ class _CropScreenState extends State<CropScreen> {
       _width * size.width,
       _height * size.height,
     );
+    final turned = Transform.rotate(
+      angle: _degrees * math.pi / 180,
+      child: Image.file(
+        File(path),
+        width: size.width,
+        height: size.height,
+        fit: BoxFit.fill,
+        gaplessPlayback: true,
+      ),
+    );
     return SizedBox(
       width: size.width,
       height: size.height,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          Image.file(
-            File(path),
-            width: size.width,
-            height: size.height,
-            fit: BoxFit.fill,
-            gaplessPlayback: true,
-          ),
+          turned,
           Positioned.fill(
             child: ColoredBox(color: Colors.white.withValues(alpha: 0.55)),
           ),
           ClipRect(
             clipper: _RectClipper(crop),
-            child: Image.file(
-              File(path),
-              width: size.width,
-              height: size.height,
-              fit: BoxFit.fill,
-              gaplessPlayback: true,
+            child: Transform.rotate(
+              angle: _degrees * math.pi / 180,
+              child: Image.file(
+                File(path),
+                width: size.width,
+                height: size.height,
+                fit: BoxFit.fill,
+                gaplessPlayback: true,
+              ),
             ),
           ),
           CustomPaint(size: size, painter: _CropGridPainter(crop)),
@@ -432,7 +422,6 @@ class _CropScreenState extends State<CropScreen> {
   }
 
   Widget _controls() {
-    final t = ((_degrees + 45) / 90).clamp(0.0, 1.0);
     return Column(
       children: [
         Material(
@@ -509,69 +498,66 @@ class _CropScreenState extends State<CropScreen> {
           color: Colors.white,
           child: Column(
             children: [
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 58,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    const side = 28.0;
-                    final width = constraints.maxWidth - side * 2;
-                    return Stack(
-                      children: [
-                        Positioned(
-                          left: (side + t * width - 14).clamp(
-                            0.0,
-                            math.max(constraints.maxWidth - 36, 0),
-                          ),
-                          top: 0,
-                          child: Text(
-                            '${_degrees.round()}°',
-                            style: const TextStyle(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          left: side,
-                          right: side,
-                          bottom: 10,
-                          child: CustomPaint(
-                            size: Size(width, 22),
-                            painter: const _TickPainter(),
-                          ),
-                        ),
-                        Positioned(
-                          left: 4,
-                          right: 4,
-                          bottom: 0,
-                          child: SliderTheme(
-                            data: SliderTheme.of(context).copyWith(
-                              activeTrackColor: Colors.transparent,
-                              inactiveTrackColor: Colors.transparent,
-                              thumbColor: AppColors.primary,
-                              overlayColor: AppColors.primary.withValues(
-                                alpha: 0.15,
-                              ),
-                              trackHeight: 22,
-                              thumbShape: const _BarThumb(),
-                            ),
-                            child: Slider(
-                              min: -45,
-                              max: 45,
-                              value: _degrees,
-                              onChanged: (value) {
-                                setState(
-                                  () => _degrees = value.roundToDouble(),
-                                );
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                child: Column(
+                  children: [
+                    Text(
+                      '${_degrees.round()}°',
+                      style: const TextStyle(
+                        color: _scaleYellow,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        left: 10,
+                        right: 10,
+                        bottom: 12,
+                      ),
+                      child: SizedBox(
+                        height: 22,
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final pxPerDegree = constraints.maxWidth / 90;
+                            return GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onHorizontalDragUpdate: (details) {
+                                if (pxPerDegree <= 0) return;
+                                final next =
+                                    (_degrees - details.delta.dx / pxPerDegree)
+                                        .clamp(-45.0, 45.0);
+                                setState(() => _degrees = next.roundToDouble());
                               },
-                            ),
-                          ),
+                              child: Stack(
+                                alignment: Alignment.bottomCenter,
+                                children: [
+                                  CustomPaint(
+                                    size: Size(constraints.maxWidth, 28),
+                                    painter: _TickPainter(degrees: _degrees),
+                                  ),
+                                  const SizedBox(
+                                    width: 2,
+                                    height: 20,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        color: _scaleYellow,
+                                        borderRadius: BorderRadius.all(
+                                          Radius.circular(1),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         ),
-                      ],
-                    );
-                  },
+                      ),
+                    ),
+                  ],
                 ),
               ),
               SizedBox(
@@ -734,61 +720,34 @@ class _CropGridPainter extends CustomPainter {
 }
 
 class _TickPainter extends CustomPainter {
-  const _TickPainter();
+  const _TickPainter({required this.degrees});
+
+  final double degrees;
 
   @override
   void paint(Canvas canvas, Size size) {
-    const count = 41;
-    final mid = count ~/ 2;
-    for (var i = 0; i < count; i++) {
-      if (i == mid) continue;
-      final major = i % 5 == 0;
+    final center = size.width / 2;
+    final px = size.width / 60;
+    for (var deg = -45; deg <= 45; deg++) {
+      final x = center + (deg - degrees) * px;
+      if (x < -2 || x > size.width + 2) continue;
+      final major = deg % 5 == 0;
       final paint = Paint()
-        ..color = major ? Colors.grey : const Color(0xFF6A6A6A)
-        ..strokeWidth = major ? 2 : 1
+        ..color = major ? Colors.black : const Color(0xFF5C5C5C)
+        ..strokeWidth = major ? 1.6 : 1
         ..strokeCap = StrokeCap.round;
-      final h = major ? 12.0 : 7.0;
-      final x = size.width * i / (count - 1);
-      final y = size.height - 2;
+      final h = major ? 16.0 : 11.0;
+      final y = size.height - 1;
       canvas.drawLine(Offset(x, y - h), Offset(x, y), paint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _TickPainter oldDelegate) =>
+      oldDelegate.degrees != degrees;
 }
 
-class _BarThumb extends SliderComponentShape {
-  const _BarThumb();
-
-  @override
-  Size getPreferredSize(bool isEnabled, bool isDiscrete) => const Size(4, 22);
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset center, {
-    required Animation<double> activationAnimation,
-    required Animation<double> enableAnimation,
-    required bool isDiscrete,
-    required TextPainter labelPainter,
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required TextDirection textDirection,
-    required double value,
-    required double textScaleFactor,
-    required Size sizeWithOverflow,
-  }) {
-    final canvas = context.canvas;
-    final rect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: 3, height: 20),
-      const Radius.circular(2),
-    );
-    canvas.drawRRect(rect, Paint()..color = AppColors.primary);
-  }
-}
-
-/// Shows a photo the way the crop page saved it: cut first, then rotate.
+/// Shows a photo the way the crop page saved it: the frame stays upright and the picture is rotated inside it.
 class CroppedPhotoView extends StatelessWidget {
   const CroppedPhotoView({
     super.key,
@@ -822,6 +781,12 @@ class CroppedPhotoView extends StatelessWidget {
       gaplessPlayback: true,
       filterQuality: FilterQuality.low,
     );
+    if (photo.cropDegrees.abs() > 0.05) {
+      image = Transform.rotate(
+        angle: photo.cropDegrees * math.pi / 180,
+        child: image,
+      );
+    }
     image = ClipRect(
       child: Align(
         alignment: Alignment(
@@ -833,12 +798,6 @@ class CroppedPhotoView extends StatelessWidget {
         child: image,
       ),
     );
-    if (photo.cropDegrees.abs() > 0.05) {
-      image = Transform.rotate(
-        angle: photo.cropDegrees * math.pi / 180,
-        child: image,
-      );
-    }
     return FittedBox(fit: fit, child: image);
   }
 }

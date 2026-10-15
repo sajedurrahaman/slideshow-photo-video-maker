@@ -30,7 +30,30 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
       cropTop > 0.001 ||
       cropWidthN < 0.999 ||
       cropHeightN < 0.999;
-  if (hasRect) {
+  final cropDegrees = (args['cropDegrees'] as num?)?.toDouble() ?? 0;
+  if (cropDegrees.abs() > 0.05) {
+    final srcW = filtered.width.toDouble();
+    final srcH = filtered.height.toDouble();
+    final leftPx = cropLeft * srcW;
+    final topPx = cropTop * srcH;
+    final widthPx = (cropWidthN * srcW).clamp(1, srcW);
+    final heightPx = (cropHeightN * srcH).clamp(1, srcH);
+    if (filtered.numChannels < 4) {
+      filtered = filtered.convert(numChannels: 4);
+    }
+    filtered = img.copyRotate(
+      filtered,
+      angle: cropDegrees,
+      interpolation: img.Interpolation.linear,
+    );
+    final rawX = filtered.width / 2 + (leftPx - srcW / 2);
+    final rawY = filtered.height / 2 + (topPx - srcH / 2);
+    final x = rawX.round().clamp(0, filtered.width - 1);
+    final y = rawY.round().clamp(0, filtered.height - 1);
+    final cw = widthPx.round().clamp(1, filtered.width - x);
+    final ch = heightPx.round().clamp(1, filtered.height - y);
+    filtered = img.copyCrop(filtered, x: x, y: y, width: cw, height: ch);
+  } else if (hasRect) {
     final x = (cropLeft * filtered.width).round().clamp(0, filtered.width - 1);
     final y = (cropTop * filtered.height).round().clamp(0, filtered.height - 1);
     final cw = (cropWidthN * filtered.width).round().clamp(1, filtered.width - x);
@@ -57,17 +80,6 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
         height: cropHeight,
       );
     }
-  }
-  final cropDegrees = (args['cropDegrees'] as num?)?.toDouble() ?? 0;
-  if (cropDegrees.abs() > 0.05) {
-    if (filtered.numChannels < 4) {
-      filtered = filtered.convert(numChannels: 4);
-    }
-    filtered = img.copyRotate(
-      filtered,
-      angle: cropDegrees,
-      interpolation: img.Interpolation.linear,
-    );
   }
   if (args['mirrored'] as bool) img.flipHorizontal(filtered);
   if (args['flipped'] as bool) img.flipVertical(filtered);
