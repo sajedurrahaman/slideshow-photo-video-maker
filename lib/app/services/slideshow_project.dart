@@ -3,8 +3,10 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 
@@ -165,6 +167,11 @@ class SlideshowProject extends ChangeNotifier {
   final ValueNotifier<double> previewPositionListenable = ValueNotifier<double>(
     0,
   );
+
+  /// Photo under the playhead while the user scrubs a paused timeline
+  /// before preview frames exist.
+  final ValueNotifier<({int index, double fraction})?> scrubLive =
+      ValueNotifier<({int index, double fraction})?>(null);
 
   /// In-memory JPEG frames for smooth editor preview (no % overlay).
   final List<Uint8List> _previewMemoryFrames = [];
@@ -1390,6 +1397,39 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
+  int _sharpenToken = 0;
+
+  /// Gallery Next only copies a small thumb so the editor opens immediately.
+  /// This replaces each thumb with a sharp preview file after the screen is up.
+  Future<void> sharpenPhotoSources() async {
+    final token = ++_sharpenToken;
+    for (var i = 0; i < photos.length; i++) {
+      if (token != _sharpenToken) return;
+      final photo = photos[i];
+      try {
+        final file = File(photo.path);
+        if (!await file.exists()) continue;
+        if (await file.length() > 350 * 1024) continue;
+        final asset = await AssetEntity.fromId(photo.id);
+        if (asset == null || token != _sharpenToken) continue;
+        final bytes = await asset
+            .thumbnailDataWithSize(
+              const ThumbnailSize(1800, 1800),
+              quality: 93,
+            )
+            .timeout(const Duration(seconds: 8));
+        if (bytes == null || bytes.length < await file.length()) continue;
+        if (token != _sharpenToken || i >= photos.length) return;
+        if (photos[i].id != photo.id) continue;
+        final dest = File('${photo.path}.sharp.jpg');
+        await dest.writeAsBytes(bytes, flush: true);
+        photos[i] = photos[i].copyWith(path: dest.path);
+        await FileImage(file).evict();
+        notifyListeners();
+      } catch (_) {}
+    }
+  }
+
   /// Quick single-frame preview for live UI without full render.
   Future<void> refreshLivePreview() async {
     if (photos.isEmpty) {
@@ -1408,6 +1448,47 @@ class SlideshowProject extends ChangeNotifier {
       notifyListeners();
     } catch (_) {
       // Keep previous preview on failure.
+    }
+  }
+
+  /// Paused timeline scrub. Updates the clock and the visible preview.
+  void seekPreviewSeconds(double sec) {
+    if (isPreviewPlaying || photos.isEmpty) return;
+    final duration = estimatedDurationSec;
+    final clamped = duration <= 0 ? 0.0 : sec.clamp(0.0, duration).toDouble();
+    _setPreviewPosition(clamped);
+    if (isPreviewReady && _previewMemoryFrames.isNotEmpty) {
+      if (scrubLive.value != null) scrubLive.value = null;
+      final index = (clamped * previewFps)
+          .round()
+          .clamp(0, _previewMemoryFrames.length - 1)
+          .toInt();
+      if (index == previewFrameIndex && previewFrameListenable.value != null) {
+        return;
+      }
+      previewFrameIndex = index;
+      _setPreviewFrame(_previewMemoryFrames[index]);
+      return;
+    }
+    var t = clamped - (startingCard?.durationSec ?? 0);
+    if (t < 0) {
+      scrubLive.value = (index: 0, fraction: 0);
+      return;
+    }
+    for (var i = 0; i < photos.length; i++) {
+      final span = photos[i].durationSec;
+      if (t <= span || i == photos.length - 1) {
+        final fraction = span <= 0 ? 0.0 : (t / span).clamp(0.0, 1.0);
+        final current = scrubLive.value;
+        if (current != null &&
+            current.index == i &&
+            (current.fraction - fraction).abs() < 0.008) {
+          return;
+        }
+        scrubLive.value = (index: i, fraction: fraction);
+        return;
+      }
+      t -= span;
     }
   }
 

@@ -202,8 +202,10 @@ class _CropScreenState extends State<CropScreen> {
       if ((local - entry.value).distance <= reach) return entry.key;
     }
     const edge = 24.0;
-    final insideX = local.dx >= rect.left - edge && local.dx <= rect.right + edge;
-    final insideY = local.dy >= rect.top - edge && local.dy <= rect.bottom + edge;
+    final insideX =
+        local.dx >= rect.left - edge && local.dx <= rect.right + edge;
+    final insideY =
+        local.dy >= rect.top - edge && local.dy <= rect.bottom + edge;
     if ((local.dy - rect.top).abs() <= edge && insideX) return _Grip.top;
     if ((local.dy - rect.bottom).abs() <= edge && insideX) return _Grip.bottom;
     if ((local.dx - rect.left).abs() <= edge && insideY) return _Grip.left;
@@ -396,7 +398,8 @@ class _CropScreenState extends State<CropScreen> {
                             math.max(constraints.maxWidth - 36, 1),
                             math.max(constraints.maxHeight - 36, 1),
                           );
-                          final crop = _fittedCrop(space).shift(const Offset(18, 18));
+                          final crop = _fittedCrop(space)
+                              .shift(const Offset(18, 18));
                           final imageW = crop.width / _width;
                           final imageH = crop.height / _height;
                           final image = _imageInside(crop, imageW, imageH);
@@ -429,6 +432,7 @@ class _CropScreenState extends State<CropScreen> {
           File(path),
           width: image.width,
           height: image.height,
+          filterQuality: FilterQuality.high,
           fit: BoxFit.fill,
           gaplessPlayback: true,
         ),
@@ -445,9 +449,7 @@ class _CropScreenState extends State<CropScreen> {
           clipper: _RectClipper(crop),
           child: Stack(
             fit: StackFit.expand,
-            children: [
-              Positioned.fromRect(rect: image, child: photo),
-            ],
+            children: [Positioned.fromRect(rect: image, child: photo)],
           ),
         ),
         CustomPaint(painter: _CropGridPainter(crop)),
@@ -806,10 +808,14 @@ class CroppedPhotoView extends StatelessWidget {
     super.key,
     required this.photo,
     this.fit = BoxFit.contain,
+    this.filterQuality = FilterQuality.high,
+    this.cacheWidth,
   });
 
   final SlideshowPhoto photo;
   final BoxFit fit;
+  final FilterQuality filterQuality;
+  final int? cacheWidth;
 
   bool get _hasCrop {
     return photo.cropLeft.abs() > 0.001 ||
@@ -826,7 +832,8 @@ class CroppedPhotoView extends StatelessWidget {
         File(photo.path),
         fit: fit,
         gaplessPlayback: true,
-        filterQuality: FilterQuality.low,
+        filterQuality: filterQuality,
+        cacheWidth: cacheWidth,
       );
     }
     return FittedBox(
@@ -840,7 +847,8 @@ class CroppedPhotoView extends StatelessWidget {
         child: Image.file(
           File(photo.path),
           gaplessPlayback: true,
-          filterQuality: FilterQuality.low,
+          filterQuality: filterQuality,
+          cacheWidth: cacheWidth,
         ),
       ),
     );
@@ -875,10 +883,7 @@ class _CropFrame extends SingleChildRenderObjectWidget {
   }
 
   @override
-  void updateRenderObject(
-    BuildContext context,
-    _RenderCropFrame renderObject,
-  ) {
+  void updateRenderObject(BuildContext context, _RenderCropFrame renderObject) {
     renderObject
       ..left = left
       ..top = top

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -80,14 +81,21 @@ class _EditorScreenState extends State<EditorScreen> {
 
   SlideshowProject? _listenedProject;
 
+  bool _syncingStrip = false;
+  bool _userScrubbing = false;
+
   @override
   void initState() {
     super.initState();
+    _stripController.addListener(_onStripScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // Let the editor paint first so Next→route is not blocked by decode.
       await Future<void>.delayed(const Duration(milliseconds: 50));
       if (!mounted) return;
-      await context.read<SlideshowProject>().refreshLivePreview();
+      final project = context.read<SlideshowProject>();
+      await project.refreshLivePreview();
+      if (!mounted) return;
+      unawaited(project.sharpenPhotoSources());
     });
   }
 
@@ -106,7 +114,21 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  void _onStripScroll() {
+    if (_syncingStrip || !_stripController.hasClients || !mounted) return;
+    final project = _listenedProject;
+    if (project == null || project.isPreviewPlaying) return;
+    if (project.selectedPhotoIndex != null) return;
+    _userScrubbing = true;
+    final seconds =
+        _stripController.offset / _pixelsPerSecond +
+        (project.startingCard?.durationSec ?? 0);
+    project.seekPreviewSeconds(seconds);
+    _userScrubbing = false;
+  }
+
   void _onPreviewPosition() {
+    if (_userScrubbing) return;
     if (!mounted || _tool != null) return;
     if (!_stripController.hasClients) return;
     final project = _listenedProject;
@@ -344,7 +366,9 @@ class _EditorScreenState extends State<EditorScreen> {
     final max = _stripController.position.maxScrollExtent;
     final next = target.clamp(0.0, max).toDouble();
     if ((_stripController.offset - next).abs() < 0.5) return;
+    _syncingStrip = true;
     _stripController.jumpTo(next);
+    _syncingStrip = false;
   }
 
   Widget _photoStrip(SlideshowProject project, double playheadX) {
@@ -425,6 +449,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                             child: CroppedPhotoView(
                                               photo: photo,
                                               fit: BoxFit.fill,
+                                              filterQuality: FilterQuality.low,
+                                              cacheWidth: 240,
                                             ),
                                           ),
                                         ),
@@ -1767,14 +1793,14 @@ class _EditorScreenState extends State<EditorScreen> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
               child: Center(
-                child: AspectRatio(
+              child: AspectRatio(
                   aspectRatio: aspect,
-                  child: DecoratedBox(
+                child: DecoratedBox(
                     decoration: const BoxDecoration(color: Colors.black),
-                    child: ClipRRect(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
+                  child: ClipRRect(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
                           if (project.selectedPhotoIndex != null)
                             _LiveClipPreview(
                               key: ValueKey(project.selectedPhotoIndex),
@@ -1804,12 +1830,38 @@ class _EditorScreenState extends State<EditorScreen> {
                                   setState(() => _liveMode = _LiveMode.idle);
                                 }
                               },
-                            )
-                          else
+                          )
+                        else
                             RepaintBoundary(
-                              child: ValueListenableBuilder<Uint8List?>(
-                                valueListenable: project.previewFrameListenable,
-                                builder: (context, bytes, _) {
+                              child: ValueListenableBuilder<
+                                ({int index, double fraction})?
+                              >(
+                                valueListenable: project.scrubLive,
+                                builder: (context, scrub, _) {
+                                  if (scrub != null &&
+                                      !project.isPreviewReady &&
+                                      scrub.index < project.photos.length) {
+                                    final photo = project.photos[scrub.index];
+                                    return _LiveClipPreview(
+                                      key: ValueKey('scrub-${scrub.index}'),
+                                      photoIndex: scrub.index,
+                                      photo: photo,
+                                      backgroundArgb:
+                                          photo.backgroundArgb ??
+                                          project.backgroundArgb,
+                                      backgroundBlurLevel:
+                                          photo.backgroundBlurLevel,
+                                      replayToken: 0,
+                                      mode: _LiveMode.idle,
+                                      holdFraction: scrub.fraction,
+                                      onFraction: (_) {},
+                                      onFinished: () {},
+                                    );
+                                  }
+                                  return ValueListenableBuilder<Uint8List?>(
+                                    valueListenable:
+                                        project.previewFrameListenable,
+                                    builder: (context, bytes, _) {
                                   if (bytes != null) {
                                     return Image.memory(
                                       bytes,
@@ -1823,13 +1875,16 @@ class _EditorScreenState extends State<EditorScreen> {
                                       File(project.photos.first.path),
                                       fit: BoxFit.contain,
                                       gaplessPlayback: true,
+                                      filterQuality: FilterQuality.high,
                                     );
                                   }
                                   return const Center(
-                                    child: Text(
-                                      'No preview',
-                                      style: TextStyle(color: Colors.white54),
-                                    ),
+                            child: Text(
+                              'No preview',
+                              style: TextStyle(color: Colors.white54),
+                            ),
+                                  );
+                                    },
                                   );
                                 },
                               ),
@@ -1863,37 +1918,37 @@ class _EditorScreenState extends State<EditorScreen> {
                               ),
                             ),
                           // Export-only progress.
-                          if (project.isProcessing)
-                            Container(
-                              color: Colors.black54,
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    CircularProgressIndicator(
+                        if (project.isProcessing)
+                          Container(
+                            color: Colors.black54,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(
                                       color: AppColors.primary,
-                                      value: project.processProgress > 0
-                                          ? project.processProgress
-                                          : null,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
+                                    value: project.processProgress > 0
+                                        ? project.processProgress
+                                        : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
                                       'Exporting ${(project.processProgress * 100).toInt()}%',
                                       style: const TextStyle(
                                         color: Colors.white,
                                       ),
-                                    ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
-                        ],
-                      ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
+          ),
           ),
 
           if (project.selectedPhotoIndex != null) ...[
@@ -2441,7 +2496,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+        return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -2466,7 +2521,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -2614,6 +2669,7 @@ class _LiveClipPreview extends StatefulWidget {
     required this.onFinished,
     this.inSecOverride,
     this.outSecOverride,
+    this.holdFraction,
   });
 
   final int photoIndex;
@@ -2624,6 +2680,9 @@ class _LiveClipPreview extends StatefulWidget {
   final _LiveMode mode;
   final double? inSecOverride;
   final double? outSecOverride;
+
+  /// When set, the clip stays on this fraction instead of playing.
+  final double? holdFraction;
   final ValueChanged<double> onFraction;
   final VoidCallback onFinished;
 
@@ -2640,6 +2699,10 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
   void initState() {
     super.initState();
     _clock = AnimationController(vsync: this, duration: _clipDuration);
+    if (widget.holdFraction != null) {
+      _clock.value = widget.holdFraction!.clamp(0.0, 1.0);
+      return;
+    }
     _clock.value = _settledFraction();
     _scheduleRun();
   }
@@ -2648,6 +2711,14 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
   void didUpdateWidget(covariant _LiveClipPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     _clock.duration = _clipDuration;
+    if (widget.holdFraction != null) {
+      _run++;
+      _clock
+        ..removeListener(_onTick)
+        ..stop();
+      _setClock(widget.holdFraction!.clamp(0.0, 1.0));
+      return;
+    }
     if (widget.replayToken != oldWidget.replayToken ||
         widget.mode != oldWidget.mode) {
       if (widget.mode == _LiveMode.idle &&
@@ -2829,6 +2900,7 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
     Widget image = CroppedPhotoView(
       photo: widget.photo,
       fit: fit,
+      filterQuality: FilterQuality.high,
     );
     final turns = widget.photo.rotationQuarterTurns % 4;
     if (turns != 0) {
@@ -2898,9 +2970,9 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
                   );
                 }
                 return ClipRect(
-                  child: Stack(
+          child: Stack(
                     fit: StackFit.expand,
-                    children: [
+            children: [
                       ImageFiltered(
                         imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: _photoImage(),
@@ -3366,7 +3438,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-                Positioned(
+              Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -3426,9 +3498,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                    ),
-                  ),
-              ],
+                ),
+              ),
+            ],
             ),
           ),
         );
