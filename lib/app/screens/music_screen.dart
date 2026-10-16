@@ -22,15 +22,6 @@ class _MusicScreenState extends State<MusicScreen>
   String? _playingPath;
   late final TabController _tabs;
 
-  static const _builtin = [
-    MusicTrack(path: 'assets/music/songs_1.mp3', title: 'Popular Beat', isAsset: true),
-    MusicTrack(path: 'assets/music/songs_2.mp3', title: 'Soft Piano', isAsset: true),
-    MusicTrack(path: 'assets/music/songs_3.mp3', title: 'Upbeat Pop', isAsset: true),
-    MusicTrack(path: 'assets/music/songs_4.mp3', title: 'Chill Wave', isAsset: true),
-    MusicTrack(path: 'assets/music/songs_5.mp3', title: 'Cinematic', isAsset: true),
-    MusicTrack(path: 'assets/music/songs_6.mp3', title: 'Happy Day', isAsset: true),
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -91,7 +82,7 @@ class _MusicScreenState extends State<MusicScreen>
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Music'),
+        title: const Text('Library'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -132,7 +123,7 @@ class _MusicScreenState extends State<MusicScreen>
                       },
                     ),
                     const SizedBox(height: 8),
-                    ..._builtin.map((track) {
+                    ...MusicTrack.popular.map((track) {
                       final isSel = selected?.path == track.path;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8),

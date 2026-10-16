@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
@@ -138,6 +139,9 @@ class SlideshowProject extends ChangeNotifier {
   String? selectedFrameAsset;
   double slideDurationSec = AppConstants.defaultDurationSec;
   MusicTrack? music;
+
+  /// Device imports shown under the Local music tab.
+  final List<MusicTrack> localMusicTracks = [];
   AspectPreset aspectRatio = AspectPreset.square;
   ExportQuality exportQuality = ExportQuality.p720;
   int backgroundArgb = 0xFF000000;
@@ -181,6 +185,10 @@ class SlideshowProject extends ChangeNotifier {
   String? _previewCacheKey;
   int _previewGeneration = 0;
   Timer? _previewTimer;
+
+  /// Editor Play button — mixes selected music with the frame preview.
+  AudioPlayer? _previewMusic;
+  String? _previewMusicPath;
 
   void _setPreviewFrame(Uint8List? bytes, {bool syncLegacy = true}) {
     previewFrameListenable.value = bytes;
@@ -502,7 +510,7 @@ class SlideshowProject extends ChangeNotifier {
     try {
       final (w, h) = previewSize;
       final image = await _preparePhoto(photos[index], w, h);
-      final baked = await _finalize(image);
+      final baked = await _finalize(image, includeDecorativeFrame: false);
       _setPreviewFrame(
         Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
       );
@@ -671,7 +679,6 @@ class SlideshowProject extends ChangeNotifier {
       selectedSlideTransition.id,
       slideDurationSec,
       aspectRatio.name,
-      selectedFrameAsset ?? '',
       backgroundArgb,
       startingCard?.title,
       startingCard?.durationSec,
@@ -685,12 +692,72 @@ class SlideshowProject extends ChangeNotifier {
     _previewGeneration++;
     _previewTimer?.cancel();
     _previewTimer = null;
+    unawaited(_stopPreviewMusic());
     final wasPreparing = isPreparingPreview;
     isPreparingPreview = false;
     if (isPreviewPlaying || wasPreparing) {
       isPreviewPlaying = false;
       isPlaying = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _stopPreviewMusic() async {
+    try {
+      await _previewMusic?.pause();
+    } catch (_) {}
+  }
+
+  Future<void> _startPreviewMusicAt(
+    double videoSec, {
+    bool forceSeek = true,
+  }) async {
+    final m = music;
+    if (m == null) {
+      await _stopPreviewMusic();
+      return;
+    }
+    try {
+      _previewMusic ??= AudioPlayer();
+      final clipStart = m.clipStartSec;
+
+      if (_previewMusicPath != m.path) {
+        if (m.isAsset) {
+          await _previewMusic!.setAsset(m.path);
+        } else {
+          await _previewMusic!.setFilePath(m.path);
+        }
+        _previewMusicPath = m.path;
+      }
+
+      await _previewMusic!.setVolume((m.volume / 100.0).clamp(0.0, 1.0));
+
+      final tStart = m.timelineStartSec;
+      final tEnd = m.timelineEndSec ?? estimatedDurationSec;
+      if (videoSec < tStart || videoSec >= tEnd) {
+        await _previewMusic!.pause();
+        return;
+      }
+
+      final sourceDur = m.duration?.inMilliseconds != null
+          ? m.duration!.inMilliseconds / 1000.0
+          : (_previewMusic!.duration?.inMilliseconds ?? 60000) / 1000.0;
+      final clipEnd =
+          (m.clipEndSec ?? sourceDur).clamp(clipStart + 0.1, sourceDur);
+      final clipLen = math.max(0.1, clipEnd - clipStart);
+      final into = videoSec - tStart;
+      final audioSec = clipStart + (into % clipLen);
+
+      if (forceSeek || !_previewMusic!.playing) {
+        await _previewMusic!.seek(
+          Duration(milliseconds: (audioSec * 1000).round()),
+        );
+      }
+      if (!_previewMusic!.playing) {
+        await _previewMusic!.play();
+      }
+    } catch (_) {
+      // Video preview still works if audio fails to load.
     }
   }
 
@@ -785,9 +852,11 @@ class SlideshowProject extends ChangeNotifier {
     _setPreviewPosition(previewFrameIndex / previewFps);
     _setPreviewFrame(_previewMemoryFrames[previewFrameIndex]);
     notifyListeners(); // play/pause icon only
+    unawaited(_startPreviewMusicAt(previewPositionSec));
 
     // Slightly gentler than encode FPS so JPEG decode can keep up (less blink).
     final frameMs = (1000 / previewFps).round().clamp(28, 90);
+    var musicSyncCounter = 0;
     _previewTimer = Timer.periodic(Duration(milliseconds: frameMs), (timer) {
       if (generation != _previewGeneration || !isPreviewPlaying) {
         timer.cancel();
@@ -806,6 +875,7 @@ class SlideshowProject extends ChangeNotifier {
         if (_previewMemoryFrames.isNotEmpty) {
           _setPreviewFrame(_previewMemoryFrames[previewFrameIndex]);
         }
+        unawaited(_stopPreviewMusic());
         notifyListeners(); // stop icon
         return;
       }
@@ -813,6 +883,13 @@ class SlideshowProject extends ChangeNotifier {
       // Only update listenables — do NOT notifyListeners (avoids full rebuild blink).
       _setPreviewPosition(next / previewFps);
       _setPreviewFrame(_previewMemoryFrames[next]);
+      // Resume / pause music if we enter or leave the timeline music window.
+      musicSyncCounter++;
+      if (musicSyncCounter % 15 == 0) {
+        unawaited(
+          _startPreviewMusicAt(previewPositionSec, forceSeek: false),
+        );
+      }
     });
   }
 
@@ -950,7 +1027,7 @@ class SlideshowProject extends ChangeNotifier {
     List<img.Image> overlays,
     List<int> frameCursor,
   ) async {
-    final baked = await _finalize(image);
+    final baked = await _finalize(image, includeDecorativeFrame: false);
     var composed = baked;
     if (overlays.isNotEmpty) {
       final effectIndex =
@@ -1078,8 +1155,20 @@ class SlideshowProject extends ChangeNotifier {
 
 
   void selectFrame(String? assetPath) {
+    if (selectedFrameAsset == assetPath) return;
     selectedFrameAsset = assetPath;
-    notifyListeners();
+    // Editor shows the frame as a live overlay. Drop any JPEG preview that
+    // already baked an older frame so the two cannot stack.
+    if (_previewMemoryFrames.isNotEmpty || previewFrameListenable.value != null) {
+      stopPreviewPlayback();
+      _previewMemoryFrames.clear();
+      _previewSegmentCounts.clear();
+      _previewCacheKey = null;
+      isPreviewReady = false;
+      unawaited(refreshLivePreview());
+    } else {
+      notifyListeners();
+    }
   }
 
   void setDuration(double seconds) {
@@ -1091,13 +1180,109 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   void setMusic(MusicTrack? track) {
-    music = track;
+    music = track?.copyWith(
+      timelineStartSec: 0,
+      clearTimelineEnd: true,
+      clipStartSec: 0,
+      clearClipEnd: true,
+    );
+    _previewMusicPath = null;
+    if (!isPreviewPlaying) unawaited(_stopPreviewMusic());
     notifyListeners();
+    if (music != null) unawaited(_probeMusicDuration(music!));
+  }
+
+  void addLocalMusicTrack(MusicTrack track) {
+    if (!localMusicTracks.any((t) => t.path == track.path)) {
+      localMusicTracks.add(track);
+    }
+    music = track.copyWith(
+      timelineStartSec: 0,
+      clearTimelineEnd: true,
+      clipStartSec: 0,
+      clearClipEnd: true,
+    );
+    _previewMusicPath = null;
+    if (!isPreviewPlaying) unawaited(_stopPreviewMusic());
+    notifyListeners();
+    unawaited(_probeMusicDuration(music!));
+  }
+
+  /// Resolves real file length so Edit cut handles scale to any song duration.
+  Future<void> _probeMusicDuration(MusicTrack track) async {
+    final player = AudioPlayer();
+    try {
+      final d = track.isAsset
+          ? await player.setAsset(track.path)
+          : await player.setFilePath(track.path);
+      final resolved = d ?? player.duration;
+      if (resolved == null || resolved.inMilliseconds <= 0) return;
+      if (music?.path != track.path) return;
+      music = music!.copyWith(duration: resolved);
+      notifyListeners();
+    } catch (_) {
+      // Keep unknown duration; Edit sheet will retry.
+    } finally {
+      await player.dispose();
+    }
   }
 
   void setMusicVolume(int volume) {
     if (music == null) return;
     music = music!.copyWith(volume: volume.clamp(0, 100));
+    notifyListeners();
+  }
+
+  /// Places music on the video timeline: plays from [startSec] to [endSec].
+  /// Set [notify] false while dragging handles for smooth UI (commit with notify at end).
+  void setMusicTimelineRange(
+    double startSec,
+    double endSec, {
+    bool notify = true,
+  }) {
+    if (music == null) return;
+    final maxDur = estimatedDurationSec;
+    if (maxDur <= 0.5) return;
+    final minLen = 0.5;
+    var start = startSec.clamp(0.0, maxDur - minLen);
+    var end = endSec.clamp(start + minLen, maxDur);
+    if ((music!.timelineStartSec - start).abs() < 0.001 &&
+        ((music!.timelineEndSec ?? maxDur) - end).abs() < 0.001) {
+      return;
+    }
+    music = music!.copyWith(timelineStartSec: start, timelineEndSec: end);
+    if (notify) notifyListeners();
+  }
+
+  /// Slides the music clip left/right on the video timeline (keeps duration).
+  void shiftMusicTimeline(double deltaSec, {bool notify = true}) {
+    if (music == null || deltaSec == 0) return;
+    final maxDur = estimatedDurationSec;
+    final start = music!.timelineStartSec;
+    final end = music!.timelineEndSec ?? maxDur;
+    final len = (end - start).clamp(0.5, maxDur);
+    final newStart = (start + deltaSec).clamp(0.0, maxDur - len);
+    setMusicTimelineRange(newStart, newStart + len, notify: notify);
+  }
+
+  /// Trims which portion of the source audio file is used.
+  void setMusicClip({
+    double? clipStartSec,
+    double? clipEndSec,
+    bool? fadeIn,
+    bool? fadeOut,
+    Duration? duration,
+    bool clearClipEnd = false,
+  }) {
+    if (music == null) return;
+    music = music!.copyWith(
+      clipStartSec: clipStartSec,
+      clipEndSec: clipEndSec,
+      clearClipEnd: clearClipEnd,
+      fadeIn: fadeIn,
+      fadeOut: fadeOut,
+      duration: duration,
+    );
     notifyListeners();
   }
 
@@ -1225,10 +1410,15 @@ class SlideshowProject extends ChangeNotifier {
     return prepared;
   }
 
-  Future<img.Image> _finalize(img.Image frame) {
+  /// [includeDecorativeFrame] is true for export. Editor preview keeps the
+  /// decorative frame as a live Image overlay so switching frames never stacks.
+  Future<img.Image> _finalize(
+    img.Image frame, {
+    bool includeDecorativeFrame = true,
+  }) {
     return FrameCompositor.bakeOverlays(
       base: frame,
-      frameAsset: selectedFrameAsset,
+      frameAsset: includeDecorativeFrame ? selectedFrameAsset : null,
       overlays: List.of(overlays),
     );
   }
@@ -1441,7 +1631,7 @@ class SlideshowProject extends ChangeNotifier {
       final (w, h) = previewSize;
       final index = selectedPhotoIndex ?? 0;
       final prepared = await _preparePhoto(photos[index], w, h);
-      final baked = await _finalize(prepared);
+      final baked = await _finalize(prepared, includeDecorativeFrame: false);
       _setPreviewFrame(
         Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
       );

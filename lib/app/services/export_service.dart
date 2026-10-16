@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
@@ -52,9 +53,46 @@ class ExportService {
         ? await EffectOverlayService.assetFilePath()
         : null;
 
-    final volumeFilter = (music != null && music.volume < 100)
-        ? ' -af volume=${(music.volume / 100.0).toStringAsFixed(2)}'
-        : '';
+    final videoDur = project.estimatedDurationSec;
+    final musicStart = (music?.timelineStartSec ?? 0).clamp(0.0, videoDur);
+    final musicEnd =
+        (music?.timelineEndSec ?? videoDur).clamp(musicStart + 0.1, videoDur);
+    final musicSeg = (musicEnd - musicStart).clamp(0.1, videoDur);
+
+    final clipStart = (music?.clipStartSec ?? 0).clamp(0.0, 36000.0);
+    final sourceDur =
+        music?.duration?.inMilliseconds != null
+            ? music!.duration!.inMilliseconds / 1000.0
+            : (clipStart + musicSeg + 1);
+    final clipEnd = (music?.clipEndSec ?? sourceDur)
+        .clamp(clipStart + 0.1, math.max(clipStart + 0.1, sourceDur));
+
+    final audioFilters = <String>[
+      'atrim=${clipStart.toStringAsFixed(3)}:${clipEnd.toStringAsFixed(3)}',
+      'asetpts=PTS-STARTPTS',
+      'aloop=loop=-1:size=2e+09',
+      'atrim=0:${musicSeg.toStringAsFixed(3)}',
+      'asetpts=PTS-STARTPTS',
+    ];
+    if (music?.fadeIn == true) {
+      audioFilters.add('afade=t=in:st=0:d=1.5');
+    }
+    if (music?.fadeOut == true) {
+      final fadeStart = math.max(0.0, musicSeg - 1.5);
+      audioFilters.add(
+        'afade=t=out:st=${fadeStart.toStringAsFixed(3)}:d=1.5',
+      );
+    }
+    final delayMs = (musicStart * 1000).round();
+    if (delayMs > 0) {
+      audioFilters.add('adelay=$delayMs|$delayMs:all=1');
+    }
+    if (music != null && music.volume < 100) {
+      audioFilters.add(
+        'volume=${(music.volume / 100.0).toStringAsFixed(2)}',
+      );
+    }
+    final audioFilter = audioFilters.join(',');
 
     final cmd = StringBuffer()
       ..write('-y -framerate ${fps.toStringAsFixed(3)} ')
@@ -91,10 +129,10 @@ class ExportService {
 
     cmd.write('-c:v libx264 -pix_fmt yuv420p -r 30 ');
     if (musicInputIndex != null) {
-      cmd.write('-c:a aac -shortest$volumeFilter ');
+      cmd.write('-af "$audioFilter" -c:a aac -shortest ');
     }
     cmd.write(
-      '-preset ultrafast -t ${project.estimatedDurationSec.toStringAsFixed(2)} ',
+      '-preset ultrafast -t ${videoDur.toStringAsFixed(2)} ',
     );
     cmd.write('"${output.path}"');
 

@@ -5,8 +5,11 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
@@ -31,6 +34,14 @@ enum EditorTool {
   ratio,
   bg,
 }
+
+/// Hidden from the editor toolbar for this release.
+const _toolsHiddenThisRelease = <EditorTool>{
+  EditorTool.starting,
+  EditorTool.ending,
+  EditorTool.filter,
+  EditorTool.sticker,
+};
 
 enum _PhotoTool {
   duration,
@@ -67,12 +78,24 @@ class _EditorScreenState extends State<EditorScreen> {
   double? _outDurationDrag;
   int _liveToken = 0;
   _LiveMode _liveMode = _LiveMode.idle;
+
+  /// After Music sheet close/check — photo-style music tools navbar.
+  bool _musicToolsOpen = false;
+  bool _musicVolumeOpen = false;
+  bool _musicEditOpen = false;
+
+  /// Music timeline tapped → tools become active.
+  bool _musicTrackSelected = false;
   final _textController = TextEditingController();
   final _stripController = ScrollController();
 
   static const _sheetHeight = 180.0;
   static const _timelineHeaderHeight = 48.0;
   static const _photoToolbarHeight = 72.0;
+  static const _musicTrackHeight = 28.0;
+
+  /// Space under / above the music bar so it sits centered below photos.
+  static const _musicBandPad = 8.0;
   static const _plusW = 52.0;
   static const _pixelsPerSecond = 44.0;
   static const _thumbH = 60.0;
@@ -123,6 +146,21 @@ class _EditorScreenState extends State<EditorScreen> {
     final seconds =
         _stripController.offset / _pixelsPerSecond +
         (project.startingCard?.durationSec ?? 0);
+    project.seekPreviewSeconds(seconds);
+    _userScrubbing = false;
+  }
+
+  /// Scrub timeline by dragging the music row (same as photo strip scroll).
+  void _scrollTimelineByDx(double dx) {
+    if (!_stripController.hasClients || !mounted) return;
+    final project = context.read<SlideshowProject>();
+    if (project.isPreviewPlaying) return;
+    final max = _stripController.position.maxScrollExtent;
+    final next = (_stripController.offset - dx).clamp(0.0, max);
+    _userScrubbing = true;
+    _stripController.jumpTo(next);
+    final seconds =
+        next / _pixelsPerSecond + (project.startingCard?.durationSec ?? 0);
     project.seekPreviewSeconds(seconds);
     _userScrubbing = false;
   }
@@ -206,15 +244,52 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _tool = null);
   }
 
+  void _finishMusicPicker() {
+    setState(() {
+      _tool = null;
+      _musicToolsOpen = true;
+      _musicVolumeOpen = false;
+      _musicEditOpen = false;
+      // Unselected until user taps the music timeline.
+      _musicTrackSelected = false;
+    });
+  }
+
+  void _closeMusicTools() {
+    setState(() {
+      _musicToolsOpen = false;
+      _musicVolumeOpen = false;
+      _musicEditOpen = false;
+      _musicTrackSelected = false;
+      _tool = null;
+    });
+  }
+
+  Future<void> _pickLocalMusic() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.audio,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+    final path = result.files.single.path;
+    if (path == null) return;
+    context.read<SlideshowProject>().addLocalMusicTrack(
+      MusicTrack(path: path, title: result.files.single.name),
+    );
+  }
+
   /// Preview row shown inside SectionSheet for every tool.
   Widget _previewRow(SlideshowProject project) {
     final disabled = project.isProcessing || project.isPreparingPreview;
     return Row(
       children: [
-        SizedBox(width: 88, child: Align(
-          alignment: Alignment.centerLeft,
-          child: _timeText(project),
-        )),
+        SizedBox(
+          width: 88,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _timeText(project),
+          ),
+        ),
         Expanded(
           child: Center(
             child: IconButton(
@@ -273,8 +348,9 @@ class _EditorScreenState extends State<EditorScreen> {
                       onPressed: project.canUndo ? () => project.undo() : null,
                       icon: Icon(
                         Icons.undo_rounded,
-                        color:
-                            project.canUndo ? Colors.black87 : Colors.black26,
+                        color: project.canUndo
+                            ? Colors.black87
+                            : Colors.black26,
                       ),
                     ),
                     IconButton(
@@ -282,8 +358,9 @@ class _EditorScreenState extends State<EditorScreen> {
                       onPressed: project.canRedo ? () => project.redo() : null,
                       icon: Icon(
                         Icons.redo_rounded,
-                        color:
-                            project.canRedo ? Colors.black87 : Colors.black26,
+                        color: project.canRedo
+                            ? Colors.black87
+                            : Colors.black26,
                       ),
                     ),
                   ],
@@ -370,16 +447,22 @@ class _EditorScreenState extends State<EditorScreen> {
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: project.selectedPhotoIndex == null
-          ? null
-          : () {
-              setState(() {
-                _tool = null;
-                _photoTool = null;
-                _durationSliderValue = null;
-              });
-              project.clearTimelinePhotoSelection();
-            },
+      onTap: () {
+        if (_musicTrackSelected) {
+          setState(() {
+            _musicTrackSelected = false;
+            _musicVolumeOpen = false;
+          });
+        }
+        if (project.selectedPhotoIndex != null) {
+          setState(() {
+            _tool = null;
+            _photoTool = null;
+            _durationSliderValue = null;
+          });
+          project.clearTimelinePhotoSelection();
+        }
+      },
       child: Stack(
         children: [
           Positioned.fill(
@@ -389,7 +472,14 @@ class _EditorScreenState extends State<EditorScreen> {
               physics: project.isPreviewPlaying
                   ? const NeverScrollableScrollPhysics()
                   : const BouncingScrollPhysics(),
-              padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 44),
+              padding: EdgeInsets.fromLTRB(
+                leftPad,
+                0,
+                playheadX,
+                project.music != null
+                    ? _musicTrackHeight + _musicBandPad * 2
+                    : 44,
+              ),
               itemCount: project.photos.length,
               itemBuilder: (context, photoIndex) {
                 final photo = project.photos[photoIndex];
@@ -578,7 +668,9 @@ class _EditorScreenState extends State<EditorScreen> {
             Positioned(
               left: _stripPadLeft,
               top: 0,
-              bottom: 34,
+              bottom: project.music != null
+                  ? _musicTrackHeight + _musicBandPad * 2
+                  : 34,
               child: Center(
                 child: GestureDetector(
                   onTap: () => context.push('/gallery'),
@@ -600,6 +692,29 @@ class _EditorScreenState extends State<EditorScreen> {
                     child: const Icon(Icons.add, color: Colors.white, size: 28),
                   ),
                 ),
+              ),
+            ),
+          if (project.music != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _musicBandPad + 5,
+              height: _musicTrackHeight,
+              child: _MusicTimelineLane(
+                project: project,
+                stripController: _stripController,
+                leftPad: leftPad,
+                pixelsPerSecond: _pixelsPerSecond,
+                selected: _musicTrackSelected,
+                onSelect: () {
+                  setState(() {
+                    _musicToolsOpen = true;
+                    _musicTrackSelected = true;
+                    _musicVolumeOpen = false;
+                    project.clearTimelinePhotoSelection();
+                  });
+                },
+                onScrollTimeline: _scrollTimelineByDx,
               ),
             ),
         ],
@@ -636,36 +751,216 @@ class _EditorScreenState extends State<EditorScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 8),
         children: [
           for (final t in EditorTool.values)
-            EditorToolIcon(
-              assetPath: _toolAsset(t),
-              icon: _toolIcon(t),
-              label: _toolLabel(t),
-              selected: _tool == t,
-              onTap: () {
-                if (_tool == t) {
-                  _dismissTool();
-                  return;
-                }
-                setState(() {
-                  _tool = t;
-                  if (t == EditorTool.ratio) {
-                    _canvasSheetTab = _CanvasSheetTab.ratio;
-                  } else if (t == EditorTool.bg) {
-                    _canvasSheetTab = _CanvasSheetTab.background;
+            if (!_toolsHiddenThisRelease.contains(t))
+              EditorToolIcon(
+                assetPath: _toolAsset(t),
+                icon: _toolIcon(t),
+                label: _toolLabel(t),
+                selected: _tool == t,
+                onTap: () {
+                  if (_tool == t) {
+                    _dismissTool();
+                    return;
                   }
-                });
-                if (t == EditorTool.slide) {
-                  final p = context.read<SlideshowProject>();
-                  if (!p.isPreviewReady && !p.isPreparingPreview) {
-                    p.preparePreviewFrames();
+                  setState(() {
+                    _tool = t;
+                    if (t == EditorTool.ratio) {
+                      _canvasSheetTab = _CanvasSheetTab.ratio;
+                    } else if (t == EditorTool.bg) {
+                      _canvasSheetTab = _CanvasSheetTab.background;
+                    }
+                  });
+                  if (t == EditorTool.slide) {
+                    final p = context.read<SlideshowProject>();
+                    if (!p.isPreviewReady && !p.isPreparingPreview) {
+                      p.preparePreviewFrames();
+                    }
                   }
-                }
-                if (t == EditorTool.music) context.push('/music');
-              },
-            ),
+                },
+              ),
         ],
       ),
     );
+  }
+
+  Widget _musicEditorToolbar(SlideshowProject project) {
+    final active = _musicTrackSelected;
+    final actions =
+        <({String id, String label, String? asset, IconData? icon})>[
+          (id: 'add', label: 'Add', asset: 'add_music.png', icon: null),
+          (id: 'replace', label: 'Replace', asset: 'replace.png', icon: null),
+          (id: 'edit', label: 'Edit', asset: 'edit.png', icon: null),
+          (id: 'volume', label: 'Volume', asset: 'volume.png', icon: null),
+          (
+            id: 'beatsync',
+            label: 'Beat-sync',
+            asset: null,
+            icon: Icons.graphic_eq,
+          ),
+        ];
+    final color = active ? AppColors.textDark : AppColors.textMuted;
+    return Container(
+      height: _photoToolbarHeight,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(left: 54, right: 6),
+              children: [
+                for (var i = 0; i < actions.length; i++) ...[
+                  if (i == 1)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: VerticalDivider(
+                        width: 12,
+                        thickness: 1,
+                        color: AppColors.border.withValues(
+                          alpha: active ? 1 : 0.5,
+                        ),
+                      ),
+                    ),
+                  SizedBox(
+                    width: 72,
+                    child: InkWell(
+                      onTap: () => _handleMusicToolTap(project, actions[i].id),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Opacity(
+                        opacity: active || actions[i].id == 'add' ? 1 : 0.45,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (actions[i].asset != null)
+                              Image.asset(
+                                'assets/images/editor/music_tools/${actions[i].asset}',
+                                width: 28,
+                                height: 28,
+                                color: color,
+                                colorBlendMode: BlendMode.srcIn,
+                              )
+                            else
+                              Icon(actions[i].icon, size: 26, color: color),
+                            const SizedBox(height: 4),
+                            Text(
+                              actions[i].label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 10, color: color),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Positioned(
+            left: 10,
+            top: 10,
+            bottom: 10,
+            child: Material(
+              color: Colors.white,
+              elevation: 3,
+              shadowColor: Colors.black26,
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                width: 38,
+                child: IconButton(
+                  tooltip: 'Back to editor tools',
+                  onPressed: _closeMusicTools,
+                  icon: const Icon(
+                    Icons.chevron_left_rounded,
+                    color: AppColors.textDark,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _musicVolumeSheet(SlideshowProject project) {
+    final music = project.music;
+    final volume = (music?.volume ?? 100).toDouble();
+    return Container(
+      height: _photoToolbarHeight,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => setState(() => _musicVolumeOpen = false),
+            icon: const Icon(Icons.chevron_left_rounded),
+          ),
+          const Icon(Icons.volume_up_outlined, color: AppColors.textMuted),
+          Expanded(
+            child: Slider(
+              value: volume,
+              min: 0,
+              max: 100,
+              divisions: 20,
+              activeColor: AppColors.primary,
+              onChanged: music == null
+                  ? null
+                  : (v) => project.setMusicVolume(v.round()),
+            ),
+          ),
+          SizedBox(
+            width: 36,
+            child: Text(
+              '${volume.round()}',
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                color: AppColors.textDark,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleMusicToolTap(SlideshowProject project, String id) {
+    // Only Add works while the music track is unselected.
+    if (!_musicTrackSelected && id != 'add') return;
+    switch (id) {
+      case 'add':
+      case 'replace':
+        setState(() {
+          _musicVolumeOpen = false;
+          _musicEditOpen = false;
+          _tool = EditorTool.music;
+        });
+        return;
+      case 'volume':
+        setState(() {
+          _musicEditOpen = false;
+          _musicVolumeOpen = true;
+        });
+        return;
+      case 'edit':
+        setState(() {
+          _musicVolumeOpen = false;
+          _musicEditOpen = true;
+        });
+        return;
+      case 'beatsync':
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Beat-sync coming soon')));
+    }
   }
 
   Widget _photoEditorToolbar(SlideshowProject project) {
@@ -932,8 +1227,8 @@ class _EditorScreenState extends State<EditorScreen> {
       compactHeader: true,
       showTopDivider: false,
       center: _canvasTabHeader(compact: true),
-      beforeConfirm: _canvasSheetTab == _CanvasSheetTab.background &&
-              photo != null
+      beforeConfirm:
+          _canvasSheetTab == _CanvasSheetTab.background && photo != null
           ? IconButton(
               onPressed: () {
                 project.applyBackgroundToAll(0);
@@ -1771,7 +2066,9 @@ class _EditorScreenState extends State<EditorScreen> {
                 },
               ),
             )
-          else if (_tool != EditorTool.frame)
+          else if (_tool != EditorTool.frame &&
+              _tool != EditorTool.music &&
+              !_musicEditOpen)
             Padding(
               padding: const EdgeInsets.only(right: 12),
               child: TealPillButton(
@@ -1790,14 +2087,14 @@ class _EditorScreenState extends State<EditorScreen> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
               child: Center(
-              child: AspectRatio(
+                child: AspectRatio(
                   aspectRatio: aspect,
-                child: DecoratedBox(
+                  child: DecoratedBox(
                     decoration: const BoxDecoration(color: Colors.black),
-                  child: ClipRRect(
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
+                    child: ClipRRect(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
                           if (project.selectedPhotoIndex != null)
                             _LiveClipPreview(
                               key: ValueKey(project.selectedPhotoIndex),
@@ -1827,71 +2124,76 @@ class _EditorScreenState extends State<EditorScreen> {
                                   setState(() => _liveMode = _LiveMode.idle);
                                 }
                               },
-                          )
-                        else
+                            )
+                          else
                             RepaintBoundary(
-                              child: ValueListenableBuilder<
-                                ({int index, double fraction})?
-                              >(
-                                valueListenable: project.scrubLive,
-                                builder: (context, scrub, _) {
-                                  if (scrub != null &&
-                                      !project.isPreviewReady &&
-                                      scrub.index < project.photos.length) {
-                                    final photo = project.photos[scrub.index];
-                                    return _LiveClipPreview(
-                                      key: ValueKey('scrub-${scrub.index}'),
-                                      photoIndex: scrub.index,
-                                      photo: photo,
-                                      backgroundArgb:
-                                          photo.backgroundArgb ??
-                                          project.backgroundArgb,
-                                      backgroundBlurLevel:
-                                          photo.backgroundBlurLevel,
-                                      replayToken: 0,
-                                      mode: _LiveMode.idle,
-                                      holdFraction: scrub.fraction,
-                                      onFraction: (_) {},
-                                      onFinished: () {},
-                                    );
-                                  }
-                                  return ValueListenableBuilder<Uint8List?>(
-                                    valueListenable:
-                                        project.previewFrameListenable,
-                                    builder: (context, bytes, _) {
-                                  if (bytes != null) {
-                                    return Image.memory(
-                                      bytes,
-                                      fit: BoxFit.contain,
-                                      gaplessPlayback: true,
-                                      filterQuality: FilterQuality.low,
-                                    );
-                                  }
-                                  if (project.photos.isNotEmpty) {
-                                    return Image.file(
-                                      File(project.photos.first.path),
-                                      fit: BoxFit.contain,
-                                      gaplessPlayback: true,
-                                      filterQuality: FilterQuality.high,
-                                    );
-                                  }
-                                  return const Center(
-                            child: Text(
-                              'No preview',
-                              style: TextStyle(color: Colors.white54),
-                            ),
-                                  );
+                              child:
+                                  ValueListenableBuilder<
+                                    ({int index, double fraction})?
+                                  >(
+                                    valueListenable: project.scrubLive,
+                                    builder: (context, scrub, _) {
+                                      if (scrub != null &&
+                                          !project.isPreviewReady &&
+                                          scrub.index < project.photos.length) {
+                                        final photo =
+                                            project.photos[scrub.index];
+                                        return _LiveClipPreview(
+                                          key: ValueKey('scrub-${scrub.index}'),
+                                          photoIndex: scrub.index,
+                                          photo: photo,
+                                          backgroundArgb:
+                                              photo.backgroundArgb ??
+                                              project.backgroundArgb,
+                                          backgroundBlurLevel:
+                                              photo.backgroundBlurLevel,
+                                          replayToken: 0,
+                                          mode: _LiveMode.idle,
+                                          holdFraction: scrub.fraction,
+                                          onFraction: (_) {},
+                                          onFinished: () {},
+                                        );
+                                      }
+                                      return ValueListenableBuilder<Uint8List?>(
+                                        valueListenable:
+                                            project.previewFrameListenable,
+                                        builder: (context, bytes, _) {
+                                          if (bytes != null) {
+                                            return Image.memory(
+                                              bytes,
+                                              fit: BoxFit.contain,
+                                              gaplessPlayback: true,
+                                              filterQuality: FilterQuality.low,
+                                            );
+                                          }
+                                          if (project.photos.isNotEmpty) {
+                                            return Image.file(
+                                              File(project.photos.first.path),
+                                              fit: BoxFit.contain,
+                                              gaplessPlayback: true,
+                                              filterQuality: FilterQuality.high,
+                                            );
+                                          }
+                                          return const Center(
+                                            child: Text(
+                                              'No preview',
+                                              style: TextStyle(
+                                                color: Colors.white54,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      );
                                     },
-                                  );
-                                },
-                              ),
+                                  ),
                             ),
                           if (project.selectedFrameAsset != null)
                             IgnorePointer(
                               child: Image.asset(
                                 project.selectedFrameAsset!,
+                                key: ValueKey(project.selectedFrameAsset),
                                 fit: BoxFit.fill,
-                                gaplessPlayback: true,
+                                gaplessPlayback: false,
                                 filterQuality: FilterQuality.medium,
                               ),
                             ),
@@ -1924,37 +2226,37 @@ class _EditorScreenState extends State<EditorScreen> {
                               ),
                             ),
                           // Export-only progress.
-                        if (project.isProcessing)
-                          Container(
-                            color: Colors.black54,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  CircularProgressIndicator(
+                          if (project.isProcessing)
+                            Container(
+                              color: Colors.black54,
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    CircularProgressIndicator(
                                       color: AppColors.primary,
-                                    value: project.processProgress > 0
-                                        ? project.processProgress
-                                        : null,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
+                                      value: project.processProgress > 0
+                                          ? project.processProgress
+                                          : null,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
                                       'Exporting ${(project.processProgress * 100).toInt()}%',
                                       style: const TextStyle(
                                         color: Colors.white,
                                       ),
-                                  ),
-                                ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
           ),
 
           if (project.selectedPhotoIndex != null) ...[
@@ -1991,20 +2293,85 @@ class _EditorScreenState extends State<EditorScreen> {
                 height: inlineSheetHeight + _photoToolbarHeight,
               ),
             ),
+          ] else if (_tool == EditorTool.music) ...[
+            // Fixed height = idle panel + toolbar slot (no extra music bump).
+            Container(
+              height: _sheetHeight + _photoToolbarHeight,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border(top: BorderSide(color: AppColors.border)),
+              ),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: _timelineHeaderHeight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 14, right: 6),
+                      child: _idlePreviewRow(project),
+                    ),
+                  ),
+                  Expanded(
+                    child: _MusicPickerSheet(
+                      project: project,
+                      onClose: _finishMusicPicker,
+                      onConfirm: _finishMusicPicker,
+                      onOpenLibrary: () => context.push('/music'),
+                      onPickLocal: _pickLocalMusic,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (_musicToolsOpen && _musicEditOpen) ...[
+            // Timeline strip hidden; same body height as idle (_sheetHeight).
+            Container(
+              height: _sheetHeight,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border(top: BorderSide(color: AppColors.border)),
+              ),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: _timelineHeaderHeight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 14, right: 6),
+                      child: _idlePreviewRow(project),
+                    ),
+                  ),
+                  Expanded(
+                    child: _MusicEditSheet(
+                      project: project,
+                      onClose: () => setState(() => _musicEditOpen = false),
+                      onConfirm: () => setState(() => _musicEditOpen = false),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _musicEditorToolbar(project),
           ] else ...[
             if (_tool == null)
               _idleToolPanel(project)
             else
               SectionSheet(
                 title: _toolLabel(_tool!),
-                height: 180,
-                headerRow: _previewRow(project),
+                height: _sheetHeight,
+                headerRow: SizedBox(
+                  height: _timelineHeaderHeight,
+                  child: _idlePreviewRow(project),
+                ),
                 onClose: _dismissTool,
                 onConfirm: _dismissTool,
                 child: _buildPanel(project),
               ),
 
-            _editorToolbar(),
+            if (_musicToolsOpen)
+              _musicVolumeOpen
+                  ? _musicVolumeSheet(project)
+                  : _musicEditorToolbar(project)
+            else
+              _editorToolbar(),
           ],
           SizedBox(height: MediaQuery.paddingOf(context).bottom),
         ],
@@ -2084,12 +2451,7 @@ class _EditorScreenState extends State<EditorScreen> {
         },
         onClear: () => project.setEndingCard(null),
       ),
-      EditorTool.music => const Center(
-        child: Text(
-          'Open Music from the toolbar',
-          style: TextStyle(color: AppColors.textMuted),
-        ),
-      ),
+      EditorTool.music => const SizedBox.shrink(),
       EditorTool.frame => _FramePanel(
         project: project,
         onChanged: () => project.refreshLivePreview(),
@@ -2111,6 +2473,1062 @@ class _EditorScreenState extends State<EditorScreen> {
         onChanged: () => project.refreshLivePreview(),
       ),
     };
+  }
+}
+
+/// Music Edit sheet — trim clip start/end + fade in/out (screenshot).
+class _MusicEditSheet extends StatefulWidget {
+  const _MusicEditSheet({
+    required this.project,
+    required this.onClose,
+    required this.onConfirm,
+  });
+
+  final SlideshowProject project;
+  final VoidCallback onClose;
+  final VoidCallback onConfirm;
+
+  @override
+  State<_MusicEditSheet> createState() => _MusicEditSheetState();
+}
+
+class _MusicEditSheetState extends State<_MusicEditSheet> {
+  static const _peach = ui.Color(0xFFD5D2CF);
+  static const _waveHMax = 44.0;
+  static const _minClip = 1.0;
+  static const _handleHit = 28.0;
+  static const _titleH = 34.0; // 10px tighter than before (pink gap)
+
+  late double _clipStart;
+  late double _clipEnd;
+  late bool _fadeIn;
+  late bool _fadeOut;
+  late bool _hadCustomClipEnd;
+  double _trackDur = 0;
+  bool _loadingDur = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final m = widget.project.music!;
+    _clipStart = m.clipStartSec;
+    _fadeIn = m.fadeIn;
+    _fadeOut = m.fadeOut;
+    _hadCustomClipEnd = m.clipEndSec != null;
+    final known = m.duration?.inMilliseconds;
+    if (known != null && known > 0) {
+      _trackDur = known / 1000.0;
+      _clipEnd = (m.clipEndSec ?? _trackDur).clamp(
+        _clipStart + _minClip,
+        _trackDur,
+      );
+      _loadingDur = false;
+    } else {
+      _clipEnd = m.clipEndSec ?? 0;
+    }
+    _loadDuration();
+  }
+
+  Future<void> _loadDuration() async {
+    final m = widget.project.music;
+    if (m == null) return;
+    final player = AudioPlayer();
+    try {
+      final Duration? d = m.isAsset
+          ? await player.setAsset(m.path)
+          : await player.setFilePath(m.path);
+      final resolved = d ?? player.duration;
+      if (resolved != null && resolved.inMilliseconds > 0 && mounted) {
+        setState(() {
+          _trackDur = resolved.inMilliseconds / 1000.0;
+          // No saved end → always full track (works for long songs too).
+          if (!_hadCustomClipEnd) {
+            _clipEnd = _trackDur;
+          } else {
+            _clipEnd = _clipEnd.clamp(_clipStart + _minClip, _trackDur);
+          }
+          _clipStart = _clipStart.clamp(
+            0.0,
+            math.max(0.0, _clipEnd - _minClip),
+          );
+          _loadingDur = false;
+        });
+        widget.project.setMusicClip(duration: resolved);
+      } else if (mounted) {
+        setState(() {
+          if (_trackDur <= 0) _trackDur = 60;
+          if (!_hadCustomClipEnd) _clipEnd = _trackDur;
+          _loadingDur = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          if (_trackDur <= 0) _trackDur = 60;
+          if (!_hadCustomClipEnd) _clipEnd = _trackDur;
+          _loadingDur = false;
+        });
+      }
+    } finally {
+      await player.dispose();
+    }
+  }
+
+  String _fmt(double sec) {
+    final s = sec.clamp(0, 35999).floor();
+    final m = s ~/ 60;
+    final r = s % 60;
+    return '${m.toString().padLeft(2, '0')}:${r.toString().padLeft(2, '0')}';
+  }
+
+  void _commit() {
+    widget.project.setMusicClip(
+      clipStartSec: _clipStart,
+      clipEndSec: _clipEnd,
+      fadeIn: _fadeIn,
+      fadeOut: _fadeOut,
+      duration: Duration(milliseconds: (_trackDur * 1000).round()),
+    );
+    widget.onConfirm();
+  }
+
+  void _cancel() {
+    widget.onClose();
+  }
+
+  double _secToX(double sec, double width) {
+    if (_trackDur <= 0) return 0;
+    return (sec / _trackDur) * width;
+  }
+
+  void _dragHandle({
+    required bool isStart,
+    required double dx,
+    required double width,
+  }) {
+    if (width <= 0 || _trackDur <= 0) return;
+    final dSec = (dx / width) * _trackDur;
+    setState(() {
+      if (isStart) {
+        _clipStart = (_clipStart + dSec).clamp(0.0, _clipEnd - _minClip);
+      } else {
+        _clipEnd = (_clipEnd + dSec).clamp(_clipStart + _minClip, _trackDur);
+      }
+    });
+  }
+
+  Widget _fadeToggle({
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: AppColors.textDark,
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: () => onChanged(!value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            width: 44,
+            height: 24,
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              color: value ? const Color(0xFFE8F5F3) : const Color(0xFFE8E8E8),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: value ? AppColors.primary : const Color(0xFFD0D0D0),
+              ),
+            ),
+            alignment: value ? Alignment.centerLeft : Alignment.centerRight,
+            child: Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: value ? AppColors.primary : const Color(0xFFBFBFBF),
+                  width: 1.5,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x22000000),
+                    blurRadius: 2,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _cutHandle({
+    required bool isStart,
+    required double width,
+    required double waveH,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragUpdate: (d) =>
+          _dragHandle(isStart: isStart, dx: d.delta.dx, width: width),
+      child: SizedBox(
+        width: _handleHit,
+        height: waveH,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(width: 2, height: waveH, color: Colors.white),
+            Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xFF7DE8DE), Color(0xFF00BFA5)],
+                ),
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 2,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Waveform cut box — height fits parent (green box), no overflow.
+  Widget _cutContainer() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        const timeH = 14.0;
+        const gap = 2.0;
+        final maxWave = constraints.hasBoundedHeight
+            ? (constraints.maxHeight - timeH - gap).clamp(24.0, _waveHMax)
+            : _waveHMax;
+        final waveH = maxWave.toDouble();
+        final startX = _secToX(_clipStart, w);
+        final endX = _secToX(_clipEnd, w);
+        const timeStyle = TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textDark,
+          height: 1.0,
+        );
+
+        return SizedBox(
+          width: w,
+          height: timeH + gap + waveH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: timeH,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: (startX - 16).clamp(0.0, math.max(0.0, w - 36)),
+                      child: Text(_fmt(_clipStart), style: timeStyle),
+                    ),
+                    Positioned(
+                      left: (endX - 16).clamp(0.0, math.max(0.0, w - 36)),
+                      child: Text(_fmt(_clipEnd), style: timeStyle),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: gap),
+              SizedBox(
+                height: waveH,
+                width: w,
+                child: Stack(
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _peach,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: CustomPaint(
+                          painter: _EditWavePainter(
+                            startSec: _clipStart,
+                            endSec: _clipEnd,
+                            totalSec: _trackDur,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: startX - _handleHit / 2,
+                      top: 0,
+                      bottom: 0,
+                      child: _cutHandle(isStart: true, width: w, waveH: waveH),
+                    ),
+                    Positioned(
+                      left: endX - _handleHit / 2,
+                      top: 0,
+                      bottom: 0,
+                      child: _cutHandle(isStart: false, width: w, waveH: waveH),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final music = widget.project.music;
+    if (music == null) {
+      return const SizedBox.shrink();
+    }
+
+    return ColoredBox(
+      color: Colors.white,
+      child: Column(
+        children: [
+          SizedBox(
+            height: _titleH,
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: _cancel,
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close, size: 20),
+                ),
+                Expanded(child: SheetTitle(music.title)),
+                IconButton(
+                  onPressed: _commit,
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.check, size: 20),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
+              child: Column(
+                children: [
+                  Expanded(
+                    child: _loadingDur
+                        ? const Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : _cutContainer(),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _fadeToggle(
+                        label: 'Fade In',
+                        value: _fadeIn,
+                        onChanged: (v) => setState(() => _fadeIn = v),
+                      ),
+                      _fadeToggle(
+                        label: 'Fade Out',
+                        value: _fadeOut,
+                        onChanged: (v) => setState(() => _fadeOut = v),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EditWavePainter extends CustomPainter {
+  _EditWavePainter({
+    required this.startSec,
+    required this.endSec,
+    required this.totalSec,
+  });
+
+  final double startSec;
+  final double endSec;
+  final double totalSec;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (totalSec <= 0 || size.width <= 0) return;
+    final startX = (startSec / totalSec) * size.width;
+    final endX = (endSec / totalSec) * size.width;
+    final bars = math.max(40, (size.width / 4).floor());
+    final inactive = Paint()
+      ..color = Colors.white.withValues(alpha: 0.9)
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
+
+    for (var i = 0; i < bars; i++) {
+      final t = bars == 1 ? 0.0 : i / (bars - 1);
+      final x = t * size.width;
+      final wave =
+          math.sin(t * math.pi * 9.5) * 0.38 +
+          math.sin(t * math.pi * 3.1 + 0.6) * 0.32 +
+          math.sin(t * math.pi * 15 + 1.2) * 0.12 +
+          0.48;
+      final h = (8.0 + wave.clamp(0.2, 1.0) * (size.height - 16)).clamp(
+        8.0,
+        size.height - 6,
+      );
+      final y0 = (size.height - h) / 2;
+      final y1 = (size.height + h) / 2;
+      final active = x >= startX && x <= endX;
+      if (active) {
+        final paint = Paint()
+          ..shader = const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF5CE1D6), Color(0xFF00BFA5)],
+          ).createShader(Rect.fromLTWH(x - 1, y0, 3, h))
+          ..strokeWidth = 2.2
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(Offset(x, y0), Offset(x, y1), paint);
+      } else {
+        canvas.drawLine(Offset(x, y0), Offset(x, y1), inactive);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _EditWavePainter old) =>
+      old.startSec != startSec ||
+      old.endSec != endSec ||
+      old.totalSec != totalSec;
+}
+
+/// Music row: local drag state so < > handles move smoothly (no full-tree rebuild).
+class _MusicTimelineLane extends StatefulWidget {
+  const _MusicTimelineLane({
+    required this.project,
+    required this.stripController,
+    required this.leftPad,
+    required this.pixelsPerSecond,
+    required this.selected,
+    required this.onSelect,
+    required this.onScrollTimeline,
+  });
+
+  final SlideshowProject project;
+  final ScrollController stripController;
+  final double leftPad;
+  final double pixelsPerSecond;
+  final bool selected;
+  final VoidCallback onSelect;
+  final void Function(double dx) onScrollTimeline;
+
+  static const handleW = 28.0;
+
+  @override
+  State<_MusicTimelineLane> createState() => _MusicTimelineLaneState();
+}
+
+class _MusicTimelineLaneState extends State<_MusicTimelineLane> {
+  double? _liveStart;
+  double? _liveEnd;
+  bool _interacting = false;
+  double _holdOriginDx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.stripController.addListener(_onStrip);
+    widget.project.addListener(_onProject);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MusicTimelineLane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stripController != widget.stripController) {
+      oldWidget.stripController.removeListener(_onStrip);
+      widget.stripController.addListener(_onStrip);
+    }
+    if (oldWidget.project != widget.project) {
+      oldWidget.project.removeListener(_onProject);
+      widget.project.addListener(_onProject);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.stripController.removeListener(_onStrip);
+    widget.project.removeListener(_onProject);
+    super.dispose();
+  }
+
+  void _onStrip() {
+    if (mounted) setState(() {});
+  }
+
+  void _onProject() {
+    if (_interacting || !mounted) return;
+    setState(() {});
+  }
+
+  (double, double) _range() {
+    final videoDur = widget.project.estimatedDurationSec;
+    final music = widget.project.music!;
+    final start = (_liveStart ?? music.timelineStartSec).clamp(0.0, videoDur);
+    final end = (_liveEnd ?? music.timelineEndSec ?? videoDur).clamp(
+      start + 0.5,
+      videoDur,
+    );
+    return (start, end);
+  }
+
+  void _clampLive(double videoDur) {
+    const minLen = 0.5;
+    var s = (_liveStart ?? 0).clamp(0.0, videoDur - minLen);
+    var e = (_liveEnd ?? videoDur).clamp(s + minLen, videoDur);
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  void _beginInteract() {
+    final (s, e) = _range();
+    _interacting = true;
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  void _trimByDx({required bool isStart, required double dxPx}) {
+    final videoDur = widget.project.estimatedDurationSec;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    _beginInteract();
+    setState(() {
+      if (isStart) {
+        _liveStart = (_liveStart! + dSec).clamp(0.0, _liveEnd! - 0.5);
+      } else {
+        _liveEnd = (_liveEnd! + dSec).clamp(_liveStart! + 0.5, videoDur);
+      }
+      _clampLive(videoDur);
+    });
+  }
+
+  void _moveByDx(double dxPx) {
+    final videoDur = widget.project.estimatedDurationSec;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    _beginInteract();
+    setState(() {
+      final len = _liveEnd! - _liveStart!;
+      final ns = (_liveStart! + dSec).clamp(0.0, videoDur - len);
+      _liveStart = ns;
+      _liveEnd = ns + len;
+    });
+  }
+
+  void _commitInteract() {
+    if (!_interacting || _liveStart == null || _liveEnd == null) return;
+    widget.project.setMusicTimelineRange(_liveStart!, _liveEnd!);
+    _interacting = false;
+    _liveStart = null;
+    _liveEnd = null;
+    if (mounted) setState(() {});
+  }
+
+  Widget _gradientTrack(MusicTrack track) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [Color(0xFF650CFF), Color(0xFF120799)],
+        ),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          CustomPaint(painter: _MusicWavePainter()),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              children: [
+                const Icon(Icons.music_note, color: Colors.white, size: 12),
+                const SizedBox(width: 3),
+                Expanded(
+                  child: Text(
+                    track.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _handle({required bool isStart, required IconData icon}) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) => _beginInteract(),
+      onPointerMove: (e) {
+        if (e.delta.dx == 0) return;
+        _trimByDx(isStart: isStart, dxPx: e.delta.dx);
+      },
+      onPointerUp: (_) => _commitInteract(),
+      onPointerCancel: (_) => _commitInteract(),
+      child: SizedBox(
+        width: _MusicTimelineLane.handleW,
+        height: double.infinity,
+        child: Icon(icon, size: 16, color: Colors.black87),
+      ),
+    );
+  }
+
+  Widget _body(MusicTrack track) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onTap: widget.onSelect,
+      onLongPressStart: (_) {
+        _beginInteract();
+        _holdOriginDx = 0;
+        HapticFeedback.selectionClick();
+      },
+      onLongPressMoveUpdate: (d) {
+        final dx = d.localOffsetFromOrigin.dx;
+        final delta = dx - _holdOriginDx;
+        _holdOriginDx = dx;
+        if (delta.abs() > 0.01) _moveByDx(delta);
+      },
+      onLongPressEnd: (_) => _commitInteract(),
+      onLongPressCancel: _commitInteract,
+      onHorizontalDragUpdate: (d) {
+        if (_interacting && _liveStart != null) return;
+        widget.onScrollTimeline(d.delta.dx);
+      },
+      child: _gradientTrack(track),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final music = widget.project.music;
+    if (music == null) return const SizedBox.shrink();
+
+    final offset = widget.stripController.hasClients
+        ? widget.stripController.offset
+        : 0.0;
+    final videoDur = widget.project.estimatedDurationSec;
+    final (startSec, endSec) = _range();
+    final trackLeft = widget.leftPad - offset;
+    final trackWidth = math.max(videoDur * widget.pixelsPerSecond, 120.0);
+    final barLeft = trackLeft + startSec * widget.pixelsPerSecond;
+    final barWidth = math.max(
+      (endSec - startSec) * widget.pixelsPerSecond,
+      72.0,
+    );
+    final selected = widget.selected;
+    final posLeft = barLeft - (selected ? _MusicTimelineLane.handleW : 0);
+    final posWidth = barWidth + (selected ? _MusicTimelineLane.handleW * 2 : 0);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: (d) => widget.onScrollTimeline(d.delta.dx),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: trackLeft,
+            width: trackWidth,
+            top: 2,
+            bottom: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0x33F8BBD0),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            left: posLeft,
+            width: posWidth,
+            top: 0,
+            bottom: 0,
+            child: selected
+                ? Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x29000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        _handle(isStart: true, icon: Icons.chevron_left),
+                        Expanded(child: _body(music)),
+                        _handle(isStart: false, icon: Icons.chevron_right),
+                      ],
+                    ),
+                  )
+                : _body(music),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MusicWavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.42)
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    final bars = math.max(16, (size.width / 3.5).floor());
+    for (var i = 0; i < bars; i++) {
+      final t = bars == 1 ? 0.0 : i / (bars - 1);
+      final wave =
+          math.sin(t * math.pi * 6.5) * 0.4 +
+          math.sin(t * math.pi * 2.4 + 1.1) * 0.35 +
+          0.5;
+      final h = (3.0 + wave.clamp(0.12, 1.0) * (size.height - 6)).clamp(
+        3.0,
+        size.height - 2,
+      );
+      final x = t * size.width;
+      canvas.drawLine(
+        Offset(x, (size.height - h) / 2),
+        Offset(x, (size.height + h) / 2),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+enum _MusicSourceTab { myMusic, local }
+
+/// Music picker sheet — same white chrome as other editor tool sheets.
+class _MusicPickerSheet extends StatefulWidget {
+  const _MusicPickerSheet({
+    required this.project,
+    required this.onClose,
+    required this.onConfirm,
+    required this.onOpenLibrary,
+    required this.onPickLocal,
+  });
+
+  final SlideshowProject project;
+  final VoidCallback onClose;
+  final VoidCallback onConfirm;
+  final VoidCallback onOpenLibrary;
+  final VoidCallback onPickLocal;
+
+  @override
+  State<_MusicPickerSheet> createState() => _MusicPickerSheetState();
+}
+
+class _MusicPickerSheetState extends State<_MusicPickerSheet> {
+  /// Sheet opens with My Music selected by default.
+  _MusicSourceTab _source = _MusicSourceTab.myMusic;
+
+  Widget _trackTile(MusicTrack track, MusicTrack? selected) {
+    final isSel = selected?.path == track.path;
+    return _MusicThumbTile(
+      title: track.title,
+      selected: isSel,
+      onTap: () => widget.project.setMusic(track),
+      child: SizedBox(
+        width: 58,
+        child: Center(
+          child: Icon(
+            Icons.library_music,
+            color: isSel ? AppColors.iconActive : AppColors.textDark,
+            size: 28,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = widget.project.music;
+    final isLocal = _source == _MusicSourceTab.local;
+    final tracks = isLocal
+        ? widget.project.localMusicTracks
+        : MusicTrack.popular;
+    return ColoredBox(
+      color: Colors.white,
+      child: Column(
+        children: [
+          SizedBox(
+            height: 44,
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: widget.onClose,
+                  icon: const Icon(Icons.close, color: AppColors.textDark),
+                ),
+                const Expanded(child: Center(child: SheetTitle('Music'))),
+                IconButton(
+                  onPressed: widget.onConfirm,
+                  icon: const Icon(Icons.check, color: AppColors.primary),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _MusicSourceButton(
+                    image: 'assets/images/my_music.png',
+                    label: 'My Music',
+                    selected: _source == _MusicSourceTab.myMusic,
+                    onTap: () {
+                      setState(() => _source = _MusicSourceTab.myMusic);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _MusicSourceButton(
+                    image: 'assets/images/local_music.png',
+                    label: 'Local',
+                    selected: isLocal,
+                    onTap: () {
+                      setState(() => _source = _MusicSourceTab.local);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              itemCount: tracks.length + 1,
+              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  if (isLocal) {
+                    return _MusicThumbTile(
+                      title: 'Import',
+                      selected: false,
+                      onTap: widget.onPickLocal,
+                      child: SizedBox(
+                        width: 58,
+                        child: Center(
+                          child: Image.asset(
+                            'assets/images/local_music.png',
+                            color: AppColors.primary,
+                            width: 28,
+                            height: 28,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  final isSel = selected == null;
+                  return _MusicThumbTile(
+                    title: 'None',
+                    selected: isSel,
+                    onTap: () => widget.project.setMusic(null),
+                    child: SizedBox(
+                      width: 58,
+                      child: Center(
+                        child: Icon(
+                          Icons.music_off_outlined,
+                          color: isSel
+                              ? AppColors.primary
+                              : AppColors.textMuted,
+                          size: 28,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                return _trackTile(tracks[index - 1], selected);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MusicSourceButton extends StatelessWidget {
+  const _MusicSourceButton({
+    required this.image,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String image;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  static const _selectedGradient = LinearGradient(
+    colors: [Color(0xFF4DD0E1), Color(0xFF42A5F5)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : AppColors.textDark;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: selected ? _selectedGradient : null,
+            color: selected ? null : const Color(0xFFEDEFFB),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Image.asset(image, color: fg, width: 24),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: fg,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MusicThumbTile extends StatelessWidget {
+  const _MusicThumbTile({
+    required this.title,
+    required this.selected,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String title;
+  final bool selected;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 72,
+
+        child: Column(
+          children: [
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.23),
+                      offset: Offset.zero,
+                      blurRadius: 4,
+                      spreadRadius: 0,
+                    ),
+                  ],
+                  border: Border.all(
+                    color: selected ? AppColors.primary : AppColors.border,
+                    width: selected ? 2 : 1,
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: child,
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: selected ? AppColors.primary : AppColors.textMuted,
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -2230,7 +3648,7 @@ class _FramePanel extends StatelessWidget {
     final frames = FrameAsset.all;
     return ListView.separated(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
       itemCount: frames.length + 1,
       separatorBuilder: (_, _) => const SizedBox(width: 12),
       itemBuilder: (context, i) {
@@ -2243,11 +3661,7 @@ class _FramePanel extends StatelessWidget {
               project.selectFrame(null);
               onChanged();
             },
-            child: const Icon(
-              Icons.block,
-              size: 34,
-              color: _muted,
-            ),
+            child: const Icon(Icons.block, size: 34, color: _muted),
           );
         }
         final frame = frames[i - 1];
@@ -2262,14 +3676,11 @@ class _FramePanel extends StatelessWidget {
           },
           child: Padding(
             padding: const EdgeInsets.all(6),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.asset(
-                frame.assetPath,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-              ),
+            child: Image.asset(
+              frame.assetPath,
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
             ),
           ),
         );
@@ -2329,7 +3740,7 @@ class _FramePanel extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 2),
             Text(
               label,
               maxLines: 1,
@@ -2573,7 +3984,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-        return Padding(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -2598,7 +4009,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-          padding: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -3047,9 +4458,9 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
                   );
                 }
                 return ClipRect(
-          child: Stack(
+                  child: Stack(
                     fit: StackFit.expand,
-            children: [
+                    children: [
                       ImageFiltered(
                         imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: _photoImage(),
@@ -3515,7 +4926,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-              Positioned(
+                Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -3575,9 +4986,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                ),
-              ),
-            ],
+                    ),
+                  ),
+              ],
             ),
           ),
         );

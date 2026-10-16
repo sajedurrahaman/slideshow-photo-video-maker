@@ -97,6 +97,41 @@ class EditorToolIcon extends StatelessWidget {
   }
 }
 
+/// Centered sheet title: textDark with a short underline.
+class SheetTitle extends StatelessWidget {
+  const SheetTitle(this.text, {super.key});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textDark,
+          ),
+        ),
+        const SizedBox(height: 2),
+        SizedBox(
+          width: 36,
+          height: 2.5,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class SectionSheet extends StatelessWidget {
   const SectionSheet({
     super.key,
@@ -142,7 +177,8 @@ class SectionSheet extends StatelessWidget {
         children: [
           if (headerRow != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              // Match editor idle timeline header inset (play/pause Y stable).
+              padding: const EdgeInsets.only(left: 14, right: 6),
               child: headerRow!,
             ),
           Padding(
@@ -159,15 +195,7 @@ class SectionSheet extends StatelessWidget {
                       : null,
                   icon: const Icon(Icons.close, color: AppColors.textDark),
                 ),
-                center ??
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.primary,
-                      ),
-                    ),
+                center ?? SheetTitle(title),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

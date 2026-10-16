@@ -343,23 +343,70 @@ class MusicTrack {
   final bool isAsset;
   final int volume; // 0-100
 
+  /// Where this track starts / ends on the video timeline (seconds).
+  /// [timelineEndSec] null = play through the end of the video.
+  final double timelineStartSec;
+  final double? timelineEndSec;
+
+  /// Trim within the source audio file (seconds).
+  /// Preview/export play from [clipStartSec]; [clipEndSec] null = file end.
+  final double clipStartSec;
+  final double? clipEndSec;
+  final bool fadeIn;
+  final bool fadeOut;
+
   const MusicTrack({
     required this.path,
     required this.title,
     this.duration,
     this.isAsset = false,
     this.volume = 100,
+    this.timelineStartSec = 0,
+    this.timelineEndSec,
+    this.clipStartSec = 0,
+    this.clipEndSec,
+    this.fadeIn = false,
+    this.fadeOut = false,
   });
 
-  MusicTrack copyWith({int? volume, Duration? duration}) {
+  MusicTrack copyWith({
+    int? volume,
+    Duration? duration,
+    double? timelineStartSec,
+    double? timelineEndSec,
+    bool clearTimelineEnd = false,
+    double? clipStartSec,
+    double? clipEndSec,
+    bool clearClipEnd = false,
+    bool? fadeIn,
+    bool? fadeOut,
+  }) {
     return MusicTrack(
       path: path,
       title: title,
       duration: duration ?? this.duration,
       isAsset: isAsset,
       volume: volume ?? this.volume,
+      timelineStartSec: timelineStartSec ?? this.timelineStartSec,
+      timelineEndSec: clearTimelineEnd
+          ? null
+          : (timelineEndSec ?? this.timelineEndSec),
+      clipStartSec: clipStartSec ?? this.clipStartSec,
+      clipEndSec: clearClipEnd ? null : (clipEndSec ?? this.clipEndSec),
+      fadeIn: fadeIn ?? this.fadeIn,
+      fadeOut: fadeOut ?? this.fadeOut,
     );
   }
+
+  /// Built-in Popular tracks shown in the editor music sheet and Library.
+  static const popular = <MusicTrack>[
+    MusicTrack(path: 'assets/music/songs_1.mp3', title: 'Popular Beat', isAsset: true),
+    MusicTrack(path: 'assets/music/songs_2.mp3', title: 'Soft Piano', isAsset: true),
+    MusicTrack(path: 'assets/music/songs_3.mp3', title: 'Upbeat Pop', isAsset: true),
+    MusicTrack(path: 'assets/music/songs_4.mp3', title: 'Chill Wave', isAsset: true),
+    MusicTrack(path: 'assets/music/songs_5.mp3', title: 'Cinematic', isAsset: true),
+    MusicTrack(path: 'assets/music/songs_6.mp3', title: 'Happy Day', isAsset: true),
+  ];
 }
 
 enum PhotoAnimationType {
