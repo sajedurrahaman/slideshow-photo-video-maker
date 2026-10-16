@@ -797,6 +797,8 @@ class _EditorScreenState extends State<EditorScreen> {
             asset: null,
             icon: Icons.graphic_eq,
           ),
+          // Last index — remove selected music (None).
+          (id: 'delete', label: 'Delete', asset: 'delete.png', icon: null),
         ];
     final color = active ? AppColors.textDark : AppColors.textMuted;
     return Container(
@@ -954,6 +956,14 @@ class _EditorScreenState extends State<EditorScreen> {
         setState(() {
           _musicVolumeOpen = false;
           _musicEditOpen = true;
+        });
+        return;
+      case 'delete':
+        project.setMusic(null);
+        setState(() {
+          _musicTrackSelected = false;
+          _musicVolumeOpen = false;
+          _musicEditOpen = false;
         });
         return;
       case 'beatsync':
@@ -2648,7 +2658,8 @@ class _MusicEditSheetState extends State<_MusicEditSheet> {
                 color: value ? AppColors.primary : const Color(0xFFD0D0D0),
               ),
             ),
-            alignment: value ? Alignment.centerLeft : Alignment.centerRight,
+            // ON = knob on the right (matches screenshot).
+            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
             child: Container(
               width: 18,
               height: 18,
@@ -3015,14 +3026,6 @@ class _MusicTimelineLaneState extends State<_MusicTimelineLane> {
     return (start, end);
   }
 
-  void _clampLive(double videoDur) {
-    const minLen = 0.5;
-    var s = (_liveStart ?? 0).clamp(0.0, videoDur - minLen);
-    var e = (_liveEnd ?? videoDur).clamp(s + minLen, videoDur);
-    _liveStart = s;
-    _liveEnd = e;
-  }
-
   void _beginInteract() {
     final (s, e) = _range();
     _interacting = true;
@@ -3030,12 +3033,22 @@ class _MusicTimelineLaneState extends State<_MusicTimelineLane> {
     _liveEnd = e;
   }
 
+  void _clampLive(double videoDur) {
+    const minLen = 0.5;
+    final s = (_liveStart ?? 0).clamp(0.0, videoDur - minLen);
+    final e = (_liveEnd ?? videoDur).clamp(s + minLen, videoDur);
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  /// Left/right handles resize the music clip on the timeline (edge follows finger).
   void _trimByDx({required bool isStart, required double dxPx}) {
     final videoDur = widget.project.estimatedDurationSec;
     final dSec = dxPx / widget.pixelsPerSecond;
-    _beginInteract();
+    if (!_interacting) _beginInteract();
     setState(() {
       if (isStart) {
+        // Drag left → start earlier (bar grows left); drag right → start later.
         _liveStart = (_liveStart! + dSec).clamp(0.0, _liveEnd! - 0.5);
       } else {
         _liveEnd = (_liveEnd! + dSec).clamp(_liveStart! + 0.5, videoDur);
@@ -3047,7 +3060,7 @@ class _MusicTimelineLaneState extends State<_MusicTimelineLane> {
   void _moveByDx(double dxPx) {
     final videoDur = widget.project.estimatedDurationSec;
     final dSec = dxPx / widget.pixelsPerSecond;
-    _beginInteract();
+    if (!_interacting) _beginInteract();
     setState(() {
       final len = _liveEnd! - _liveStart!;
       final ns = (_liveStart! + dSec).clamp(0.0, videoDur - len);
@@ -3107,16 +3120,21 @@ class _MusicTimelineLaneState extends State<_MusicTimelineLane> {
     );
   }
 
+  /// `<` / `>` : music edge follows finger; timeline scrolls the opposite way.
   Widget _handle({required bool isStart, required IconData icon}) {
-    return Listener(
+    return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onPointerDown: (_) => _beginInteract(),
-      onPointerMove: (e) {
-        if (e.delta.dx == 0) return;
-        _trimByDx(isStart: isStart, dxPx: e.delta.dx);
+      dragStartBehavior: DragStartBehavior.down,
+      onHorizontalDragStart: (_) => _beginInteract(),
+      onHorizontalDragUpdate: (d) {
+        if (d.delta.dx == 0) return;
+        // Music clip edge moves with the finger…
+        _trimByDx(isStart: isStart, dxPx: d.delta.dx);
+        // …while the photo/music timeline pans the opposite direction.
+        widget.onScrollTimeline(-d.delta.dx);
       },
-      onPointerUp: (_) => _commitInteract(),
-      onPointerCancel: (_) => _commitInteract(),
+      onHorizontalDragEnd: (_) => _commitInteract(),
+      onHorizontalDragCancel: _commitInteract,
       child: SizedBox(
         width: _MusicTimelineLane.handleW,
         height: double.infinity,
@@ -3281,18 +3299,85 @@ class _MusicPickerSheet extends StatefulWidget {
 class _MusicPickerSheetState extends State<_MusicPickerSheet> {
   /// Sheet opens with My Music selected by default.
   _MusicSourceTab _source = _MusicSourceTab.myMusic;
+  final AudioPlayer _previewPlayer = AudioPlayer();
+  String? _previewPath;
+  bool _previewPlaying = false;
+
+  @override
+  void dispose() {
+    unawaited(_previewPlayer.dispose());
+    super.dispose();
+  }
+
+  Future<void> _stopPreview() async {
+    try {
+      await _previewPlayer.stop();
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _previewPath = null;
+        _previewPlaying = false;
+      });
+    } else {
+      _previewPath = null;
+      _previewPlaying = false;
+    }
+  }
+
+  Future<void> _playTrack(MusicTrack track) async {
+    try {
+      widget.project.setMusic(track);
+      // Avoid clashing with editor slideshow preview audio.
+      widget.project.stopPreviewPlayback();
+      if (track.isAsset) {
+        await _previewPlayer.setAsset(track.path);
+      } else {
+        await _previewPlayer.setFilePath(track.path);
+      }
+      await _previewPlayer.setVolume((track.volume / 100).clamp(0.0, 1.0));
+      await _previewPlayer.play();
+      if (!mounted) return;
+      setState(() {
+        _previewPath = track.path;
+        _previewPlaying = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Playback failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _onTrackTap(MusicTrack track) async {
+    final isSel = widget.project.music?.path == track.path;
+    if (isSel && _previewPath == track.path && _previewPlaying) {
+      await _previewPlayer.pause();
+      if (mounted) setState(() => _previewPlaying = false);
+      return;
+    }
+    if (isSel && _previewPath == track.path && !_previewPlaying) {
+      await _previewPlayer.play();
+      if (mounted) setState(() => _previewPlaying = true);
+      return;
+    }
+    await _playTrack(track);
+  }
 
   Widget _trackTile(MusicTrack track, MusicTrack? selected) {
     final isSel = selected?.path == track.path;
+    final isPlaying = isSel && _previewPath == track.path && _previewPlaying;
     return _MusicThumbTile(
       title: track.title,
       selected: isSel,
-      onTap: () => widget.project.setMusic(track),
+      onTap: () => _onTrackTap(track),
       child: SizedBox(
         width: 58,
         child: Center(
           child: Icon(
-            Icons.library_music,
+            isSel
+                ? (isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded)
+                : Icons.library_music,
             color: isSel ? AppColors.iconActive : AppColors.textDark,
             size: 28,
           ),
@@ -3317,12 +3402,18 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet> {
             child: Row(
               children: [
                 IconButton(
-                  onPressed: widget.onClose,
+                  onPressed: () async {
+                    await _stopPreview();
+                    widget.onClose();
+                  },
                   icon: const Icon(Icons.close, color: AppColors.textDark),
                 ),
                 const Expanded(child: Center(child: SheetTitle('Music'))),
                 IconButton(
-                  onPressed: widget.onConfirm,
+                  onPressed: () async {
+                    await _stopPreview();
+                    widget.onConfirm();
+                  },
                   icon: const Icon(Icons.check, color: AppColors.primary),
                 ),
               ],
@@ -3386,7 +3477,10 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet> {
                   return _MusicThumbTile(
                     title: 'None',
                     selected: isSel,
-                    onTap: () => widget.project.setMusic(null),
+                    onTap: () async {
+                      await _stopPreview();
+                      widget.project.setMusic(null);
+                    },
                     child: SizedBox(
                       width: 58,
                       child: Center(

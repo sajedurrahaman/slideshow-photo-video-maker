@@ -69,12 +69,8 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
         interpolation: img.Interpolation.linear,
       );
     }
-    final centerX = zoom > 1.001
-        ? outW / 2
-        : -cropLeft * srcW + srcW / 2;
-    final centerY = zoom > 1.001
-        ? outH / 2
-        : -cropTop * srcH + srcH / 2;
+    final centerX = zoom > 1.001 ? outW / 2 : -cropLeft * srcW + srcW / 2;
+    final centerY = zoom > 1.001 ? outH / 2 : -cropTop * srcH + srcH / 2;
     final canvas = img.Image(width: outW, height: outH, numChannels: 4);
     img.fill(canvas, color: img.ColorRgba8(0, 0, 0, 255));
     img.compositeImage(
@@ -702,9 +698,42 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
+  static const _previewMusicFadeSec = 1.5;
+
   Future<void> _stopPreviewMusic() async {
     try {
       await _previewMusic?.pause();
+    } catch (_) {}
+  }
+
+  /// Volume at [videoSec] respecting Fade In / Fade Out switches.
+  double _previewMusicVolumeAt(double videoSec, MusicTrack m) {
+    final target = (m.volume / 100.0).clamp(0.0, 1.0);
+    final tStart = m.timelineStartSec;
+    final tEnd = m.timelineEndSec ?? estimatedDurationSec;
+    final window = (tEnd - tStart).clamp(0.1, 36000.0);
+    if (videoSec < tStart || videoSec >= tEnd) return 0;
+
+    var vol = target;
+    final into = videoSec - tStart;
+    final remain = tEnd - videoSec;
+    final fadeDur = math.min(_previewMusicFadeSec, window / 2);
+
+    if (m.fadeIn && into < fadeDur) {
+      vol = target * (into / fadeDur).clamp(0.0, 1.0);
+    }
+    if (m.fadeOut && remain < fadeDur) {
+      vol = math.min(vol, target * (remain / fadeDur).clamp(0.0, 1.0));
+    }
+    return vol;
+  }
+
+  Future<void> _applyPreviewMusicVolume(double videoSec) async {
+    final m = music;
+    final player = _previewMusic;
+    if (m == null || player == null) return;
+    try {
+      await player.setVolume(_previewMusicVolumeAt(videoSec, m));
     } catch (_) {}
   }
 
@@ -730,8 +759,6 @@ class SlideshowProject extends ChangeNotifier {
         _previewMusicPath = m.path;
       }
 
-      await _previewMusic!.setVolume((m.volume / 100.0).clamp(0.0, 1.0));
-
       final tStart = m.timelineStartSec;
       final tEnd = m.timelineEndSec ?? estimatedDurationSec;
       if (videoSec < tStart || videoSec >= tEnd) {
@@ -742,11 +769,15 @@ class SlideshowProject extends ChangeNotifier {
       final sourceDur = m.duration?.inMilliseconds != null
           ? m.duration!.inMilliseconds / 1000.0
           : (_previewMusic!.duration?.inMilliseconds ?? 60000) / 1000.0;
-      final clipEnd =
-          (m.clipEndSec ?? sourceDur).clamp(clipStart + 0.1, sourceDur);
+      final clipEnd = (m.clipEndSec ?? sourceDur).clamp(
+        clipStart + 0.1,
+        sourceDur,
+      );
       final clipLen = math.max(0.1, clipEnd - clipStart);
       final into = videoSec - tStart;
       final audioSec = clipStart + (into % clipLen);
+
+      await _previewMusic!.setVolume(_previewMusicVolumeAt(videoSec, m));
 
       if (forceSeek || !_previewMusic!.playing) {
         await _previewMusic!.seek(
@@ -838,9 +869,7 @@ class SlideshowProject extends ChangeNotifier {
     isPreviewPlaying = true;
     isPlaying = true;
     final selected = selectedPhotoIndex;
-    final selectedStart = selected == null
-        ? 0
-        : photoFrameStartIndex(selected);
+    final selectedStart = selected == null ? 0 : photoFrameStartIndex(selected);
     final selectedEnd = selected == null
         ? _previewMemoryFrames.length
         : (selectedStart + frameCountForDuration(photos[selected].durationSec))
@@ -883,17 +912,19 @@ class SlideshowProject extends ChangeNotifier {
       // Only update listenables — do NOT notifyListeners (avoids full rebuild blink).
       _setPreviewPosition(next / previewFps);
       _setPreviewFrame(_previewMemoryFrames[next]);
-      // Resume / pause music if we enter or leave the timeline music window.
+      // Fade volume every couple of frames; full sync less often.
       musicSyncCounter++;
+      if (musicSyncCounter % 2 == 0) {
+        unawaited(_applyPreviewMusicVolume(previewPositionSec));
+      }
       if (musicSyncCounter % 15 == 0) {
-        unawaited(
-          _startPreviewMusicAt(previewPositionSec, forceSeek: false),
-        );
+        unawaited(_startPreviewMusicAt(previewPositionSec, forceSeek: false));
       }
     });
   }
 
-  Future<({List<Uint8List> frames, List<int> counts})?> _buildPreviewMemoryFrames({
+  Future<({List<Uint8List> frames, List<int> counts})?>
+  _buildPreviewMemoryFrames({
     required int generation,
     required String cacheKey,
   }) async {
@@ -999,7 +1030,9 @@ class SlideshowProject extends ChangeNotifier {
       _previewSegmentCounts[index] = segment.length;
       _previewCacheKey = _buildPreviewCacheKey();
       isPreviewReady = _previewMemoryFrames.isNotEmpty;
-      final frameIndex = start.clamp(0, _previewMemoryFrames.length - 1).toInt();
+      final frameIndex = start
+          .clamp(0, _previewMemoryFrames.length - 1)
+          .toInt();
       previewFrameIndex = frameIndex;
       _setPreviewPosition(frameIndex / previewFps);
       _setPreviewFrame(_previewMemoryFrames[frameIndex]);
@@ -1034,10 +1067,15 @@ class SlideshowProject extends ChangeNotifier {
           ((frameCursor[0] / previewFps) * EffectOverlayService.previewFps)
               .floor() %
           overlays.length;
-      composed = EffectOverlayService.screenBlend(composed, overlays[effectIndex]);
+      composed = EffectOverlayService.screenBlend(
+        composed,
+        overlays[effectIndex],
+      );
     }
     frameCursor[0] = frameCursor[0] + 1;
-    return Uint8List.fromList(TransitionEngine.encodeJpeg(composed, quality: 70));
+    return Uint8List.fromList(
+      TransitionEngine.encodeJpeg(composed, quality: 70),
+    );
   }
 
   Future<List<Uint8List>?> _encodeStill(
@@ -1087,7 +1125,9 @@ class SlideshowProject extends ChangeNotifier {
 
     Future<bool> pushFrame(img.Image image) async {
       if (generation != _previewGeneration) return false;
-      if (overlays.isEmpty && identical(image, lastSource) && lastBytes != null) {
+      if (overlays.isEmpty &&
+          identical(image, lastSource) &&
+          lastBytes != null) {
         frames.add(lastBytes!);
         cursor[0] = cursor[0] + 1;
         return true;
@@ -1153,13 +1193,13 @@ class SlideshowProject extends ChangeNotifier {
     return frames;
   }
 
-
   void selectFrame(String? assetPath) {
     if (selectedFrameAsset == assetPath) return;
     selectedFrameAsset = assetPath;
     // Editor shows the frame as a live overlay. Drop any JPEG preview that
     // already baked an older frame so the two cannot stack.
-    if (_previewMemoryFrames.isNotEmpty || previewFrameListenable.value != null) {
+    if (_previewMemoryFrames.isNotEmpty ||
+        previewFrameListenable.value != null) {
       stopPreviewPlayback();
       _previewMemoryFrames.clear();
       _previewSegmentCounts.clear();
@@ -1603,10 +1643,7 @@ class SlideshowProject extends ChangeNotifier {
         final asset = await AssetEntity.fromId(photo.id);
         if (asset == null || token != _sharpenToken) continue;
         final bytes = await asset
-            .thumbnailDataWithSize(
-              const ThumbnailSize(1800, 1800),
-              quality: 93,
-            )
+            .thumbnailDataWithSize(const ThumbnailSize(1800, 1800), quality: 93)
             .timeout(const Duration(seconds: 8));
         if (bytes == null || bytes.length < await file.length()) continue;
         if (token != _sharpenToken || i >= photos.length) return;
