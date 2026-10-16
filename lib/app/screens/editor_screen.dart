@@ -209,47 +209,28 @@ class _EditorScreenState extends State<EditorScreen> {
   /// Preview row shown inside SectionSheet for every tool.
   Widget _previewRow(SlideshowProject project) {
     final disabled = project.isProcessing || project.isPreparingPreview;
-    final isSlide = _tool == EditorTool.slide;
-
-    if (isSlide) {
-      return Row(
-        children: [
-          _timeText(project),
-          Expanded(
-            child: Center(
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                onPressed: disabled ? null : _preview,
-                icon: Icon(
-                  project.isPreviewPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                ),
-                iconSize: 32,
-                color: project.isPreviewReady ? Colors.black87 : Colors.black38,
-              ),
-            ),
-          ),
-          const SizedBox(width: 64),
-        ],
-      );
-    }
-
     return Row(
       children: [
-        _timeText(project),
-        const Spacer(),
-        IconButton(
-          onPressed: disabled ? null : _preview,
-          icon: Icon(
-            project.isPreviewPlaying
-                ? Icons.pause_circle_outline
-                : Icons.play_circle_outline,
+        SizedBox(width: 88, child: Align(
+          alignment: Alignment.centerLeft,
+          child: _timeText(project),
+        )),
+        Expanded(
+          child: Center(
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: disabled ? null : _preview,
+              icon: Icon(
+                project.isPreviewPlaying
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
+              ),
+              iconSize: 32,
+              color: Colors.black87,
+            ),
           ),
-          color: project.isPreviewReady
-              ? AppColors.primary
-              : AppColors.textMuted,
         ),
+        const SizedBox(width: 88),
       ],
     );
   }
@@ -258,45 +239,57 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _idlePreviewRow(SlideshowProject project) {
     final disabled = project.isProcessing || project.isPreparingPreview;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        _timeText(project),
-        Center(
-          child: IconButton(
-            padding: EdgeInsets.only(left: 12),
-            onPressed: disabled ? null : _preview,
-            icon: Icon(
-              project.isPreviewPlaying
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded,
-            ),
-            iconSize: 32,
-            color: Colors.black87,
+        SizedBox(
+          width: 96,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _timeText(project),
           ),
         ),
-        if (project.selectedPhotoIndex == null)
-          Row(
-            children: [
-              IconButton(
-                padding: EdgeInsets.zero,
-                onPressed: project.canUndo ? () => project.undo() : null,
-                icon: Icon(
-                  Icons.undo_rounded,
-                  color: project.canUndo ? Colors.black87 : Colors.black26,
-                ),
+        Expanded(
+          child: Center(
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: disabled ? null : _preview,
+              icon: Icon(
+                project.isPreviewPlaying
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
               ),
-              IconButton(
-                padding: EdgeInsets.zero,
-                onPressed: project.canRedo ? () => project.redo() : null,
-                icon: Icon(
-                  Icons.redo_rounded,
-                  color: project.canRedo ? Colors.black87 : Colors.black26,
-                ),
-              ),
-            ],
-          )
-        else
-          const SizedBox(width: 96),
+              iconSize: 32,
+              color: Colors.black87,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 96,
+          child: project.selectedPhotoIndex == null
+              ? Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      onPressed: project.canUndo ? () => project.undo() : null,
+                      icon: Icon(
+                        Icons.undo_rounded,
+                        color:
+                            project.canUndo ? Colors.black87 : Colors.black26,
+                      ),
+                    ),
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      onPressed: project.canRedo ? () => project.redo() : null,
+                      icon: Icon(
+                        Icons.redo_rounded,
+                        color:
+                            project.canRedo ? Colors.black87 : Colors.black26,
+                      ),
+                    ),
+                  ],
+                )
+              : null,
+        ),
       ],
     );
   }
@@ -1763,28 +1756,32 @@ class _EditorScreenState extends State<EditorScreen> {
       appBar: AppBar(
         title: const Text('Editor'),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: project.selectedPhotoIndex != null
-                ? TealPillButton(
-                    label: 'Done',
-                    onPressed: () {
-                      setState(() {
-                        _photoTool = null;
-                        _tool = null;
-                        _liveMode = _LiveMode.idle;
-                      });
-                      project.clearTimelinePhotoSelection();
-                    },
-                  )
-                : TealPillButton(
-                    label: 'Export',
-                    enabled:
-                        project.photos.length >= AppConstants.minPhotos &&
-                        !project.isProcessing,
-                    onPressed: () => context.push('/export'),
-                  ),
-          ),
+          if (project.selectedPhotoIndex != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: TealPillButton(
+                label: 'Done',
+                onPressed: () {
+                  setState(() {
+                    _photoTool = null;
+                    _tool = null;
+                    _liveMode = _LiveMode.idle;
+                  });
+                  project.clearTimelinePhotoSelection();
+                },
+              ),
+            )
+          else if (_tool != EditorTool.frame)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: TealPillButton(
+                label: 'Export',
+                enabled:
+                    project.photos.length >= AppConstants.minPhotos &&
+                    !project.isProcessing,
+                onPressed: () => context.push('/export'),
+              ),
+            ),
         ],
       ),
       body: Column(
@@ -1887,6 +1884,15 @@ class _EditorScreenState extends State<EditorScreen> {
                                     },
                                   );
                                 },
+                              ),
+                            ),
+                          if (project.selectedFrameAsset != null)
+                            IgnorePointer(
+                              child: Image.asset(
+                                project.selectedFrameAsset!,
+                                fit: BoxFit.fill,
+                                gaplessPlayback: true,
+                                filterQuality: FilterQuality.medium,
                               ),
                             ),
                           // Loading while transition preview frames are prepared.
@@ -2215,57 +2221,128 @@ class _FramePanel extends StatelessWidget {
   final SlideshowProject project;
   final VoidCallback onChanged;
 
+  static const _accent = Color(0xFF00C6D7);
+  static const _muted = Color(0xFF9E9E9E);
+  static const _tile = 72.0;
+
   @override
   Widget build(BuildContext context) {
     final frames = FrameAsset.all;
     return ListView.separated(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       itemCount: frames.length + 1,
-      separatorBuilder: (_, _) => const SizedBox(width: 8),
+      separatorBuilder: (_, _) => const SizedBox(width: 12),
       itemBuilder: (context, i) {
         if (i == 0) {
           final selected = project.selectedFrameAsset == null;
-          return GestureDetector(
+          return _frameTile(
+            selected: selected,
+            label: 'Default',
             onTap: () {
               project.selectFrame(null);
               onChanged();
             },
-            child: Container(
-              width: 72,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: selected ? AppColors.primary : AppColors.border,
-                  width: selected ? 2 : 1,
-                ),
-              ),
-              child: const Text('None', style: TextStyle(fontSize: 12)),
+            child: const Icon(
+              Icons.block,
+              size: 34,
+              color: _muted,
             ),
           );
         }
         final frame = frames[i - 1];
         final selected = project.selectedFrameAsset == frame.assetPath;
-        return GestureDetector(
+        final n = i.toString().padLeft(2, '0');
+        return _frameTile(
+          selected: selected,
+          label: 'Frame_$n',
           onTap: () {
             project.selectFrame(frame.assetPath);
             onChanged();
           },
-          child: Container(
-            width: 72,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: selected ? AppColors.primary : AppColors.border,
-                width: selected ? 2 : 1,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                frame.assetPath,
+                fit: BoxFit.cover,
+                width: double.infinity,
+                height: double.infinity,
               ),
             ),
-            clipBehavior: Clip.antiAlias,
-            child: Image.asset(frame.assetPath, fit: BoxFit.cover),
           ),
         );
       },
+    );
+  }
+
+  Widget _frameTile({
+    required bool selected,
+    required String label,
+    required VoidCallback onTap,
+    required Widget child,
+  }) {
+    final borderColor = selected ? _accent : const Color(0xFFD0D0D0);
+    final labelColor = selected ? _accent : _muted;
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: _tile,
+        child: Column(
+          children: [
+            Expanded(
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: borderColor,
+                          width: selected ? 2 : 1,
+                        ),
+                      ),
+                      child: child,
+                    ),
+                  ),
+                  if (selected)
+                    Positioned(
+                      left: -2,
+                      top: -2,
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: const BoxDecoration(
+                          color: _accent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.check,
+                          size: 13,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: labelColor,
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

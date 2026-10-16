@@ -330,9 +330,9 @@ class FrameAsset {
   final String assetPath;
   const FrameAsset(this.id, this.assetPath);
 
-  static List<FrameAsset> get all => List.generate(30, (i) {
+  static List<FrameAsset> get all => List.generate(12, (i) {
     final n = (i + 1).toString().padLeft(2, '0');
-    return FrameAsset('frame_$n', 'assets/frames/frame_$n.webp');
+    return FrameAsset('frame_$n', 'assets/frames/frame_$n.png');
   });
 }
 
