@@ -22,6 +22,7 @@ import '../services/effect_overlay_service.dart';
 import '../services/slideshow_project.dart';
 import 'crop_screen.dart';
 import '../widgets/editTool_sheet.dart';
+import '../widgets/text_tools_sheet.dart';
 
 enum EditorTool {
   slide,
@@ -82,6 +83,8 @@ class _EditorScreenState extends State<EditorScreen> {
   _LiveMode _liveMode = _LiveMode.idle;
 
   /// After Music sheet close/check — photo-style music tools navbar.
+  bool _photoDurationDragging = false;
+  double? _livePhotoDurationSec;
   bool _musicToolsOpen = false;
   bool _musicVolumeOpen = false;
   bool _musicEditOpen = false;
@@ -92,8 +95,16 @@ class _EditorScreenState extends State<EditorScreen> {
   /// After Effects picker confirm — music-style effects tools navbar.
   bool _effectsToolsOpen = false;
   bool _effectsTrackSelected = false;
+
+  /// Text tools (CapCut-style Template / Font / Color).
+  bool _textToolsOpen = false;
+  String? _selectedTextOverlayId;
   final _textController = TextEditingController();
+  final _textFocusNode = FocusNode();
   final _stripController = ScrollController();
+  /// Keeps the photo ListView Element across panel branch switches so the
+  /// ScrollController is never attached to two scroll views at once.
+  final _photoStripListKey = GlobalKey();
 
   static const _sheetHeight = 180.0;
   static const _timelineHeaderHeight = 48.0;
@@ -103,6 +114,13 @@ class _EditorScreenState extends State<EditorScreen> {
   /// Gap between photo thumbs and music lane / placeholder line.
   static const _musicUnderPhotosGap = 4.0;
   static const _musicPlaceholderH = 2.0;
+
+  /// Compact slot for the inactive track's thin line (tools open / Done).
+  static const _collapsedLineSlotH = 6.0;
+  static const _collapsedToActiveGap = 2.0;
+
+  /// Effect lane sits this far above the strip bottom edge.
+  static const _effectBottomPad = 5.0;
   static const _plusW = 52.0;
   static const _pixelsPerSecond = 44.0;
   static const _thumbH = 60.0;
@@ -144,14 +162,23 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  /// Safe while the strip ListView is mounting/unmounting across layout branches.
+  double get _stripOffset {
+    final c = _stripController;
+    if (c.positions.length != 1) return 0.0;
+    return c.offset;
+  }
+
+  bool get _stripReady => _stripController.positions.length == 1;
+
   void _onStripScroll() {
-    if (_syncingStrip || !_stripController.hasClients || !mounted) return;
+    if (_syncingStrip || !_stripReady || !mounted) return;
     final project = _listenedProject;
     if (project == null || project.isPreviewPlaying) return;
     if (project.selectedPhotoIndex != null) return;
     _userScrubbing = true;
     final seconds =
-        _stripController.offset / _pixelsPerSecond +
+        _stripOffset / _pixelsPerSecond +
         (project.startingCard?.durationSec ?? 0);
     project.seekPreviewSeconds(seconds);
     _userScrubbing = false;
@@ -159,11 +186,11 @@ class _EditorScreenState extends State<EditorScreen> {
 
   /// Scrub timeline by dragging the music row (same as photo strip scroll).
   void _scrollTimelineByDx(double dx) {
-    if (!_stripController.hasClients || !mounted) return;
+    if (!_stripReady || !mounted) return;
     final project = context.read<SlideshowProject>();
     if (project.isPreviewPlaying) return;
     final max = _stripController.position.maxScrollExtent;
-    final next = (_stripController.offset - dx).clamp(0.0, max);
+    final next = (_stripOffset - dx).clamp(0.0, max);
     _userScrubbing = true;
     _stripController.jumpTo(next);
     final seconds =
@@ -175,7 +202,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void _onPreviewPosition() {
     if (_userScrubbing) return;
     if (!mounted || _tool != null) return;
-    if (!_stripController.hasClients) return;
+    if (!_stripReady) return;
     final project = _listenedProject;
     if (project == null) return;
     _syncStripToPlayhead(project: project);
@@ -188,6 +215,7 @@ class _EditorScreenState extends State<EditorScreen> {
     );
     _stripController.dispose();
     _textController.dispose();
+    _textFocusNode.dispose();
     super.dispose();
   }
 
@@ -251,6 +279,36 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _tool = null);
   }
 
+  void _openTextTools() {
+    final project = context.read<SlideshowProject>();
+    project.stopPreviewPlayback();
+    // Prefer existing text overlay, else start fresh entry.
+    final existing = project.overlays
+        .where((o) => o.kind == OverlayKind.text)
+        .toList();
+    final selected = existing.isNotEmpty ? existing.last : null;
+    _textController.text = selected?.text ?? '';
+    setState(() {
+      _tool = null;
+      _musicToolsOpen = false;
+      _effectsToolsOpen = false;
+      _textToolsOpen = true;
+      _selectedTextOverlayId = selected?.id;
+      _photoTool = null;
+    });
+    project.clearTimelinePhotoSelection();
+  }
+
+  void _closeTextTools() {
+    _textFocusNode.unfocus();
+    setState(() {
+      _textToolsOpen = false;
+      _selectedTextOverlayId = null;
+      _tool = null;
+    });
+    unawaited(context.read<SlideshowProject>().refreshLivePreview());
+  }
+
   void _finishMusicPicker() {
     setState(() {
       _tool = null;
@@ -296,12 +354,21 @@ class _EditorScreenState extends State<EditorScreen> {
 
   /// Under-photo rows: music and/or effect timeline lanes.
   double _underPhotosH(SlideshowProject project) {
-    var h = 0.0;
-    if (project.music != null) h += _musicUnderPhotosGap + _musicTrackHeight;
-    if (_hasEffectLane(project)) {
-      h += _musicUnderPhotosGap + _musicTrackHeight;
+    final music = project.music != null;
+    final effect = _hasEffectLane(project);
+    if (!music && !effect) return 0;
+    final both = music && effect;
+    final toolsOpen = _musicToolsOpen || _effectsToolsOpen;
+    if (both) {
+      // Thin line tightly above active bar (tools) or above other thin line (Done).
+      final lowerH = toolsOpen ? _musicTrackHeight : _collapsedLineSlotH;
+      return _musicUnderPhotosGap +
+          _collapsedLineSlotH +
+          _collapsedToActiveGap +
+          lowerH +
+          _effectBottomPad;
     }
-    return h;
+    return _musicUnderPhotosGap + _musicTrackHeight + _effectBottomPad;
   }
 
   Future<void> _pickLocalMusic() async {
@@ -459,7 +526,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _syncStripToPlayhead({required SlideshowProject project}) {
-    if (!_stripController.hasClients) return;
+    if (!_stripReady) return;
     if (project.photos.isEmpty) return;
     final trackWidth = project.photos.fold<double>(
       0,
@@ -474,7 +541,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final target = timelinePosition * _pixelsPerSecond;
     final max = _stripController.position.maxScrollExtent;
     final next = target.clamp(0.0, max).toDouble();
-    if ((_stripController.offset - next).abs() < 0.5) return;
+    if ((_stripOffset - next).abs() < 0.5) return;
     _syncingStrip = true;
     _stripController.jumpTo(next);
     _syncingStrip = false;
@@ -516,10 +583,19 @@ class _EditorScreenState extends State<EditorScreen> {
           );
           final hasMusic = project.music != null;
           final hasEffect = _hasEffectLane(project);
-          final musicTop = top + _thumbH + _musicUnderPhotosGap;
-          final effectTop = hasMusic
-              ? musicTop + _musicTrackHeight + _musicUnderPhotosGap
-              : musicTop;
+          // Shared bottom slot for active music/effect tools timeline.
+          final toolsOpen = _musicToolsOpen || _effectsToolsOpen;
+          final lowerH = toolsOpen || !(hasMusic && hasEffect)
+              ? _musicTrackHeight
+              : _collapsedLineSlotH;
+          final bottomSlotTop = top +
+              _thumbH +
+              underH -
+              _effectBottomPad -
+              lowerH;
+          // Thin "other" line sits just above the active / lower timeline.
+          final otherLineTop =
+              bottomSlotTop - _collapsedToActiveGap - _collapsedLineSlotH;
 
           return Stack(
             children: [
@@ -528,196 +604,239 @@ class _EditorScreenState extends State<EditorScreen> {
                 right: 0,
                 top: top,
                 height: _thumbH,
-                child: ListView.builder(
-                  controller: _stripController,
-                  scrollDirection: Axis.horizontal,
-                  physics: project.isPreviewPlaying
-                      ? const NeverScrollableScrollPhysics()
-                      : const BouncingScrollPhysics(),
-                  padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
-                  itemCount: project.photos.length,
-                  itemBuilder: (context, photoIndex) {
-                    final photo = project.photos[photoIndex];
-                    final selected = project.selectedPhotoIndex == photoIndex;
-                    final clipWidth = photo.durationSec * _pixelsPerSecond;
-                    final canShowDuration = clipWidth >= 72;
-                    final thumbnailCount = photo.durationSec.ceil();
-                    return SizedBox(
-                      width: clipWidth,
-                      height: _thumbH,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          Positioned.fill(
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _tool = null;
-                                  _photoTool = null;
-                                  _durationSliderValue = null;
-                                  _liveMode = _LiveMode.idle;
-                                });
-                                project.selectTimelinePhoto(photoIndex);
-                              },
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: Row(
-                                      children: [
-                                        for (var i = 0; i < thumbnailCount; i++)
-                                          SizedBox(
-                                            width:
-                                                (clipWidth -
-                                                        i * _pixelsPerSecond)
-                                                    .clamp(
-                                                      0.0,
-                                                      _pixelsPerSecond,
-                                                    )
-                                                    .toDouble(),
-                                            height: _thumbH,
-                                            child: DecoratedBox(
-                                              decoration: const BoxDecoration(
-                                                border: Border(
-                                                  right: BorderSide(
-                                                    color: Colors.white70,
-                                                    width: 1,
-                                                  ),
-                                                ),
-                                              ),
-                                              child: CroppedPhotoView(
-                                                photo: photo,
-                                                fit: BoxFit.fill,
-                                                filterQuality:
-                                                    FilterQuality.low,
-                                                cacheWidth: 240,
-                                              ),
-                                            ),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    ListView.builder(
+                      key: _photoStripListKey,
+                      controller: _stripController,
+                      scrollDirection: Axis.horizontal,
+                      physics:
+                          (project.isPreviewPlaying || _photoDurationDragging)
+                          ? const NeverScrollableScrollPhysics()
+                          : const BouncingScrollPhysics(),
+                      padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
+                      itemCount: project.photos.length,
+                      itemBuilder: (context, photoIndex) {
+                        final photo = project.photos[photoIndex];
+                        final selected =
+                            project.selectedPhotoIndex == photoIndex;
+                        final durSec =
+                            (selected && _livePhotoDurationSec != null)
+                            ? _livePhotoDurationSec!
+                            : photo.durationSec;
+                        final clipWidth = durSec * _pixelsPerSecond;
+                        final thumbnailCount = durSec.ceil();
+
+                        Widget thumbRow({
+                          required double width,
+                          required double height,
+                        }) {
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: Row(
+                              children: [
+                                for (var i = 0; i < thumbnailCount; i++)
+                                  SizedBox(
+                                    width: (width - i * _pixelsPerSecond)
+                                        .clamp(0.0, _pixelsPerSecond)
+                                        .toDouble(),
+                                    height: height,
+                                    child: DecoratedBox(
+                                      decoration: const BoxDecoration(
+                                        border: Border(
+                                          right: BorderSide(
+                                            color: Colors.white70,
+                                            width: 1,
                                           ),
-                                      ],
+                                        ),
+                                      ),
+                                      child: CroppedPhotoView(
+                                        photo: photo,
+                                        fit: BoxFit.fill,
+                                        filterQuality: FilterQuality.low,
+                                        cacheWidth: 240,
+                                      ),
                                     ),
                                   ),
-                                  if (selected)
-                                    Positioned(
-                                      left: 2,
-                                      top: 0,
-                                      bottom: 0,
-                                      child: Center(
-                                        child: _durationHandle(
-                                          icon: Icons.chevron_left_rounded,
-                                          onTap: () =>
-                                              project.changePhotoDuration(
-                                                photoIndex,
-                                                photo.durationSec - 0.5,
-                                              ),
-                                        ),
-                                      ),
-                                    ),
-                                  if (selected)
-                                    Positioned(
-                                      right: 2,
-                                      top: 0,
-                                      bottom: 0,
-                                      child: Center(
-                                        child: _durationHandle(
-                                          icon: Icons.chevron_right_rounded,
-                                          onTap: () =>
-                                              project.changePhotoDuration(
-                                                photoIndex,
-                                                photo.durationSec + 0.5,
-                                              ),
-                                        ),
-                                      ),
-                                    ),
-                                  if (selected && canShowDuration)
-                                    Positioned(
-                                      left: 20,
-                                      top: 2,
+                              ],
+                            ),
+                          );
+                        }
+
+                        // Layout width = image only. Selection chrome is painted
+                        // in the overlay above so handles overlap neighbors.
+                        return SizedBox(
+                          width: clipWidth,
+                          height: _thumbH,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Positioned.fill(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _tool = null;
+                                      _photoTool = null;
+                                      _durationSliderValue = null;
+                                      _liveMode = _LiveMode.idle;
+                                      _livePhotoDurationSec = null;
+                                    });
+                                    project.selectTimelinePhoto(photoIndex);
+                                  },
+                                  child: thumbRow(
+                                    width: clipWidth,
+                                    height: _thumbH,
+                                  ),
+                                ),
+                              ),
+                              if (photoIndex > 0 &&
+                                  project.selectedPhotoIndex == null)
+                                Positioned(
+                                  left: -_transitionMarkerSize / 2,
+                                  top: 0,
+                                  bottom: 0,
+                                  child: Center(
+                                    child: GestureDetector(
+                                      onLongPress: () =>
+                                          project.removePhoto(photoIndex),
+                                      onTap: () {
+                                        project.clearTimelinePhotoSelection();
+                                        setState(() {
+                                          _tool = EditorTool.slide;
+                                          _photoTool = null;
+                                        });
+                                        if (!project.isPreviewReady &&
+                                            !project.isPreparingPreview) {
+                                          project.preparePreviewFrames();
+                                        }
+                                      },
                                       child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 3,
-                                          vertical: 1,
+                                        width: _transitionMarkerSize,
+                                        height: _transitionMarkerSize,
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                          boxShadow: const [
+                                            BoxShadow(
+                                              color: Color(0x33000000),
+                                              blurRadius: 4,
+                                              offset: Offset(0, 1),
+                                            ),
+                                          ],
                                         ),
-                                        color: Colors.black54,
-                                        child: Text(
-                                          '${photo.durationSec.toStringAsFixed(1)}s',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w700,
-                                          ),
+                                        child: const Icon(
+                                          Icons.compare_arrows_rounded,
+                                          size: 16,
+                                          color: Colors.black87,
                                         ),
                                       ),
                                     ),
-                                  if (selected)
-                                    Positioned.fill(
-                                      child: IgnorePointer(
-                                        child: DecoratedBox(
-                                          decoration: BoxDecoration(
-                                            border: Border.all(
-                                              color: AppColors.iconActive,
-                                              width: 6.4,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              4,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                    if (project.selectedPhotoIndex != null)
+                      ListenableBuilder(
+                        listenable: _stripController,
+                        builder: (context, _) {
+                          final sel = project.selectedPhotoIndex!;
+                          if (sel < 0 || sel >= project.photos.length) {
+                            return const SizedBox.shrink();
+                          }
+                          final photo = project.photos[sel];
+                          final durSec = _livePhotoDurationSec ??
+                              photo.durationSec;
+                          final clipW = durSec * _pixelsPerSecond;
+                          var startPx = 0.0;
+                          for (var i = 0; i < sel; i++) {
+                            startPx +=
+                                project.photos[i].durationSec *
+                                _pixelsPerSecond;
+                          }
+                          final scroll = _stripOffset;
+                          const handleW = _SelectedPhotoClip.handleW;
+                          final left =
+                              leftPad + startPx - scroll - handleW;
+
+                          Widget thumbRow({
+                            required double width,
+                            required double height,
+                          }) {
+                            final thumbnailCount = durSec.ceil();
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: Row(
+                                children: [
+                                  for (var i = 0; i < thumbnailCount; i++)
+                                    SizedBox(
+                                      width: (width - i * _pixelsPerSecond)
+                                          .clamp(0.0, _pixelsPerSecond)
+                                          .toDouble(),
+                                      height: height,
+                                      child: DecoratedBox(
+                                        decoration: const BoxDecoration(
+                                          border: Border(
+                                            right: BorderSide(
+                                              color: Colors.white70,
+                                              width: 1,
                                             ),
                                           ),
+                                        ),
+                                        child: CroppedPhotoView(
+                                          photo: photo,
+                                          fit: BoxFit.fill,
+                                          filterQuality: FilterQuality.low,
+                                          cacheWidth: 240,
                                         ),
                                       ),
                                     ),
                                 ],
                               ),
+                            );
+                          }
+
+                          return Positioned(
+                            left: left,
+                            top: 0,
+                            width: clipW + handleW * 2,
+                            height: _thumbH,
+                            child: _SelectedPhotoClip(
+                              key: ValueKey('sel-photo-$sel'),
+                              height: _thumbH,
+                              durationSec: photo.durationSec,
+                              pixelsPerSecond: _pixelsPerSecond,
+                              thumbBuilder: (w, h) =>
+                                  thumbRow(width: w, height: h),
+                              onScrollTimeline: _scrollTimelineByDx,
+                              onDragStart: () {
+                                if (!_photoDurationDragging) {
+                                  setState(
+                                    () => _photoDurationDragging = true,
+                                  );
+                                }
+                              },
+                              onLiveDuration: (sec) {
+                                setState(() => _livePhotoDurationSec = sec);
+                              },
+                              onDragEnd: () {
+                                setState(() {
+                                  _photoDurationDragging = false;
+                                  _livePhotoDurationSec = null;
+                                });
+                              },
+                              onCommitDuration: (sec) {
+                                project.changePhotoDuration(sel, sec);
+                              },
                             ),
-                          ),
-                          if (photoIndex > 0 &&
-                              project.selectedPhotoIndex == null)
-                            Positioned(
-                              left: -_transitionMarkerSize / 2,
-                              top: 0,
-                              bottom: 0,
-                              child: Center(
-                                child: GestureDetector(
-                                  onLongPress: () =>
-                                      project.removePhoto(photoIndex),
-                                  onTap: () {
-                                    project.clearTimelinePhotoSelection();
-                                    setState(() {
-                                      _tool = EditorTool.slide;
-                                      _photoTool = null;
-                                    });
-                                    if (!project.isPreviewReady &&
-                                        !project.isPreparingPreview) {
-                                      project.preparePreviewFrames();
-                                    }
-                                  },
-                                  child: Container(
-                                    width: _transitionMarkerSize,
-                                    height: _transitionMarkerSize,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(6),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Color(0x33000000),
-                                          blurRadius: 4,
-                                          offset: Offset(0, 1),
-                                        ),
-                                      ],
-                                    ),
-                                    child: const Icon(
-                                      Icons.compare_arrows_rounded,
-                                      size: 16,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
+                          );
+                        },
                       ),
-                    );
-                  },
+                  ],
                 ),
               ),
               if (project.selectedPhotoIndex == null)
@@ -751,100 +870,118 @@ class _EditorScreenState extends State<EditorScreen> {
                     ),
                   ),
                 ),
-              if (hasMusic && _musicToolsOpen)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: musicTop,
-                  height: _musicTrackHeight,
-                  child: _MusicTimelineLane(
-                    project: project,
-                    stripController: _stripController,
-                    leftPad: leftPad,
-                    pixelsPerSecond: _pixelsPerSecond,
-                    selected: _musicTrackSelected,
-                    onSelect: () {
-                      setState(() {
-                        _musicToolsOpen = true;
-                        _musicTrackSelected = true;
-                        _musicVolumeOpen = false;
-                        _effectsTrackSelected = false;
-                        project.clearTimelinePhotoSelection();
-                      });
-                    },
-                    onScrollTimeline: _scrollTimelineByDx,
+              // --- Music / Effect lanes ---
+              // Tools open: active interactive timeline always in the same bottom slot.
+              // Done: thin lines — effect on top, music below.
+              if (toolsOpen) ...[
+                if (_musicToolsOpen) ...[
+                  if (hasEffect)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: otherLineTop,
+                      height: _collapsedLineSlotH,
+                      child: _EffectCollapsedLine(
+                        project: project,
+                        stripController: _stripController,
+                        leftPad: leftPad,
+                        pixelsPerSecond: _pixelsPerSecond,
+                      ),
+                    ),
+                  if (hasMusic)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: bottomSlotTop,
+                      height: _musicTrackHeight,
+                      child: _MusicTimelineLane(
+                        project: project,
+                        stripController: _stripController,
+                        leftPad: leftPad,
+                        pixelsPerSecond: _pixelsPerSecond,
+                        selected: _musicTrackSelected,
+                        onSelect: () {
+                          setState(() {
+                            _musicToolsOpen = true;
+                            _musicTrackSelected = true;
+                            _musicVolumeOpen = false;
+                            _effectsTrackSelected = false;
+                            project.clearTimelinePhotoSelection();
+                          });
+                        },
+                        onScrollTimeline: _scrollTimelineByDx,
+                      ),
+                    ),
+                ] else if (_effectsToolsOpen) ...[
+                  if (hasMusic)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: otherLineTop,
+                      height: _collapsedLineSlotH,
+                      child: _MusicCollapsedLine(
+                        project: project,
+                        stripController: _stripController,
+                        leftPad: leftPad,
+                        pixelsPerSecond: _pixelsPerSecond,
+                      ),
+                    ),
+                  if (hasEffect)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: bottomSlotTop,
+                      height: _musicTrackHeight,
+                      child: _EffectTimelineLane(
+                        project: project,
+                        stripController: _stripController,
+                        leftPad: leftPad,
+                        pixelsPerSecond: _pixelsPerSecond,
+                        selected: _effectsTrackSelected,
+                        onSelect: () {
+                          setState(() {
+                            _effectsToolsOpen = true;
+                            _effectsTrackSelected = true;
+                            _musicTrackSelected = false;
+                            _musicToolsOpen = false;
+                            project.clearTimelinePhotoSelection();
+                          });
+                        },
+                        onScrollTimeline: _scrollTimelineByDx,
+                      ),
+                    ),
+                ],
+              ] else ...[
+                if (hasEffect)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: hasMusic ? otherLineTop : bottomSlotTop,
+                    height: hasMusic ? _collapsedLineSlotH : _musicTrackHeight,
+                    child: _EffectCollapsedLine(
+                      project: project,
+                      stripController: _stripController,
+                      leftPad: leftPad,
+                      pixelsPerSecond: _pixelsPerSecond,
+                    ),
                   ),
-                )
-              else if (hasMusic)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: musicTop,
-                  height: _musicTrackHeight,
-                  child: _MusicCollapsedLine(
-                    project: project,
-                    stripController: _stripController,
-                    leftPad: leftPad,
-                    pixelsPerSecond: _pixelsPerSecond,
+                if (hasMusic)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: bottomSlotTop,
+                    height: hasEffect ? _collapsedLineSlotH : _musicTrackHeight,
+                    child: _MusicCollapsedLine(
+                      project: project,
+                      stripController: _stripController,
+                      leftPad: leftPad,
+                      pixelsPerSecond: _pixelsPerSecond,
+                    ),
                   ),
-                ),
-              if (hasEffect && _effectsToolsOpen)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: effectTop,
-                  height: _musicTrackHeight,
-                  child: _EffectTimelineLane(
-                    project: project,
-                    stripController: _stripController,
-                    leftPad: leftPad,
-                    pixelsPerSecond: _pixelsPerSecond,
-                    selected: _effectsTrackSelected,
-                    onSelect: () {
-                      setState(() {
-                        _effectsToolsOpen = true;
-                        _effectsTrackSelected = true;
-                        _musicTrackSelected = false;
-                        _musicToolsOpen = false;
-                        project.clearTimelinePhotoSelection();
-                      });
-                    },
-                    onScrollTimeline: _scrollTimelineByDx,
-                  ),
-                )
-              else if (hasEffect)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: effectTop,
-                  height: _musicTrackHeight,
-                  child: _EffectCollapsedLine(
-                    project: project,
-                    stripController: _stripController,
-                    leftPad: leftPad,
-                    pixelsPerSecond: _pixelsPerSecond,
-                  ),
-                ),
+              ],
             ],
           );
         },
-      ),
-    );
-  }
-
-  Widget _durationHandle({
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        width: 16,
-        height: 19,
-        alignment: Alignment.center,
-        color: AppColors.primary,
-        child: Icon(icon, size: 16, color: Colors.black87),
       ),
     );
   }
@@ -884,6 +1021,7 @@ class _EditorScreenState extends State<EditorScreen> {
                         _musicEditOpen = false;
                         _musicTrackSelected = false;
                         _effectsToolsOpen = false;
+                        _textToolsOpen = false;
                       });
                       return;
                     }
@@ -899,12 +1037,18 @@ class _EditorScreenState extends State<EditorScreen> {
                         _effectsToolsOpen = true;
                         _effectsTrackSelected = true;
                         _musicToolsOpen = false;
+                        _textToolsOpen = false;
                       });
                       return;
                     }
                   }
+                  if (t == EditorTool.text) {
+                    _openTextTools();
+                    return;
+                  }
                   setState(() {
                     _tool = t;
+                    _textToolsOpen = false;
                     if (t == EditorTool.ratio) {
                       _canvasSheetTab = _CanvasSheetTab.ratio;
                     } else if (t == EditorTool.bg) {
@@ -1089,9 +1233,13 @@ class _EditorScreenState extends State<EditorScreen> {
       (
         id: 'clip_start',
         label: 'Clip start',
-        icon: Icons.align_horizontal_left,
+        icon: Icons.keyboard_double_arrow_left_rounded,
       ),
-      (id: 'clip_end', label: 'Clip end', icon: Icons.align_horizontal_right),
+      (
+        id: 'clip_end',
+        label: 'Clip end',
+        icon: Icons.keyboard_double_arrow_right_rounded,
+      ),
     ];
     final color = active ? AppColors.textDark : AppColors.textMuted;
     return Container(
@@ -1189,22 +1337,34 @@ class _EditorScreenState extends State<EditorScreen> {
           _effectsTrackSelected = false;
         });
         return;
-      case 'clip_start': {
-        final end =
-            project.overlayTimelineEndSec ?? project.estimatedDurationSec;
-        final start = project.previewPositionSec.clamp(0.0, end - 0.5);
-        project.commitOverlayTimelineRange(start, end);
-        return;
-      }
-      case 'clip_end': {
-        final start = project.overlayTimelineStartSec;
-        final end = project.previewPositionSec.clamp(
-          start + 0.5,
-          project.estimatedDurationSec,
-        );
-        project.commitOverlayTimelineRange(start, end);
-        return;
-      }
+      case 'clip_start':
+        {
+          // Nudge start earlier (left) a little — not full fill.
+          const step = 0.5;
+          final end =
+              project.overlayTimelineEndSec ?? project.estimatedDurationSec;
+          final start = (project.overlayTimelineStartSec - step).clamp(
+            0.0,
+            end - 0.5,
+          );
+          if (start < project.overlayTimelineStartSec - 0.001) {
+            project.commitOverlayTimelineRange(start, end);
+          }
+          return;
+        }
+      case 'clip_end':
+        {
+          // Nudge end later (right) a little — not full fill.
+          const step = 0.5;
+          final videoEnd = project.estimatedDurationSec;
+          final start = project.overlayTimelineStartSec;
+          final curEnd = project.overlayTimelineEndSec ?? videoEnd;
+          final end = (curEnd + step).clamp(start + 0.5, videoEnd);
+          if (end > curEnd + 0.001) {
+            project.commitOverlayTimelineRange(start, end);
+          }
+          return;
+        }
     }
   }
 
@@ -2332,10 +2492,19 @@ class _EditorScreenState extends State<EditorScreen> {
 
     return Scaffold(
       backgroundColor: Colors.white,
+      resizeToAvoidBottomInset: _textToolsOpen,
       appBar: AppBar(
         title: const Text('Editor'),
         actions: [
-          if (project.selectedPhotoIndex != null)
+          if (_textToolsOpen)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: TealPillButton(
+                label: 'Done',
+                onPressed: _closeTextTools,
+              ),
+            )
+          else if (project.selectedPhotoIndex != null)
             Padding(
               padding: const EdgeInsets.only(right: 12),
               child: TealPillButton(
@@ -2503,6 +2672,29 @@ class _EditorScreenState extends State<EditorScreen> {
                               project: project,
                               effect: project.selectedOverlayEffect!,
                             ),
+                          // Live text overlays (edit handles when text tools open).
+                          LiveTextOverlaysLayer(
+                            project: project,
+                            selectedOverlayId: _selectedTextOverlayId,
+                            onSelectedOverlayId: (id) {
+                              setState(() {
+                                _selectedTextOverlayId = id;
+                                if (id != null) {
+                                  final o = project.overlays
+                                      .where((e) => e.id == id)
+                                      .firstOrNull;
+                                  if (o?.text != null) {
+                                    _textController.text = o!.text!;
+                                  }
+                                  if (!_textToolsOpen) {
+                                    _textToolsOpen = true;
+                                    _tool = null;
+                                  }
+                                }
+                              });
+                            },
+                            editing: _textToolsOpen,
+                          ),
                           // Loading while transition preview frames are prepared.
                           if (project.isPreparingPreview)
                             Container(
@@ -2565,27 +2757,49 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
           ),
 
-          if (project.selectedPhotoIndex != null) ...[
-            if (photoToolReplacesTimeline)
-              _idleToolPanel(
+          if (_textToolsOpen) ...[
+            Builder(
+              builder: (context) {
+                final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+                final hasOverlay = _selectedTextOverlayId != null;
+                // Keyboard-only entry bar first; full tab panel after ✓ creates overlay.
+                final bodyH =
+                    hasOverlay ? TextToolsSheet.sheetBodyHeight : 64.0;
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  height: bodyH + (hasOverlay ? 0 : keyboard),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    border: Border(top: BorderSide(color: AppColors.border)),
+                  ),
+                  child: TextToolsSheet(
+                    project: project,
+                    controller: _textController,
+                    focusNode: _textFocusNode,
+                    selectedOverlayId: _selectedTextOverlayId,
+                    onSelectedOverlayId: (id) =>
+                        setState(() => _selectedTextOverlayId = id),
+                    onClose: _closeTextTools,
+                    onConfirm: () => setState(() {}),
+                    compactKeyboardPhase: !hasOverlay,
+                  ),
+                );
+              },
+            ),
+          ] else if (photoToolReplacesTimeline) ...[
+            _idleToolPanel(
+              project,
+              height:
+                  _timelineHeaderHeight +
+                  inlineSheetHeight +
+                  replacedSheetExtra,
+              timelineHeaderHeight: _timelineHeaderHeight,
+              timelineContent: _photoEditSheet(
                 project,
-                height:
-                    _timelineHeaderHeight +
-                    inlineSheetHeight +
-                    replacedSheetExtra,
-                timelineHeaderHeight: _timelineHeaderHeight,
-                timelineContent: _photoEditSheet(
-                  project,
-                  heightOverride: inlineSheetHeight + replacedSheetExtra,
-                  compactContent: true,
-                ),
-              )
-            else
-              _idleToolPanel(project),
-            if (_photoTool == null)
-              _photoEditorToolbar(project)
-            else if (!photoToolReplacesTimeline)
-              _photoEditSheet(project),
+                heightOverride: inlineSheetHeight + replacedSheetExtra,
+                compactContent: true,
+              ),
+            ),
           ] else if (_tool == EditorTool.ratio || _tool == EditorTool.bg) ...[
             _idleToolPanel(
               project,
@@ -2683,6 +2897,8 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
             _musicEditorToolbar(project),
           ] else ...[
+            // One shared idle strip for normal editing + photo selection so the
+            // ScrollController is not remounted onto a second ListView.
             if (_tool == null)
               _idleToolPanel(project)
             else
@@ -2698,7 +2914,12 @@ class _EditorScreenState extends State<EditorScreen> {
                 child: _buildPanel(project),
               ),
 
-            if (_musicToolsOpen)
+            if (project.selectedPhotoIndex != null) ...[
+              if (_photoTool == null)
+                _photoEditorToolbar(project)
+              else
+                _photoEditSheet(project),
+            ] else if (_musicToolsOpen)
               _musicVolumeOpen
                   ? _musicVolumeSheet(project)
                   : _musicEditorToolbar(project)
@@ -3345,27 +3566,233 @@ class _MusicCollapsedLineState extends State<_MusicCollapsedLine> {
       (endSec - startSec) * widget.pixelsPerSecond,
       2.0,
     );
-    final lineTop =
-        (_EditorScreenState._musicTrackHeight -
-            _EditorScreenState._musicPlaceholderH) /
-        2;
 
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Positioned(
-          left: barLeft,
-          width: barWidth,
-          top: lineTop,
-          height: _EditorScreenState._musicPlaceholderH,
-          child: const DecoratedBox(
-            decoration: BoxDecoration(
-              color: Color(0xFFB8C4F0),
-              borderRadius: BorderRadius.all(Radius.circular(1)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final lineH = _EditorScreenState._musicPlaceholderH;
+        final lineTop = ((constraints.maxHeight - lineH) / 2).clamp(
+          0.0,
+          double.infinity,
+        );
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: barLeft,
+              width: barWidth,
+              top: lineTop,
+              height: lineH,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0xFFB8C4F0),
+                  borderRadius: BorderRadius.all(Radius.circular(1)),
+                ),
+              ),
             ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Selected photo clip: white shell + chevron trim handles + hold-drag duration.
+/// Painted in an overlay so left/right handles overlap neighboring clips.
+class _SelectedPhotoClip extends StatefulWidget {
+  const _SelectedPhotoClip({
+    super.key,
+    required this.height,
+    required this.durationSec,
+    required this.pixelsPerSecond,
+    required this.thumbBuilder,
+    required this.onCommitDuration,
+    required this.onLiveDuration,
+    required this.onScrollTimeline,
+    required this.onDragStart,
+    required this.onDragEnd,
+  });
+
+  static const handleW = 22.0;
+
+  final double height;
+  final double durationSec;
+  final double pixelsPerSecond;
+  final Widget Function(double width, double height) thumbBuilder;
+  final ValueChanged<double> onCommitDuration;
+  final ValueChanged<double> onLiveDuration;
+  /// Pan the photo strip opposite to the finger (same as music lane).
+  final ValueChanged<double> onScrollTimeline;
+  final VoidCallback onDragStart;
+  final VoidCallback onDragEnd;
+
+  @override
+  State<_SelectedPhotoClip> createState() => _SelectedPhotoClipState();
+}
+
+class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
+  static const _minSec = 1.0;
+  static const _maxSec = 10.0;
+  static const _shellPadV = 3.0;
+
+  double? _liveDuration;
+  double _holdOriginDx = 0;
+  bool _dragging = false;
+
+  double get _duration =>
+      (_liveDuration ?? widget.durationSec).clamp(_minSec, _maxSec);
+
+  void _beginDrag() {
+    if (_dragging) return;
+    _dragging = true;
+    _liveDuration = widget.durationSec;
+    widget.onDragStart();
+    widget.onLiveDuration(_liveDuration!);
+  }
+
+  void _applyDeltaSec(double deltaSec) {
+    if (!_dragging || deltaSec.abs() < 0.0001) return;
+    final next =
+        (_liveDuration! + deltaSec).clamp(_minSec, _maxSec).toDouble();
+    if ((next - _liveDuration!).abs() < 0.0001) return;
+    setState(() => _liveDuration = next);
+    widget.onLiveDuration(next);
+  }
+
+  void _endDrag() {
+    if (!_dragging) return;
+    final sec = _duration;
+    _dragging = false;
+    _liveDuration = null;
+    widget.onCommitDuration(sec);
+    widget.onDragEnd();
+  }
+
+  Widget _handle({required bool isStart}) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      // Lock ListView scroll before the drag arena resolves.
+      onPointerDown: (_) => widget.onDragStart(),
+      onPointerUp: (_) {
+        if (!_dragging) widget.onDragEnd();
+      },
+      onPointerCancel: (_) {
+        if (!_dragging) widget.onDragEnd();
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        dragStartBehavior: DragStartBehavior.down,
+        onHorizontalDragStart: (_) {
+          HapticFeedback.selectionClick();
+          _beginDrag();
+        },
+        onHorizontalDragUpdate: (d) {
+          if (d.delta.dx == 0) return;
+          // Left handle: drag left grows; right handle: drag right grows.
+          final signedDx = isStart ? -d.delta.dx : d.delta.dx;
+          _applyDeltaSec(signedDx / widget.pixelsPerSecond);
+          // Finger left → strip pans right (music-lane style).
+          widget.onScrollTimeline(-d.delta.dx);
+        },
+        onHorizontalDragEnd: (_) => _endDrag(),
+        onHorizontalDragCancel: _endDrag,
+        child: SizedBox(
+          width: _SelectedPhotoClip.handleW,
+          height: double.infinity,
+          child: Icon(
+            isStart ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+            size: 20,
+            color: Colors.black87,
           ),
         ),
-      ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final clipW = _duration * widget.pixelsPerSecond;
+    final totalW = clipW + _SelectedPhotoClip.handleW * 2;
+    final thumbH = widget.height - _shellPadV * 2;
+    final showBadge = clipW >= 48;
+
+    return SizedBox(
+      width: totalW,
+      height: widget.height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 6,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: _shellPadV),
+          child: Row(
+            children: [
+              _handle(isStart: true),
+              SizedBox(
+                width: clipW,
+                height: thumbH,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  dragStartBehavior: DragStartBehavior.down,
+                  onLongPressStart: (_) {
+                    HapticFeedback.selectionClick();
+                    _holdOriginDx = 0;
+                    _beginDrag();
+                  },
+                  onLongPressMoveUpdate: (d) {
+                    final dx = d.localOffsetFromOrigin.dx;
+                    final delta = dx - _holdOriginDx;
+                    _holdOriginDx = dx;
+                    if (delta.abs() <= 0.01) return;
+                    _applyDeltaSec(delta / widget.pixelsPerSecond);
+                    widget.onScrollTimeline(-delta);
+                  },
+                  onLongPressEnd: (_) => _endDrag(),
+                  onLongPressCancel: _endDrag,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      widget.thumbBuilder(clipW, thumbH),
+                      if (showBadge)
+                        Positioned(
+                          left: 4,
+                          top: 2,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.92),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${_duration.toStringAsFixed(1)}s',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                height: 1.1,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              _handle(isStart: false),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -3775,27 +4202,32 @@ class _EffectCollapsedLineState extends State<_EffectCollapsedLine> {
       (endSec - startSec) * widget.pixelsPerSecond,
       2.0,
     );
-    final lineTop =
-        (_EditorScreenState._musicTrackHeight -
-            _EditorScreenState._musicPlaceholderH) /
-        2;
 
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Positioned(
-          left: barLeft,
-          width: barWidth,
-          top: lineTop,
-          height: _EditorScreenState._musicPlaceholderH,
-          child: const DecoratedBox(
-            decoration: BoxDecoration(
-              color: Color(0xFFC5B0F5),
-              borderRadius: BorderRadius.all(Radius.circular(1)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final lineH = _EditorScreenState._musicPlaceholderH;
+        final lineTop = ((constraints.maxHeight - lineH) / 2).clamp(
+          0.0,
+          double.infinity,
+        );
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: barLeft,
+              width: barWidth,
+              top: lineTop,
+              height: lineH,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0xFFC5B0F5),
+                  borderRadius: BorderRadius.all(Radius.circular(1)),
+                ),
+              ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -3874,11 +4306,8 @@ class _EffectTimelineLaneState extends State<_EffectTimelineLane> {
       0.0,
       videoDur,
     );
-    final end =
-        (_liveEnd ?? widget.project.overlayTimelineEndSec ?? videoDur).clamp(
-          start + 0.5,
-          videoDur,
-        );
+    final end = (_liveEnd ?? widget.project.overlayTimelineEndSec ?? videoDur)
+        .clamp(start + 0.5, videoDur);
     return (start, end);
   }
 
@@ -4043,7 +4472,8 @@ class _EffectTimelineLaneState extends State<_EffectTimelineLane> {
     );
     final selected = widget.selected;
     final posLeft = barLeft - (selected ? _EffectTimelineLane.handleW : 0);
-    final posWidth = barWidth + (selected ? _EffectTimelineLane.handleW * 2 : 0);
+    final posWidth =
+        barWidth + (selected ? _EffectTimelineLane.handleW * 2 : 0);
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
@@ -4235,10 +4665,7 @@ class _LiveEffectOverlayLayerState extends State<_LiveEffectOverlayLayer> {
     final image = _frames[_frameIndex.clamp(0, _frames.length - 1)];
     return IgnorePointer(
       child: CustomPaint(
-        painter: _ScreenEffectPainter(
-          image: image,
-          blend: widget.effect.blend,
-        ),
+        painter: _ScreenEffectPainter(image: image, blend: widget.effect.blend),
         child: const SizedBox.expand(),
       ),
     );

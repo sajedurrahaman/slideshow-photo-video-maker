@@ -665,14 +665,43 @@ class TitleCard {
 
 enum OverlayKind { text, sticker }
 
+enum TextCaseMode { none, sentence, upper, lower }
+
+enum TextAlignMode { left, center, right }
+
+/// Sentinel so [SlideOverlay.copyWith] can clear nullable color fields.
+const Object slideOverlayUnset = Object();
+
 class SlideOverlay {
   final String id;
   final OverlayKind kind;
   final double nx;
   final double ny;
   final double scale;
+  final double rotation;
   final String? text;
   final int colorArgb;
+  final double opacity;
+  final String fontFamily;
+  final int fontWeight;
+  final double fontSize;
+  final TextAlignMode align;
+  final TextCaseMode textCase;
+  final double letterSpacing;
+  final double lineHeight;
+  final double curve;
+  final int? strokeColorArgb;
+  final double strokeWidth;
+  final int? bgColorArgb;
+  final double bgOpacity;
+  final double bgCorner;
+  final int? shadowColorArgb;
+  final double shadowDistance;
+  final double shadowAngle;
+  final double shadowOpacity;
+  final double shadowBlur;
+  final int? gradientEndArgb;
+  final String? templateId;
   final String? stickerEmoji;
 
   const SlideOverlay({
@@ -681,17 +710,76 @@ class SlideOverlay {
     this.nx = 0.5,
     this.ny = 0.5,
     this.scale = 1.0,
+    this.rotation = 0,
     this.text,
     this.colorArgb = 0xFFFFFFFF,
+    this.opacity = 1,
+    this.fontFamily = '',
+    this.fontWeight = 700,
+    this.fontSize = 36,
+    this.align = TextAlignMode.center,
+    this.textCase = TextCaseMode.none,
+    this.letterSpacing = 0,
+    this.lineHeight = 1.2,
+    this.curve = 0,
+    this.strokeColorArgb,
+    this.strokeWidth = 0,
+    this.bgColorArgb,
+    this.bgOpacity = 0.15,
+    this.bgCorner = 10,
+    this.shadowColorArgb,
+    this.shadowDistance = 4,
+    this.shadowAngle = 45,
+    this.shadowOpacity = 0.6,
+    this.shadowBlur = 6,
+    this.gradientEndArgb,
+    this.templateId,
     this.stickerEmoji,
   });
+
+  String get displayText {
+    final raw = text ?? '';
+    switch (textCase) {
+      case TextCaseMode.none:
+        return raw;
+      case TextCaseMode.upper:
+        return raw.toUpperCase();
+      case TextCaseMode.lower:
+        return raw.toLowerCase();
+      case TextCaseMode.sentence:
+        if (raw.isEmpty) return raw;
+        return raw[0].toUpperCase() + raw.substring(1).toLowerCase();
+    }
+  }
 
   SlideOverlay copyWith({
     double? nx,
     double? ny,
     double? scale,
+    double? rotation,
     String? text,
     int? colorArgb,
+    double? opacity,
+    String? fontFamily,
+    int? fontWeight,
+    double? fontSize,
+    TextAlignMode? align,
+    TextCaseMode? textCase,
+    double? letterSpacing,
+    double? lineHeight,
+    double? curve,
+    Object? strokeColorArgb = slideOverlayUnset,
+    double? strokeWidth,
+    Object? bgColorArgb = slideOverlayUnset,
+    double? bgOpacity,
+    double? bgCorner,
+    Object? shadowColorArgb = slideOverlayUnset,
+    double? shadowDistance,
+    double? shadowAngle,
+    double? shadowOpacity,
+    double? shadowBlur,
+    Object? gradientEndArgb = slideOverlayUnset,
+    Object? templateId = slideOverlayUnset,
     String? stickerEmoji,
   }) {
     return SlideOverlay(
@@ -700,8 +788,40 @@ class SlideOverlay {
       nx: nx ?? this.nx,
       ny: ny ?? this.ny,
       scale: scale ?? this.scale,
+      rotation: rotation ?? this.rotation,
       text: text ?? this.text,
       colorArgb: colorArgb ?? this.colorArgb,
+      opacity: opacity ?? this.opacity,
+      fontFamily: fontFamily ?? this.fontFamily,
+      fontWeight: fontWeight ?? this.fontWeight,
+      fontSize: fontSize ?? this.fontSize,
+      align: align ?? this.align,
+      textCase: textCase ?? this.textCase,
+      letterSpacing: letterSpacing ?? this.letterSpacing,
+      lineHeight: lineHeight ?? this.lineHeight,
+      curve: curve ?? this.curve,
+      strokeColorArgb: identical(strokeColorArgb, slideOverlayUnset)
+          ? this.strokeColorArgb
+          : strokeColorArgb as int?,
+      strokeWidth: strokeWidth ?? this.strokeWidth,
+      bgColorArgb: identical(bgColorArgb, slideOverlayUnset)
+          ? this.bgColorArgb
+          : bgColorArgb as int?,
+      bgOpacity: bgOpacity ?? this.bgOpacity,
+      bgCorner: bgCorner ?? this.bgCorner,
+      shadowColorArgb: identical(shadowColorArgb, slideOverlayUnset)
+          ? this.shadowColorArgb
+          : shadowColorArgb as int?,
+      shadowDistance: shadowDistance ?? this.shadowDistance,
+      shadowAngle: shadowAngle ?? this.shadowAngle,
+      shadowOpacity: shadowOpacity ?? this.shadowOpacity,
+      shadowBlur: shadowBlur ?? this.shadowBlur,
+      gradientEndArgb: identical(gradientEndArgb, slideOverlayUnset)
+          ? this.gradientEndArgb
+          : gradientEndArgb as int?,
+      templateId: identical(templateId, slideOverlayUnset)
+          ? this.templateId
+          : templateId as String?,
       stickerEmoji: stickerEmoji ?? this.stickerEmoji,
     );
   }

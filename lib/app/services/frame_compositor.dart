@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 
 import '../core/constants/app_constants.dart';
 import '../models/models.dart';
+import '../widgets/text_overlay_paint.dart';
 
 /// Bakes filters, letterbox BG, frame overlay, text & stickers into frames.
 class FrameCompositor {
@@ -129,25 +130,39 @@ class FrameCompositor {
       final cx = o.nx * size.width;
       final cy = o.ny * size.height;
       if (o.kind == OverlayKind.text && (o.text?.isNotEmpty ?? false)) {
-        final color = Color(o.colorArgb);
-        final tp = TextPainter(
-          text: TextSpan(
-            text: o.text,
-            style: TextStyle(
-              color: color,
-              fontSize: 36 * o.scale,
-              fontWeight: FontWeight.w700,
-              shadows: const [
-                Shadow(blurRadius: 6, color: Color(0x88000000)),
-              ],
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: size.width * 0.9);
-        tp.paint(
-          canvas,
-          Offset(cx - tp.width / 2, cy - tp.height / 2),
+        final fontSize = o.fontSize * o.scale;
+        final tp = TextOverlayPaint.painter(
+          o,
+          fontSize: fontSize,
+          maxWidth: size.width * 0.9,
         );
+        // Background pill
+        if (o.bgColorArgb != null && o.bgOpacity > 0.01) {
+          final bg = TextOverlayPaint.withOpacityArgb(
+            o.bgColorArgb!,
+            o.bgOpacity,
+          );
+          final rect = RRect.fromRectAndRadius(
+            Rect.fromCenter(
+              center: Offset(cx, cy),
+              width: tp.width + 20,
+              height: tp.height + 12,
+            ),
+            Radius.circular(o.bgCorner),
+          );
+          canvas.drawRRect(rect, Paint()..color = bg);
+        }
+        canvas.save();
+        canvas.translate(cx, cy);
+        canvas.rotate(o.rotation);
+        TextOverlayPaint.paint(
+          canvas,
+          o,
+          origin: Offset(-tp.width / 2, -tp.height / 2),
+          fontSize: fontSize,
+          maxWidth: size.width * 0.9,
+        );
+        canvas.restore();
       } else if (o.kind == OverlayKind.sticker &&
           (o.stickerEmoji?.isNotEmpty ?? false)) {
         final tp = TextPainter(
