@@ -124,6 +124,8 @@ class ExportService {
         blend: overlayEffect.blend,
         clipStartSec: project.overlayClipStartSec,
         clipEndSec: project.overlayClipEndSec,
+        timelineStartSec: project.overlayTimelineStartSec,
+        timelineEndSec: project.overlayTimelineEndSec,
       );
       cmd.write('-filter_complex "$filter" -map "[screened]" ');
     } else {

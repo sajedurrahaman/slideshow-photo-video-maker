@@ -71,7 +71,7 @@ class EffectOverlayService {
     final outputDir = Directory(
       p.join(
         tmp.path,
-        'clipcraft_effect_frames_${effect.id}_${width}x${height}_v1',
+        'clipcraft_effect_frames_${effect.id}_${width}x${height}_v2',
       ),
     );
     if (await outputDir.exists()) {
@@ -211,6 +211,8 @@ class EffectOverlayService {
     required OverlayBlendMode blend,
     double clipStartSec = 0,
     double? clipEndSec,
+    double timelineStartSec = 0,
+    double? timelineEndSec,
   }) {
     final trim = StringBuffer();
     if (clipStartSec > 0.001 || clipEndSec != null) {
@@ -227,13 +229,17 @@ class EffectOverlayService {
     final prep =
         '[$overlayInputIndex:v]${trim}fps=${fps.toStringAsFixed(3)},'
         'scale=$width:$height,setsar=1';
+    final t0 = timelineStartSec.toStringAsFixed(3);
+    final enable = timelineEndSec == null
+        ? "enable='gte(t,$t0)'"
+        : "enable='between(t,$t0,${timelineEndSec.toStringAsFixed(3)})'";
     return switch (blend) {
       OverlayBlendMode.screen =>
-        '$prep[effect];[0:v][effect]blend=all_mode=screen:shortest=1[screened]',
+        '$prep[effect];[0:v][effect]blend=all_mode=screen:$enable[screened]',
       OverlayBlendMode.chromaGreen =>
         '$prep,'
             'chromakey=0x00FF00:0.35:0.12[effect];'
-            '[0:v][effect]overlay=shortest=1:format=auto[screened]',
+            '[0:v][effect]overlay=$enable:format=auto[screened]',
     };
   }
 

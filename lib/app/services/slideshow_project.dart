@@ -13,7 +13,6 @@ import 'package:image/image.dart' as img;
 
 import '../core/constants/app_constants.dart';
 import '../models/models.dart';
-import 'effect_overlay_service.dart';
 import 'frame_compositor.dart';
 import 'photo_animation_engine.dart';
 import 'transition_engine.dart';
@@ -137,6 +136,10 @@ class SlideshowProject extends ChangeNotifier {
   double overlayClipStartSec = 0;
   double? overlayClipEndSec;
   double? overlaySourceDurationSec;
+
+  /// Where the effect sits on the video timeline (like music timelineStart/End).
+  double overlayTimelineStartSec = 0;
+  double? overlayTimelineEndSec;
   int? selectedPhotoIndex;
   SlideTransitionOption selectedSlideTransition =
       SlideTransitionOption.all.first;
@@ -545,51 +548,57 @@ class SlideshowProject extends ChangeNotifier {
     if (shouldPrepare) unawaited(preparePreviewFrames());
   }
 
-  /// List pick only — does not rebuild preview frames (avoids ANR/OOM).
+  /// Instant select — live VideoPlayer overlay; no frame rebuild.
   void previewPickOverlayEffect(OverlayEffect effect) {
-    stopPreviewPlayback();
     if (selectedOverlayEffect?.id == effect.id) {
+      isEffectOverlayEnabled = true;
       notifyListeners();
       return;
     }
     selectedOverlayEffect = effect;
-    if (overlayClipStartSec != 0 || overlayClipEndSec != null) {
-      overlayClipStartSec = 0;
-      overlayClipEndSec = null;
-      overlaySourceDurationSec = null;
-    }
+    isEffectOverlayEnabled = true;
+    overlayClipStartSec = 0;
+    overlayClipEndSec = null;
+    overlaySourceDurationSec = null;
+    overlayTimelineStartSec = 0;
+    overlayTimelineEndSec = null;
     notifyListeners();
   }
 
-  /// Apply selected overlay and rebuild preview (call on Effects ✓ confirm).
+  /// Live overlay needs no bake — kept for Play path compatibility.
+  Future<void> ensureOverlayReadyForPreview() async {
+    if (selectedOverlayEffect == null) return;
+    if (!isEffectOverlayEnabled) {
+      isEffectOverlayEnabled = true;
+      notifyListeners();
+    }
+  }
+
+  /// Confirm effect — live layer only (no Preparing preview).
   void commitOverlayEffect({bool resetClip = false}) {
     final effect = selectedOverlayEffect;
     if (effect == null) return;
-    stopPreviewPlayback();
-    final already =
-        isEffectOverlayEnabled &&
-        selectedOverlayEffect?.id == effect.id &&
-        !resetClip &&
-        _previewCacheKey == _buildPreviewCacheKey();
     isEffectOverlayEnabled = true;
     if (resetClip) {
       overlayClipStartSec = 0;
       overlayClipEndSec = null;
       overlaySourceDurationSec = null;
+      overlayTimelineStartSec = 0;
+      overlayTimelineEndSec = null;
     }
-    if (already && isPreviewReady) {
-      notifyListeners();
-      return;
-    }
-    generatedFrames = [];
-    _invalidatePreviewCache();
     notifyListeners();
-    unawaited(preparePreviewFrames());
   }
 
   void selectOverlayEffect(OverlayEffect effect, {bool resetClip = true}) {
     previewPickOverlayEffect(effect);
-    commitOverlayEffect(resetClip: resetClip);
+    if (resetClip) {
+      overlayClipStartSec = 0;
+      overlayClipEndSec = null;
+      overlaySourceDurationSec = null;
+      overlayTimelineStartSec = 0;
+      overlayTimelineEndSec = null;
+    }
+    commitOverlayEffect(resetClip: false);
   }
 
   void clearOverlayEffect() {
@@ -599,11 +608,43 @@ class SlideshowProject extends ChangeNotifier {
     overlayClipStartSec = 0;
     overlayClipEndSec = null;
     overlaySourceDurationSec = null;
-    generatedFrames = [];
-    stopPreviewPlayback();
-    _invalidatePreviewCache();
+    overlayTimelineStartSec = 0;
+    overlayTimelineEndSec = null;
     notifyListeners();
-    unawaited(preparePreviewFrames());
+  }
+
+  void setOverlayTimelineRange(
+    double startSec,
+    double endSec, {
+    bool notify = true,
+  }) {
+    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
+    final maxDur = estimatedDurationSec;
+    if (maxDur <= 0.5) return;
+    const minLen = 0.5;
+    final start = startSec.clamp(0.0, maxDur - minLen);
+    final end = endSec.clamp(start + minLen, maxDur);
+    if ((overlayTimelineStartSec - start).abs() < 0.001 &&
+        ((overlayTimelineEndSec ?? maxDur) - end).abs() < 0.001) {
+      return;
+    }
+    overlayTimelineStartSec = start;
+    overlayTimelineEndSec = end;
+    if (notify) notifyListeners();
+  }
+
+  /// Timeline drag end — instant, no frame rebuild (live compositor).
+  void commitOverlayTimelineRange(double startSec, double endSec) {
+    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
+    final maxDur = estimatedDurationSec;
+    if (maxDur <= 0.5) return;
+    const minLen = 0.5;
+    overlayTimelineStartSec = startSec.clamp(0.0, maxDur - minLen);
+    overlayTimelineEndSec = endSec.clamp(
+      overlayTimelineStartSec + minLen,
+      maxDur,
+    );
+    notifyListeners();
   }
 
   void setOverlaySourceDuration(double sec) {
@@ -616,21 +657,17 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Clip start at current preview playhead mapped into the effect loop.
+  /// Clip start at playhead — source trim (live; no bake).
   void setOverlayClipStartAtPlayhead() {
     if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
     final dur = overlaySourceDurationSec ?? 5.0;
     final t = previewPositionSec % dur;
     final end = overlayClipEndSec ?? dur;
     overlayClipStartSec = t.clamp(0.0, math.max(0.0, end - 0.15));
-    generatedFrames = [];
-    stopPreviewPlayback();
-    _invalidatePreviewCache();
     notifyListeners();
-    unawaited(preparePreviewFrames());
   }
 
-  /// Clip end at current preview playhead mapped into the effect loop.
+  /// Clip end at playhead — source trim (live; no bake).
   void setOverlayClipEndAtPlayhead() {
     if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
     final dur = overlaySourceDurationSec ?? 5.0;
@@ -638,11 +675,29 @@ class SlideshowProject extends ChangeNotifier {
     overlayClipEndSec = t
         .clamp(overlayClipStartSec + 0.15, dur)
         .toDouble();
-    generatedFrames = [];
-    stopPreviewPlayback();
-    _invalidatePreviewCache();
     notifyListeners();
-    unawaited(preparePreviewFrames());
+  }
+
+  bool get isLiveEffectVisible {
+    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return false;
+    final t = previewPositionSec;
+    final start = overlayTimelineStartSec;
+    final end = overlayTimelineEndSec ?? estimatedDurationSec;
+    return t >= start && t <= end;
+  }
+
+  /// Local time inside the effect clip for seeking the live VideoPlayer.
+  double liveEffectLocalSec() {
+    final t = previewPositionSec;
+    final start = overlayTimelineStartSec;
+    final local = (t - start).clamp(0.0, 36000.0);
+    final clip0 = overlayClipStartSec;
+    final clip1 = overlayClipEndSec ?? overlaySourceDurationSec;
+    if (clip1 != null && clip1 > clip0 + 0.05) {
+      final span = clip1 - clip0;
+      return clip0 + (local % span);
+    }
+    return local;
   }
 
   void selectSlideTransition(SlideTransitionOption option) {
@@ -777,10 +832,7 @@ class SlideshowProject extends ChangeNotifier {
           )
           .join('|'),
       selectedTheme.id,
-      isEffectOverlayEnabled,
-      selectedOverlayEffect?.id,
-      overlayClipStartSec,
-      overlayClipEndSec,
+      // Effect overlay is live-composited — not part of baked preview cache.
       selectedSlideTransition.id,
       slideDurationSec,
       aspectRatio.name,
@@ -961,6 +1013,10 @@ class SlideshowProject extends ChangeNotifier {
       return;
     }
     if (isPreparingPreview) return;
+    // Effect is live-composited; only ensure base frames exist.
+    if (selectedOverlayEffect != null) {
+      await ensureOverlayReadyForPreview();
+    }
     if (!isPreviewReady || _previewMemoryFrames.isEmpty) {
       await preparePreviewFrames();
       if (!isPreviewReady) return;
@@ -1107,8 +1163,7 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   Future<void> _resplicePhotoPreview(int index) async {
-    if (isEffectOverlayEnabled ||
-        index < 0 ||
+    if (index < 0 ||
         index >= photos.length ||
         _previewSegmentCounts.length != photos.length) {
       unawaited(preparePreviewFrames(showLoading: false));
@@ -1153,28 +1208,9 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
+  /// Editor preview never bakes FX — live VideoPlayer layer handles it.
   Future<List<img.Image>> _loadPreviewOverlays(int w, int h) async {
-    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) {
-      return const [];
-    }
-    final effect = selectedOverlayEffect!;
-    // Cap overlay decode size — full 480p × N frames + blend was ANR/OOM.
-    final (ow, oh) = EffectOverlayService.cappedSize(w, h, maxSide: 320);
-    final files = await EffectOverlayService.previewFrames(
-      effect: effect,
-      width: ow,
-      height: oh,
-    );
-    final images = <img.Image>[];
-    for (final file in files) {
-      final decoded = TransitionEngine.decode(await file.readAsBytes());
-      if (decoded != null) images.add(decoded);
-    }
-    if (images.isNotEmpty) {
-      overlaySourceDurationSec =
-          images.length / EffectOverlayService.previewFps;
-    }
-    return images;
+    return const [];
   }
 
   Future<Uint8List> _jpegFrame(
@@ -1183,31 +1219,9 @@ class SlideshowProject extends ChangeNotifier {
     List<int> frameCursor,
   ) async {
     final baked = await _finalize(image, includeDecorativeFrame: false);
-    var composed = baked;
-    if (overlays.isNotEmpty && selectedOverlayEffect != null) {
-      final effect = selectedOverlayEffect!;
-      final fps = EffectOverlayService.previewFps.toDouble();
-      final startF = (overlayClipStartSec * fps).floor().clamp(
-        0,
-        overlays.length - 1,
-      );
-      final endSec = overlayClipEndSec ??
-          overlaySourceDurationSec ??
-          (overlays.length / fps);
-      final endF = (endSec * fps).ceil().clamp(startF + 1, overlays.length);
-      final span = math.max(1, endF - startF);
-      final effectIndex =
-          startF +
-          (((frameCursor[0] / previewFps) * fps).floor() % span);
-      composed = EffectOverlayService.compose(
-        composed,
-        overlays[effectIndex.clamp(0, overlays.length - 1)],
-        blend: effect.blend,
-      );
-    }
     frameCursor[0] = frameCursor[0] + 1;
     return Uint8List.fromList(
-      TransitionEngine.encodeJpeg(composed, quality: 70),
+      TransitionEngine.encodeJpeg(baked, quality: 70),
     );
   }
 

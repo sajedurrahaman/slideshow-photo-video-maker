@@ -18,6 +18,7 @@ import 'package:video_player/video_player.dart';
 import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
+import '../services/effect_overlay_service.dart';
 import '../services/slideshow_project.dart';
 import 'crop_screen.dart';
 import '../widgets/editTool_sheet.dart';
@@ -290,10 +291,17 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
-  /// Same under-photo slot whether tools open (full bar) or closed (thin line).
-  double _musicUnderPhotosH(SlideshowProject project) {
-    if (project.music == null) return 0;
-    return _musicUnderPhotosGap + _musicTrackHeight;
+  bool _hasEffectLane(SlideshowProject project) =>
+      project.isEffectOverlayEnabled && project.selectedOverlayEffect != null;
+
+  /// Under-photo rows: music and/or effect timeline lanes.
+  double _underPhotosH(SlideshowProject project) {
+    var h = 0.0;
+    if (project.music != null) h += _musicUnderPhotosGap + _musicTrackHeight;
+    if (_hasEffectLane(project)) {
+      h += _musicUnderPhotosGap + _musicTrackHeight;
+    }
+    return h;
   }
 
   Future<void> _pickLocalMusic() async {
@@ -475,7 +483,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget _photoStrip(SlideshowProject project, double playheadX) {
     // Each clip width reflects that photo's independently editable duration.
     final leftPad = playheadX.clamp(0.0, 800.0).toDouble();
-    final musicUnder = _musicUnderPhotosH(project);
+    final underH = _underPhotosH(project);
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
@@ -485,6 +493,9 @@ class _EditorScreenState extends State<EditorScreen> {
             _musicTrackSelected = false;
             _musicVolumeOpen = false;
           });
+        }
+        if (_effectsTrackSelected) {
+          setState(() => _effectsTrackSelected = false);
         }
         if (project.selectedPhotoIndex != null) {
           setState(() {
@@ -497,14 +508,18 @@ class _EditorScreenState extends State<EditorScreen> {
       },
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Photos + music/line as one block, vertically centered —
-          // music sits flush under thumbs (blue-mark / reference line Y).
-          final blockH = _thumbH + musicUnder;
+          // Photos + music/effect lanes as one block, vertically centered.
+          final blockH = _thumbH + underH;
           final top = ((constraints.maxHeight - blockH) / 2).clamp(
             0.0,
             double.infinity,
           );
+          final hasMusic = project.music != null;
+          final hasEffect = _hasEffectLane(project);
           final musicTop = top + _thumbH + _musicUnderPhotosGap;
+          final effectTop = hasMusic
+              ? musicTop + _musicTrackHeight + _musicUnderPhotosGap
+              : musicTop;
 
           return Stack(
             children: [
@@ -736,7 +751,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     ),
                   ),
                 ),
-              if (project.music != null && _musicToolsOpen)
+              if (hasMusic && _musicToolsOpen)
                 Positioned(
                   left: 0,
                   right: 0,
@@ -753,20 +768,57 @@ class _EditorScreenState extends State<EditorScreen> {
                         _musicToolsOpen = true;
                         _musicTrackSelected = true;
                         _musicVolumeOpen = false;
+                        _effectsTrackSelected = false;
                         project.clearTimelinePhotoSelection();
                       });
                     },
                     onScrollTimeline: _scrollTimelineByDx,
                   ),
                 )
-              else if (project.music != null)
-                // Same slot + same start/end seconds as the music bar.
+              else if (hasMusic)
                 Positioned(
                   left: 0,
                   right: 0,
                   top: musicTop,
                   height: _musicTrackHeight,
                   child: _MusicCollapsedLine(
+                    project: project,
+                    stripController: _stripController,
+                    leftPad: leftPad,
+                    pixelsPerSecond: _pixelsPerSecond,
+                  ),
+                ),
+              if (hasEffect && _effectsToolsOpen)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: effectTop,
+                  height: _musicTrackHeight,
+                  child: _EffectTimelineLane(
+                    project: project,
+                    stripController: _stripController,
+                    leftPad: leftPad,
+                    pixelsPerSecond: _pixelsPerSecond,
+                    selected: _effectsTrackSelected,
+                    onSelect: () {
+                      setState(() {
+                        _effectsToolsOpen = true;
+                        _effectsTrackSelected = true;
+                        _musicTrackSelected = false;
+                        _musicToolsOpen = false;
+                        project.clearTimelinePhotoSelection();
+                      });
+                    },
+                    onScrollTimeline: _scrollTimelineByDx,
+                  ),
+                )
+              else if (hasEffect)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: effectTop,
+                  height: _musicTrackHeight,
+                  child: _EffectCollapsedLine(
                     project: project,
                     stripController: _stripController,
                     leftPad: leftPad,
@@ -1137,24 +1189,22 @@ class _EditorScreenState extends State<EditorScreen> {
           _effectsTrackSelected = false;
         });
         return;
-      case 'clip_start':
-        project.setOverlayClipStartAtPlayhead();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Clip start set at playhead'),
-            duration: Duration(milliseconds: 900),
-          ),
-        );
+      case 'clip_start': {
+        final end =
+            project.overlayTimelineEndSec ?? project.estimatedDurationSec;
+        final start = project.previewPositionSec.clamp(0.0, end - 0.5);
+        project.commitOverlayTimelineRange(start, end);
         return;
-      case 'clip_end':
-        project.setOverlayClipEndAtPlayhead();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Clip end set at playhead'),
-            duration: Duration(milliseconds: 900),
-          ),
+      }
+      case 'clip_end': {
+        final start = project.overlayTimelineStartSec;
+        final end = project.previewPositionSec.clamp(
+          start + 0.5,
+          project.estimatedDurationSec,
         );
+        project.commitOverlayTimelineRange(start, end);
         return;
+      }
     }
   }
 
@@ -2445,6 +2495,14 @@ class _EditorScreenState extends State<EditorScreen> {
                                 filterQuality: FilterQuality.medium,
                               ),
                             ),
+                          // Live effect layer (CapCut-style) — no frame bake / no loading.
+                          if (project.isEffectOverlayEnabled &&
+                              project.selectedOverlayEffect != null)
+                            _LiveEffectOverlayLayer(
+                              key: ValueKey(project.selectedOverlayEffect!.id),
+                              project: project,
+                              effect: project.selectedOverlayEffect!,
+                            ),
                           // Loading while transition preview frames are prepared.
                           if (project.isPreparingPreview)
                             Container(
@@ -3643,6 +3701,587 @@ class _MusicWavePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+/// Thin line for effect when Effects tools are closed (same start/end as bar).
+class _EffectCollapsedLine extends StatefulWidget {
+  const _EffectCollapsedLine({
+    required this.project,
+    required this.stripController,
+    required this.leftPad,
+    required this.pixelsPerSecond,
+  });
+
+  final SlideshowProject project;
+  final ScrollController stripController;
+  final double leftPad;
+  final double pixelsPerSecond;
+
+  @override
+  State<_EffectCollapsedLine> createState() => _EffectCollapsedLineState();
+}
+
+class _EffectCollapsedLineState extends State<_EffectCollapsedLine> {
+  @override
+  void initState() {
+    super.initState();
+    widget.stripController.addListener(_tick);
+    widget.project.addListener(_tick);
+  }
+
+  @override
+  void didUpdateWidget(covariant _EffectCollapsedLine oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stripController != widget.stripController) {
+      oldWidget.stripController.removeListener(_tick);
+      widget.stripController.addListener(_tick);
+    }
+    if (oldWidget.project != widget.project) {
+      oldWidget.project.removeListener(_tick);
+      widget.project.addListener(_tick);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.stripController.removeListener(_tick);
+    widget.project.removeListener(_tick);
+    super.dispose();
+  }
+
+  void _tick() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.project.isEffectOverlayEnabled ||
+        widget.project.selectedOverlayEffect == null) {
+      return const SizedBox.shrink();
+    }
+    final offset = widget.stripController.hasClients
+        ? widget.stripController.offset
+        : 0.0;
+    final videoDur = widget.project.estimatedDurationSec;
+    final startSec = widget.project.overlayTimelineStartSec.clamp(
+      0.0,
+      videoDur,
+    );
+    final endSec = (widget.project.overlayTimelineEndSec ?? videoDur).clamp(
+      startSec + 0.05,
+      videoDur,
+    );
+    final trackLeft = widget.leftPad - offset;
+    final barLeft = trackLeft + startSec * widget.pixelsPerSecond;
+    final barWidth = math.max(
+      (endSec - startSec) * widget.pixelsPerSecond,
+      2.0,
+    );
+    final lineTop =
+        (_EditorScreenState._musicTrackHeight -
+            _EditorScreenState._musicPlaceholderH) /
+        2;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned(
+          left: barLeft,
+          width: barWidth,
+          top: lineTop,
+          height: _EditorScreenState._musicPlaceholderH,
+          child: const DecoratedBox(
+            decoration: BoxDecoration(
+              color: Color(0xFFC5B0F5),
+              borderRadius: BorderRadius.all(Radius.circular(1)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Effect row — same interaction model as music (trim handles + hold-move).
+class _EffectTimelineLane extends StatefulWidget {
+  const _EffectTimelineLane({
+    required this.project,
+    required this.stripController,
+    required this.leftPad,
+    required this.pixelsPerSecond,
+    required this.selected,
+    required this.onSelect,
+    required this.onScrollTimeline,
+  });
+
+  final SlideshowProject project;
+  final ScrollController stripController;
+  final double leftPad;
+  final double pixelsPerSecond;
+  final bool selected;
+  final VoidCallback onSelect;
+  final void Function(double dx) onScrollTimeline;
+
+  static const handleW = 28.0;
+
+  @override
+  State<_EffectTimelineLane> createState() => _EffectTimelineLaneState();
+}
+
+class _EffectTimelineLaneState extends State<_EffectTimelineLane> {
+  double? _liveStart;
+  double? _liveEnd;
+  bool _interacting = false;
+  double _holdOriginDx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.stripController.addListener(_onStrip);
+    widget.project.addListener(_onProject);
+  }
+
+  @override
+  void didUpdateWidget(covariant _EffectTimelineLane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stripController != widget.stripController) {
+      oldWidget.stripController.removeListener(_onStrip);
+      widget.stripController.addListener(_onStrip);
+    }
+    if (oldWidget.project != widget.project) {
+      oldWidget.project.removeListener(_onProject);
+      widget.project.addListener(_onProject);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.stripController.removeListener(_onStrip);
+    widget.project.removeListener(_onProject);
+    super.dispose();
+  }
+
+  void _onStrip() {
+    if (mounted) setState(() {});
+  }
+
+  void _onProject() {
+    if (_interacting || !mounted) return;
+    setState(() {});
+  }
+
+  (double, double) _range() {
+    final videoDur = widget.project.estimatedDurationSec;
+    final start = (_liveStart ?? widget.project.overlayTimelineStartSec).clamp(
+      0.0,
+      videoDur,
+    );
+    final end =
+        (_liveEnd ?? widget.project.overlayTimelineEndSec ?? videoDur).clamp(
+          start + 0.5,
+          videoDur,
+        );
+    return (start, end);
+  }
+
+  void _beginInteract() {
+    final (s, e) = _range();
+    _interacting = true;
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  void _clampLive(double videoDur) {
+    const minLen = 0.5;
+    final s = (_liveStart ?? 0).clamp(0.0, videoDur - minLen);
+    final e = (_liveEnd ?? videoDur).clamp(s + minLen, videoDur);
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  void _trimByDx({required bool isStart, required double dxPx}) {
+    final videoDur = widget.project.estimatedDurationSec;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    if (!_interacting) _beginInteract();
+    setState(() {
+      if (isStart) {
+        _liveStart = (_liveStart! + dSec).clamp(0.0, _liveEnd! - 0.5);
+      } else {
+        _liveEnd = (_liveEnd! + dSec).clamp(_liveStart! + 0.5, videoDur);
+      }
+      _clampLive(videoDur);
+    });
+  }
+
+  void _moveByDx(double dxPx) {
+    final videoDur = widget.project.estimatedDurationSec;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    if (!_interacting) _beginInteract();
+    setState(() {
+      final len = _liveEnd! - _liveStart!;
+      final ns = (_liveStart! + dSec).clamp(0.0, videoDur - len);
+      _liveStart = ns;
+      _liveEnd = ns + len;
+    });
+  }
+
+  void _commitInteract() {
+    if (!_interacting || _liveStart == null || _liveEnd == null) return;
+    widget.project.commitOverlayTimelineRange(_liveStart!, _liveEnd!);
+    _interacting = false;
+    _liveStart = null;
+    _liveEnd = null;
+    if (mounted) setState(() {});
+  }
+
+  Widget _handle({required bool isStart, required IconData icon}) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onHorizontalDragStart: (_) => _beginInteract(),
+      onHorizontalDragUpdate: (d) {
+        if (d.delta.dx == 0) return;
+        _trimByDx(isStart: isStart, dxPx: d.delta.dx);
+        widget.onScrollTimeline(-d.delta.dx);
+      },
+      onHorizontalDragEnd: (_) => _commitInteract(),
+      onHorizontalDragCancel: _commitInteract,
+      child: SizedBox(
+        width: _EffectTimelineLane.handleW,
+        height: double.infinity,
+        child: Icon(icon, size: 16, color: Colors.black87),
+      ),
+    );
+  }
+
+  Widget _body(OverlayEffect effect) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onTap: widget.onSelect,
+      onLongPressStart: (_) {
+        _beginInteract();
+        _holdOriginDx = 0;
+        HapticFeedback.selectionClick();
+      },
+      onLongPressMoveUpdate: (d) {
+        final dx = d.localOffsetFromOrigin.dx;
+        final delta = dx - _holdOriginDx;
+        _holdOriginDx = dx;
+        if (delta.abs() <= 0.01) return;
+        _moveByDx(delta);
+        widget.onScrollTimeline(-delta);
+      },
+      onLongPressEnd: (_) => _commitInteract(),
+      onLongPressCancel: _commitInteract,
+      onHorizontalDragUpdate: (d) {
+        if (_interacting && _liveStart != null) return;
+        widget.onScrollTimeline(d.delta.dx);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [Color(0xFF7B2FFF), Color(0xFF3A0CA3)],
+          ),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(2),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: Image.asset(
+                  effect.thumbPath,
+                  width: 22,
+                  height: 22,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const ColoredBox(
+                    color: Colors.black26,
+                    child: SizedBox(width: 22, height: 22),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                effect.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effect = widget.project.selectedOverlayEffect;
+    if (effect == null || !widget.project.isEffectOverlayEnabled) {
+      return const SizedBox.shrink();
+    }
+
+    final offset = widget.stripController.hasClients
+        ? widget.stripController.offset
+        : 0.0;
+    final videoDur = widget.project.estimatedDurationSec;
+    final (startSec, endSec) = _range();
+    final trackLeft = widget.leftPad - offset;
+    final trackWidth = math.max(videoDur * widget.pixelsPerSecond, 120.0);
+    final barLeft = trackLeft + startSec * widget.pixelsPerSecond;
+    final barWidth = math.max(
+      (endSec - startSec) * widget.pixelsPerSecond,
+      72.0,
+    );
+    final selected = widget.selected;
+    final posLeft = barLeft - (selected ? _EffectTimelineLane.handleW : 0);
+    final posWidth = barWidth + (selected ? _EffectTimelineLane.handleW * 2 : 0);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: (d) => widget.onScrollTimeline(d.delta.dx),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: trackLeft,
+            width: trackWidth,
+            top: 2,
+            bottom: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0x337B2FFF),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            left: posLeft,
+            width: posWidth,
+            top: 0,
+            bottom: 0,
+            child: selected
+                ? Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x29000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        _handle(isStart: true, icon: Icons.chevron_left),
+                        Expanded(child: _body(effect)),
+                        _handle(isStart: false, icon: Icons.chevron_right),
+                      ],
+                    ),
+                  )
+                : _body(effect),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Live FX overlay via raster frames + BlendMode.screen
+/// (VideoPlayer textures ignore Flutter blend modes → black bg used to show).
+class _LiveEffectOverlayLayer extends StatefulWidget {
+  const _LiveEffectOverlayLayer({
+    super.key,
+    required this.project,
+    required this.effect,
+  });
+
+  final SlideshowProject project;
+  final OverlayEffect effect;
+
+  @override
+  State<_LiveEffectOverlayLayer> createState() =>
+      _LiveEffectOverlayLayerState();
+}
+
+class _LiveEffectOverlayLayerState extends State<_LiveEffectOverlayLayer> {
+  final List<ui.Image> _frames = [];
+  int _loadGen = 0;
+  int _frameIndex = 0;
+  bool _ready = false;
+  bool _visible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.project.previewPositionListenable.addListener(_onClock);
+    widget.project.addListener(_onProject);
+    unawaited(_loadFrames(widget.effect));
+  }
+
+  @override
+  void didUpdateWidget(covariant _LiveEffectOverlayLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.effect.id != widget.effect.id) {
+      unawaited(_loadFrames(widget.effect));
+    }
+    if (oldWidget.project != widget.project) {
+      oldWidget.project.previewPositionListenable.removeListener(_onClock);
+      oldWidget.project.removeListener(_onProject);
+      widget.project.previewPositionListenable.addListener(_onClock);
+      widget.project.addListener(_onProject);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.project.previewPositionListenable.removeListener(_onClock);
+    widget.project.removeListener(_onProject);
+    _disposeFrames();
+    super.dispose();
+  }
+
+  void _onClock() => _syncToClock();
+
+  void _onProject() {
+    if (mounted) _syncToClock();
+  }
+
+  void _disposeFrames() {
+    for (final f in _frames) {
+      f.dispose();
+    }
+    _frames.clear();
+    _ready = false;
+  }
+
+  Future<void> _loadFrames(OverlayEffect effect) async {
+    final gen = ++_loadGen;
+    _disposeFrames();
+    if (mounted) setState(() {});
+    try {
+      final (pw, ph) = widget.project.previewSize;
+      final (w, h) = EffectOverlayService.cappedSize(pw, ph, maxSide: 360);
+      final files = await EffectOverlayService.previewFrames(
+        effect: effect,
+        width: w,
+        height: h,
+      );
+      if (!mounted || gen != _loadGen) return;
+      final decoded = <ui.Image>[];
+      for (final file in files) {
+        final bytes = await file.readAsBytes();
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        decoded.add(frame.image);
+        if (!mounted || gen != _loadGen) {
+          for (final img in decoded) {
+            img.dispose();
+          }
+          return;
+        }
+      }
+      if (!mounted || gen != _loadGen) {
+        for (final img in decoded) {
+          img.dispose();
+        }
+        return;
+      }
+      _frames
+        ..clear()
+        ..addAll(decoded);
+      widget.project.setOverlaySourceDuration(
+        _frames.length / EffectOverlayService.previewFps,
+      );
+      setState(() => _ready = true);
+      _syncToClock();
+    } catch (_) {
+      if (mounted && gen == _loadGen) {
+        setState(() => _ready = false);
+      }
+    }
+  }
+
+  void _syncToClock() {
+    if (!_ready || _frames.isEmpty || !mounted) return;
+    final visible = widget.project.isLiveEffectVisible;
+    final local = widget.project.liveEffectLocalSec();
+    final idx =
+        (local * EffectOverlayService.previewFps).floor() % _frames.length;
+    if (visible != _visible || idx != _frameIndex) {
+      setState(() {
+        _visible = visible;
+        _frameIndex = idx;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready || !_visible || _frames.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final image = _frames[_frameIndex.clamp(0, _frames.length - 1)];
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _ScreenEffectPainter(
+          image: image,
+          blend: widget.effect.blend,
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+class _ScreenEffectPainter extends CustomPainter {
+  _ScreenEffectPainter({required this.image, required this.blend});
+
+  final ui.Image image;
+  final OverlayBlendMode blend;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    if (blend == OverlayBlendMode.chromaGreen) {
+      // Soft fallback: screen still removes most keyed greens poorly;
+      // prefer screen for black-bg packs (current assets).
+      paintImage(
+        canvas: canvas,
+        rect: rect,
+        image: image,
+        fit: BoxFit.cover,
+        blendMode: BlendMode.screen,
+        filterQuality: FilterQuality.low,
+      );
+      return;
+    }
+    paintImage(
+      canvas: canvas,
+      rect: rect,
+      image: image,
+      fit: BoxFit.cover,
+      blendMode: BlendMode.screen,
+      filterQuality: FilterQuality.low,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScreenEffectPainter oldDelegate) =>
+      oldDelegate.image != image || oldDelegate.blend != blend;
+}
+
 enum _MusicSourceTab { myMusic, local }
 
 /// Music picker sheet — same white chrome as other editor tool sheets.
@@ -4148,7 +4787,7 @@ class _EffectOverlayTile extends StatelessWidget {
               width: 88,
               height: 72,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(2),
                 border: Border.all(
                   color: selected ? AppColors.primary : AppColors.border,
                   width: selected ? 2 : 1,
