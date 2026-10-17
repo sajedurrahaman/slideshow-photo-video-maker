@@ -49,8 +49,11 @@ class ExportService {
       }
     }
 
-    final overlayPath = project.isEffectOverlayEnabled
-        ? await EffectOverlayService.assetFilePath()
+    final overlayEffect = project.isEffectOverlayEnabled
+        ? project.selectedOverlayEffect
+        : null;
+    final overlayPath = overlayEffect != null
+        ? await EffectOverlayService.assetFilePath(overlayEffect.assetPath)
         : null;
 
     final videoDur = project.estimatedDurationSec;
@@ -111,14 +114,18 @@ class ExportService {
       cmd.write('-stream_loop -1 -i "$musicPath" ');
     }
 
-    if (overlayInputIndex != null) {
+    if (overlayInputIndex != null && overlayEffect != null) {
       final (width, height) = project.outputSize;
-      cmd.write(
-        '-filter_complex "[$overlayInputIndex:v]'
-        'fps=${fps.toStringAsFixed(3)},scale=$width:$height,setsar=1[effect];'
-        '[0:v][effect]blend=all_mode=screen:shortest=1[screened]" '
-        '-map "[screened]" ',
+      final filter = EffectOverlayService.exportFilterComplex(
+        overlayInputIndex: overlayInputIndex,
+        width: width,
+        height: height,
+        fps: fps,
+        blend: overlayEffect.blend,
+        clipStartSec: project.overlayClipStartSec,
+        clipEndSec: project.overlayClipEndSec,
       );
+      cmd.write('-filter_complex "$filter" -map "[screened]" ');
     } else {
       cmd.write('-map 0:v:0 ');
     }

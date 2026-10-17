@@ -224,6 +224,84 @@ class SlideTransitionOption {
   ];
 }
 
+/// How an overlay clip is composited onto the slideshow.
+enum OverlayBlendMode {
+  /// Black-background FX (e.g. hearts) — screen blend.
+  screen,
+
+  /// Green-screen FX — chroma key then overlay.
+  chromaGreen,
+}
+
+/// Bundled particle / FX overlay clips shown in the Effects picker.
+class OverlayEffect {
+  final String id;
+  final String name;
+  final String assetPath;
+  final String thumbPath;
+  final OverlayBlendMode blend;
+
+  const OverlayEffect({
+    required this.id,
+    required this.name,
+    required this.assetPath,
+    required this.thumbPath,
+    this.blend = OverlayBlendMode.screen,
+  });
+
+  static const effect01 = OverlayEffect(
+    id: 'effect_01',
+    name: 'Hearts',
+    assetPath: 'assets/effects/effect_01.mp4',
+    thumbPath: 'assets/effects/effect_01_thumb.jpg',
+  );
+
+  static const effect02 = OverlayEffect(
+    id: 'effect_02',
+    name: 'Petals',
+    assetPath: 'assets/effects/effect_02.mp4',
+    thumbPath: 'assets/effects/effect_02_thumb.jpg',
+  );
+
+  static const effect03 = OverlayEffect(
+    id: 'effect_03',
+    name: 'Glow',
+    assetPath: 'assets/effects/effect_03.mp4',
+    thumbPath: 'assets/effects/effect_03_thumb.jpg',
+  );
+
+  static const effect04 = OverlayEffect(
+    id: 'effect_04',
+    name: 'Butterflies',
+    assetPath: 'assets/effects/effect_04.mp4',
+    thumbPath: 'assets/effects/effect_04_thumb.jpg',
+  );
+
+  static const effect05 = OverlayEffect(
+    id: 'effect_05',
+    name: 'Stars',
+    assetPath: 'assets/effects/effect_05.mp4',
+    thumbPath: 'assets/effects/effect_05_thumb.jpg',
+  );
+
+  static const effect06 = OverlayEffect(
+    id: 'effect_06',
+    name: 'Flowers',
+    assetPath: 'assets/effects/effect_06.mp4',
+    thumbPath: 'assets/effects/effect_06_thumb.jpg',
+  );
+
+  /// Only these 6 video effects appear in the Effects list.
+  static const List<OverlayEffect> all = [
+    effect01,
+    effect02,
+    effect03,
+    effect04,
+    effect05,
+    effect06,
+  ];
+}
+
 class AppThemes {
   static const List<SlideTheme> all = [
     SlideTheme(

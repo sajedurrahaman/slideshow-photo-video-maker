@@ -129,6 +129,14 @@ class SlideshowProject extends ChangeNotifier {
   final List<SlideshowPhoto> photos = [];
   SlideTheme selectedTheme = AppThemes.all.first;
   bool isEffectOverlayEnabled = false;
+
+  /// Active particle/FX overlay clip (null when overlay is off).
+  OverlayEffect? selectedOverlayEffect;
+
+  /// Source trim of the overlay clip (seconds within the effect video).
+  double overlayClipStartSec = 0;
+  double? overlayClipEndSec;
+  double? overlaySourceDurationSec;
   int? selectedPhotoIndex;
   SlideTransitionOption selectedSlideTransition =
       SlideTransitionOption.all.first;
@@ -517,10 +525,8 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   void selectTheme(SlideTheme theme) {
-    final shouldPrepare =
-        selectedTheme.id != theme.id || !isEffectOverlayEnabled;
+    final shouldPrepare = selectedTheme.id != theme.id;
     selectedTheme = theme;
-    isEffectOverlayEnabled = true;
     if (music == null || music!.isAsset) {
       if (theme.musicAsset != null) {
         music = MusicTrack(
@@ -537,6 +543,106 @@ class SlideshowProject extends ChangeNotifier {
     }
     notifyListeners();
     if (shouldPrepare) unawaited(preparePreviewFrames());
+  }
+
+  /// List pick only — does not rebuild preview frames (avoids ANR/OOM).
+  void previewPickOverlayEffect(OverlayEffect effect) {
+    stopPreviewPlayback();
+    if (selectedOverlayEffect?.id == effect.id) {
+      notifyListeners();
+      return;
+    }
+    selectedOverlayEffect = effect;
+    if (overlayClipStartSec != 0 || overlayClipEndSec != null) {
+      overlayClipStartSec = 0;
+      overlayClipEndSec = null;
+      overlaySourceDurationSec = null;
+    }
+    notifyListeners();
+  }
+
+  /// Apply selected overlay and rebuild preview (call on Effects ✓ confirm).
+  void commitOverlayEffect({bool resetClip = false}) {
+    final effect = selectedOverlayEffect;
+    if (effect == null) return;
+    stopPreviewPlayback();
+    final already =
+        isEffectOverlayEnabled &&
+        selectedOverlayEffect?.id == effect.id &&
+        !resetClip &&
+        _previewCacheKey == _buildPreviewCacheKey();
+    isEffectOverlayEnabled = true;
+    if (resetClip) {
+      overlayClipStartSec = 0;
+      overlayClipEndSec = null;
+      overlaySourceDurationSec = null;
+    }
+    if (already && isPreviewReady) {
+      notifyListeners();
+      return;
+    }
+    generatedFrames = [];
+    _invalidatePreviewCache();
+    notifyListeners();
+    unawaited(preparePreviewFrames());
+  }
+
+  void selectOverlayEffect(OverlayEffect effect, {bool resetClip = true}) {
+    previewPickOverlayEffect(effect);
+    commitOverlayEffect(resetClip: resetClip);
+  }
+
+  void clearOverlayEffect() {
+    if (!isEffectOverlayEnabled && selectedOverlayEffect == null) return;
+    selectedOverlayEffect = null;
+    isEffectOverlayEnabled = false;
+    overlayClipStartSec = 0;
+    overlayClipEndSec = null;
+    overlaySourceDurationSec = null;
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    unawaited(preparePreviewFrames());
+  }
+
+  void setOverlaySourceDuration(double sec) {
+    if (sec <= 0) return;
+    overlaySourceDurationSec = sec;
+    final end = overlayClipEndSec;
+    if (end != null && end > sec) {
+      overlayClipEndSec = sec;
+    }
+    notifyListeners();
+  }
+
+  /// Clip start at current preview playhead mapped into the effect loop.
+  void setOverlayClipStartAtPlayhead() {
+    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
+    final dur = overlaySourceDurationSec ?? 5.0;
+    final t = previewPositionSec % dur;
+    final end = overlayClipEndSec ?? dur;
+    overlayClipStartSec = t.clamp(0.0, math.max(0.0, end - 0.15));
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    unawaited(preparePreviewFrames());
+  }
+
+  /// Clip end at current preview playhead mapped into the effect loop.
+  void setOverlayClipEndAtPlayhead() {
+    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
+    final dur = overlaySourceDurationSec ?? 5.0;
+    final t = previewPositionSec % dur;
+    overlayClipEndSec = t
+        .clamp(overlayClipStartSec + 0.15, dur)
+        .toDouble();
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _invalidatePreviewCache();
+    notifyListeners();
+    unawaited(preparePreviewFrames());
   }
 
   void selectSlideTransition(SlideTransitionOption option) {
@@ -672,6 +778,9 @@ class SlideshowProject extends ChangeNotifier {
           .join('|'),
       selectedTheme.id,
       isEffectOverlayEnabled,
+      selectedOverlayEffect?.id,
+      overlayClipStartSec,
+      overlayClipEndSec,
       selectedSlideTransition.id,
       slideDurationSec,
       aspectRatio.name,
@@ -1045,12 +1154,25 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   Future<List<img.Image>> _loadPreviewOverlays(int w, int h) async {
-    if (!isEffectOverlayEnabled) return const [];
-    final files = await EffectOverlayService.previewFrames(width: w, height: h);
+    if (!isEffectOverlayEnabled || selectedOverlayEffect == null) {
+      return const [];
+    }
+    final effect = selectedOverlayEffect!;
+    // Cap overlay decode size — full 480p × N frames + blend was ANR/OOM.
+    final (ow, oh) = EffectOverlayService.cappedSize(w, h, maxSide: 320);
+    final files = await EffectOverlayService.previewFrames(
+      effect: effect,
+      width: ow,
+      height: oh,
+    );
     final images = <img.Image>[];
     for (final file in files) {
       final decoded = TransitionEngine.decode(await file.readAsBytes());
       if (decoded != null) images.add(decoded);
+    }
+    if (images.isNotEmpty) {
+      overlaySourceDurationSec =
+          images.length / EffectOverlayService.previewFps;
     }
     return images;
   }
@@ -1062,14 +1184,25 @@ class SlideshowProject extends ChangeNotifier {
   ) async {
     final baked = await _finalize(image, includeDecorativeFrame: false);
     var composed = baked;
-    if (overlays.isNotEmpty) {
+    if (overlays.isNotEmpty && selectedOverlayEffect != null) {
+      final effect = selectedOverlayEffect!;
+      final fps = EffectOverlayService.previewFps.toDouble();
+      final startF = (overlayClipStartSec * fps).floor().clamp(
+        0,
+        overlays.length - 1,
+      );
+      final endSec = overlayClipEndSec ??
+          overlaySourceDurationSec ??
+          (overlays.length / fps);
+      final endF = (endSec * fps).ceil().clamp(startF + 1, overlays.length);
+      final span = math.max(1, endF - startF);
       final effectIndex =
-          ((frameCursor[0] / previewFps) * EffectOverlayService.previewFps)
-              .floor() %
-          overlays.length;
-      composed = EffectOverlayService.screenBlend(
+          startF +
+          (((frameCursor[0] / previewFps) * fps).floor() % span);
+      composed = EffectOverlayService.compose(
         composed,
-        overlays[effectIndex],
+        overlays[effectIndex.clamp(0, overlays.length - 1)],
+        blend: effect.blend,
       );
     }
     frameCursor[0] = frameCursor[0] + 1;
