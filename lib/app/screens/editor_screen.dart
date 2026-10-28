@@ -102,6 +102,7 @@ class _EditorScreenState extends State<EditorScreen> {
   final _textController = TextEditingController();
   final _textFocusNode = FocusNode();
   final _stripController = ScrollController();
+
   /// Keeps the photo ListView Element across panel branch switches so the
   /// ScrollController is never attached to two scroll views at once.
   final _photoStripListKey = GlobalKey();
@@ -174,8 +175,12 @@ class _EditorScreenState extends State<EditorScreen> {
   void _onStripScroll() {
     if (_syncingStrip || !_stripReady || !mounted) return;
     final project = _listenedProject;
-    if (project == null || project.isPreviewPlaying) return;
+    if (project == null) return;
     if (project.selectedPhotoIndex != null) return;
+    // User scrub while playing → pause so strip isn't yanked by playhead sync.
+    if (project.isPreviewPlaying) {
+      project.stopPreviewPlayback();
+    }
     _userScrubbing = true;
     final seconds =
         _stripOffset / _pixelsPerSecond +
@@ -188,7 +193,9 @@ class _EditorScreenState extends State<EditorScreen> {
   void _scrollTimelineByDx(double dx) {
     if (!_stripReady || !mounted) return;
     final project = context.read<SlideshowProject>();
-    if (project.isPreviewPlaying) return;
+    if (project.isPreviewPlaying) {
+      project.stopPreviewPlayback();
+    }
     final max = _stripController.position.maxScrollExtent;
     final next = (_stripOffset - dx).clamp(0.0, max);
     _userScrubbing = true;
@@ -197,6 +204,20 @@ class _EditorScreenState extends State<EditorScreen> {
         next / _pixelsPerSecond + (project.startingCard?.durationSec ?? 0);
     project.seekPreviewSeconds(seconds);
     _userScrubbing = false;
+  }
+
+  /// Photo index currently under the fixed green playhead (for "+" insert).
+  /// Returns that index so new images are inserted *before* it.
+  int _photoIndexAtPlayhead(SlideshowProject project) {
+    if (project.photos.isEmpty) return 0;
+    final t = _stripOffset / _pixelsPerSecond;
+    var acc = 0.0;
+    for (var i = 0; i < project.photos.length; i++) {
+      final dur = project.photos[i].durationSec;
+      if (t < acc + dur - 1e-6) return i;
+      acc += dur;
+    }
+    return project.photos.length;
   }
 
   void _onPreviewPosition() {
@@ -588,11 +609,8 @@ class _EditorScreenState extends State<EditorScreen> {
           final lowerH = toolsOpen || !(hasMusic && hasEffect)
               ? _musicTrackHeight
               : _collapsedLineSlotH;
-          final bottomSlotTop = top +
-              _thumbH +
-              underH -
-              _effectBottomPad -
-              lowerH;
+          final bottomSlotTop =
+              top + _thumbH + underH - _effectBottomPad - lowerH;
           // Thin "other" line sits just above the active / lower timeline.
           final otherLineTop =
               bottomSlotTop - _collapsedToActiveGap - _collapsedLineSlotH;
@@ -611,8 +629,9 @@ class _EditorScreenState extends State<EditorScreen> {
                       key: _photoStripListKey,
                       controller: _stripController,
                       scrollDirection: Axis.horizontal,
-                      physics:
-                          (project.isPreviewPlaying || _photoDurationDragging)
+                      // Keep scrollable during play so user can scrub; only lock
+                      // while dragging photo duration handles.
+                      physics: _photoDurationDragging
                           ? const NeverScrollableScrollPhysics()
                           : const BouncingScrollPhysics(),
                       padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
@@ -716,8 +735,9 @@ class _EditorScreenState extends State<EditorScreen> {
                                         height: _transitionMarkerSize,
                                         decoration: BoxDecoration(
                                           color: Colors.white,
-                                          borderRadius:
-                                              BorderRadius.circular(6),
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
                                           boxShadow: const [
                                             BoxShadow(
                                               color: Color(0x33000000),
@@ -749,8 +769,8 @@ class _EditorScreenState extends State<EditorScreen> {
                             return const SizedBox.shrink();
                           }
                           final photo = project.photos[sel];
-                          final durSec = _livePhotoDurationSec ??
-                              photo.durationSec;
+                          final durSec =
+                              _livePhotoDurationSec ?? photo.durationSec;
                           final clipW = durSec * _pixelsPerSecond;
                           var startPx = 0.0;
                           for (var i = 0; i < sel; i++) {
@@ -760,8 +780,7 @@ class _EditorScreenState extends State<EditorScreen> {
                           }
                           final scroll = _stripOffset;
                           const handleW = _SelectedPhotoClip.handleW;
-                          final left =
-                              leftPad + startPx - scroll - handleW;
+                          final left = leftPad + startPx - scroll - handleW;
 
                           Widget thumbRow({
                             required double width,
@@ -815,9 +834,7 @@ class _EditorScreenState extends State<EditorScreen> {
                               onScrollTimeline: _scrollTimelineByDx,
                               onDragStart: () {
                                 if (!_photoDurationDragging) {
-                                  setState(
-                                    () => _photoDurationDragging = true,
-                                  );
+                                  setState(() => _photoDurationDragging = true);
                                 }
                               },
                               onLiveDuration: (sec) {
@@ -846,7 +863,10 @@ class _EditorScreenState extends State<EditorScreen> {
                   top: top,
                   height: _thumbH,
                   child: GestureDetector(
-                    onTap: () => context.push('/gallery'),
+                    onTap: () {
+                      final at = _photoIndexAtPlayhead(project);
+                      context.push('/gallery?insert=1&at=$at');
+                    },
                     child: Container(
                       width: _plusW,
                       height: _thumbH,
@@ -2499,10 +2519,7 @@ class _EditorScreenState extends State<EditorScreen> {
           if (_textToolsOpen)
             Padding(
               padding: const EdgeInsets.only(right: 12),
-              child: TealPillButton(
-                label: 'Done',
-                onPressed: _closeTextTools,
-              ),
+              child: TealPillButton(label: 'Done', onPressed: _closeTextTools),
             )
           else if (project.selectedPhotoIndex != null)
             Padding(
@@ -2763,8 +2780,9 @@ class _EditorScreenState extends State<EditorScreen> {
                 final keyboard = MediaQuery.viewInsetsOf(context).bottom;
                 final hasOverlay = _selectedTextOverlayId != null;
                 // Keyboard-only entry bar first; full tab panel after ✓ creates overlay.
-                final bodyH =
-                    hasOverlay ? TextToolsSheet.sheetBodyHeight : 64.0;
+                final bodyH = hasOverlay
+                    ? TextToolsSheet.sheetBodyHeight
+                    : 64.0;
                 return AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   height: bodyH + (hasOverlay ? 0 : keyboard),
@@ -3620,6 +3638,7 @@ class _SelectedPhotoClip extends StatefulWidget {
   final Widget Function(double width, double height) thumbBuilder;
   final ValueChanged<double> onCommitDuration;
   final ValueChanged<double> onLiveDuration;
+
   /// Pan the photo strip opposite to the finger (same as music lane).
   final ValueChanged<double> onScrollTimeline;
   final VoidCallback onDragStart;
@@ -3651,8 +3670,7 @@ class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
 
   void _applyDeltaSec(double deltaSec) {
     if (!_dragging || deltaSec.abs() < 0.0001) return;
-    final next =
-        (_liveDuration! + deltaSec).clamp(_minSec, _maxSec).toDouble();
+    final next = (_liveDuration! + deltaSec).clamp(_minSec, _maxSec).toDouble();
     if ((next - _liveDuration!).abs() < 0.0001) return;
     setState(() => _liveDuration = next);
     widget.onLiveDuration(next);

@@ -23,7 +23,13 @@ final GoRouter appRouter = GoRouter(
     ),
     GoRoute(
       path: '/gallery',
-      builder: (context, state) => const GalleryScreen(),
+      builder: (context, state) {
+        final insert =
+            state.uri.queryParameters['insert'] == '1' ||
+            state.uri.queryParameters['insert'] == 'true';
+        final at = int.tryParse(state.uri.queryParameters['at'] ?? '') ?? 0;
+        return GalleryScreen(insertMode: insert, insertIndex: at);
+      },
     ),
     GoRoute(
       path: '/editor',

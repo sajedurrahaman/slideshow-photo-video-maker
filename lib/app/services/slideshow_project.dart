@@ -373,6 +373,32 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Insert newly picked photos before [index] on the image timeline.
+  /// [index] is clamped to `0..photos.length` (length = append at end).
+  void insertPhotosAt(int index, List<SlideshowPhoto> list) {
+    if (list.isEmpty) return;
+    final room = AppConstants.maxPhotos - photos.length;
+    if (room <= 0) return;
+    final toAdd = list.take(room).toList();
+    if (toAdd.isEmpty) return;
+    final at = index.clamp(0, photos.length).toInt();
+    _recordHistory();
+    photos.insertAll(at, toAdd);
+    if (selectedPhotoIndex != null && selectedPhotoIndex! >= at) {
+      selectedPhotoIndex = selectedPhotoIndex! + toAdd.length;
+    }
+    generatedFrames = [];
+    stopPreviewPlayback();
+    _clearDecodedPreview();
+    _invalidatePreviewCache();
+    notifyListeners();
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames());
+    } else if (photos.isNotEmpty) {
+      unawaited(_refreshPhotoPreview(at.clamp(0, photos.length - 1)));
+    }
+  }
+
   void selectTimelinePhoto(int index) {
     if (index < 0 || index >= photos.length) return;
     selectedPhotoIndex = index;
@@ -672,9 +698,7 @@ class SlideshowProject extends ChangeNotifier {
     if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return;
     final dur = overlaySourceDurationSec ?? 5.0;
     final t = previewPositionSec % dur;
-    overlayClipEndSec = t
-        .clamp(overlayClipStartSec + 0.15, dur)
-        .toDouble();
+    overlayClipEndSec = t.clamp(overlayClipStartSec + 0.15, dur).toDouble();
     notifyListeners();
   }
 
@@ -1220,9 +1244,7 @@ class SlideshowProject extends ChangeNotifier {
   ) async {
     final baked = await _finalize(image, includeDecorativeFrame: false);
     frameCursor[0] = frameCursor[0] + 1;
-    return Uint8List.fromList(
-      TransitionEngine.encodeJpeg(baked, quality: 70),
-    );
+    return Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 70));
   }
 
   Future<List<Uint8List>?> _encodeStill(
