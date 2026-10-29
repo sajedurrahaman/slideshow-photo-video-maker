@@ -692,6 +692,8 @@ class SlideOverlay {
   final double curve;
   final int? strokeColorArgb;
   final double strokeWidth;
+  /// Outer outline color (Double row). Applied on top of [strokeColorArgb].
+  final int? strokeDoubleColorArgb;
   final int? bgColorArgb;
   final double bgOpacity;
   final double bgCorner;
@@ -716,7 +718,7 @@ class SlideOverlay {
     this.opacity = 1,
     this.fontFamily = '',
     this.fontWeight = 700,
-    this.fontSize = 36,
+    this.fontSize = 20,
     this.align = TextAlignMode.center,
     this.textCase = TextCaseMode.none,
     this.letterSpacing = 0,
@@ -724,6 +726,7 @@ class SlideOverlay {
     this.curve = 0,
     this.strokeColorArgb,
     this.strokeWidth = 0,
+    this.strokeDoubleColorArgb,
     this.bgColorArgb,
     this.bgOpacity = 0.15,
     this.bgCorner = 10,
@@ -770,6 +773,7 @@ class SlideOverlay {
     double? curve,
     Object? strokeColorArgb = slideOverlayUnset,
     double? strokeWidth,
+    Object? strokeDoubleColorArgb = slideOverlayUnset,
     Object? bgColorArgb = slideOverlayUnset,
     double? bgOpacity,
     double? bgCorner,
@@ -804,6 +808,10 @@ class SlideOverlay {
           ? this.strokeColorArgb
           : strokeColorArgb as int?,
       strokeWidth: strokeWidth ?? this.strokeWidth,
+      strokeDoubleColorArgb:
+          identical(strokeDoubleColorArgb, slideOverlayUnset)
+          ? this.strokeDoubleColorArgb
+          : strokeDoubleColorArgb as int?,
       bgColorArgb: identical(bgColorArgb, slideOverlayUnset)
           ? this.bgColorArgb
           : bgColorArgb as int?,

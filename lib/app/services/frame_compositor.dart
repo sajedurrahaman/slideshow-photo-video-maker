@@ -51,7 +51,33 @@ class FrameCompositor {
     img.Image? blurPlate,
     int blurLevel = 0,
   }) {
-    final img.Image canvas;
+    return placeOnCanvasLayers(
+      src: src,
+      w: w,
+      h: h,
+      bgArgb: bgArgb,
+      blurPlate: blurPlate,
+      blurLevel: blurLevel,
+    ).composed;
+  }
+
+  /// Same layout as [placeOnCanvas], but keeps blur/solid plate and subject
+  /// separate so photo animations can move only the subject.
+  static ({
+    img.Image composed,
+    img.Image background,
+    img.Image subject,
+    int dx,
+    int dy,
+  }) placeOnCanvasLayers({
+    required img.Image src,
+    required int w,
+    required int h,
+    required int bgArgb,
+    img.Image? blurPlate,
+    int blurLevel = 0,
+  }) {
+    final img.Image background;
     if (blurPlate != null) {
       final plate = blurLevel <= 0
           ? blurPlate
@@ -61,20 +87,20 @@ class FrameCompositor {
               height: (h / (4 + blurLevel * 2)).round().clamp(12, h),
               interpolation: img.Interpolation.average,
             );
-      canvas = img.copyResize(
+      background = img.copyResize(
         plate,
         width: w,
         height: h,
         interpolation: img.Interpolation.linear,
       );
     } else {
-      canvas = img.Image(width: w, height: h);
+      background = img.Image(width: w, height: h);
       final a = (bgArgb >> 24) & 0xFF;
       final r = (bgArgb >> 16) & 0xFF;
       final g = (bgArgb >> 8) & 0xFF;
       final b = bgArgb & 0xFF;
       img.fill(
-        canvas,
+        background,
         color: img.ColorRgba8(r, g, b, a == 0 ? 255 : a),
       );
     }
@@ -84,7 +110,7 @@ class FrameCompositor {
         : h / src.height;
     final nw = (src.width * scale).round().clamp(1, w * 2);
     final nh = (src.height * scale).round().clamp(1, h * 2);
-    final resized = img.copyResize(
+    final subject = img.copyResize(
       src,
       width: nw,
       height: nh,
@@ -92,8 +118,15 @@ class FrameCompositor {
     );
     final dx = ((w - nw) / 2).round();
     final dy = ((h - nh) / 2).round();
-    img.compositeImage(canvas, resized, dstX: dx, dstY: dy);
-    return canvas;
+    final composed = img.Image.from(background);
+    img.compositeImage(composed, subject, dstX: dx, dstY: dy);
+    return (
+      composed: composed,
+      background: background,
+      subject: subject,
+      dx: dx,
+      dy: dy,
+    );
   }
 
   static Future<img.Image> bakeOverlays({
@@ -118,6 +151,9 @@ class FrameCompositor {
 
     if (overlays.isEmpty) return result;
 
+    // Ensure Google Fonts are registered before TextPainter bake.
+    await TextOverlayPaint.ensureFontsLoaded(overlays);
+
     // Draw text/stickers via Flutter canvas → PNG → composite
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
@@ -131,7 +167,7 @@ class FrameCompositor {
       final cy = o.ny * size.height;
       if (o.kind == OverlayKind.text && (o.text?.isNotEmpty ?? false)) {
         final fontSize = o.fontSize * o.scale;
-        final tp = TextOverlayPaint.painter(
+        final textSize = TextOverlayPaint.layoutSize(
           o,
           fontSize: fontSize,
           maxWidth: size.width * 0.9,
@@ -145,8 +181,8 @@ class FrameCompositor {
           final rect = RRect.fromRectAndRadius(
             Rect.fromCenter(
               center: Offset(cx, cy),
-              width: tp.width + 20,
-              height: tp.height + 12,
+              width: textSize.width + 20,
+              height: textSize.height + 12,
             ),
             Radius.circular(o.bgCorner),
           );
@@ -158,7 +194,7 @@ class FrameCompositor {
         TextOverlayPaint.paint(
           canvas,
           o,
-          origin: Offset(-tp.width / 2, -tp.height / 2),
+          origin: Offset(-textSize.width / 2, -textSize.height / 2),
           fontSize: fontSize,
           maxWidth: size.width * 0.9,
         );

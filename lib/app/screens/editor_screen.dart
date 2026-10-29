@@ -71,7 +71,8 @@ class EditorScreen extends StatefulWidget {
   State<EditorScreen> createState() => _EditorScreenState();
 }
 
-class _EditorScreenState extends State<EditorScreen> {
+class _EditorScreenState extends State<EditorScreen>
+    with WidgetsBindingObserver {
   EditorTool? _tool;
   _PhotoTool? _photoTool;
   _AnimationPhase _animationPhase = _AnimationPhase.inAnimation;
@@ -84,6 +85,8 @@ class _EditorScreenState extends State<EditorScreen> {
 
   /// After Music sheet close/check — photo-style music tools navbar.
   bool _photoDurationDragging = false;
+  bool _photoReordering = false;
+  double _reorderDragDx = 0;
   double? _livePhotoDurationSec;
   bool _musicToolsOpen = false;
   bool _musicVolumeOpen = false;
@@ -136,6 +139,7 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _stripController.addListener(_onStripScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // Let the editor paint first so Next→route is not blocked by decode.
@@ -146,6 +150,20 @@ class _EditorScreenState extends State<EditorScreen> {
       if (!mounted) return;
       unawaited(project.sharpenPhotoSources());
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      // Home / Recents → stop slideshow preview audio.
+      context.read<SlideshowProject>().stopPreviewPlayback();
+      if (_liveMode != _LiveMode.idle && mounted) {
+        setState(() => _liveMode = _LiveMode.idle);
+      }
+    }
   }
 
   @override
@@ -206,6 +224,52 @@ class _EditorScreenState extends State<EditorScreen> {
     _userScrubbing = false;
   }
 
+  /// Long-press drag on selected photo: move left/right to change index.
+  void _applyPhotoReorderDrag({
+    required SlideshowProject project,
+    required int selectedIndex,
+    required double deltaDx,
+  }) {
+    if (!_photoReordering || project.photos.isEmpty) return;
+    final nextDx = _reorderDragDx + deltaDx;
+    // Content-space center of the dragged clip (relative; scroll cancels out).
+    var startPx = 0.0;
+    for (var i = 0; i < selectedIndex; i++) {
+      startPx += project.photos[i].durationSec * _pixelsPerSecond;
+    }
+    final selfW = project.photos[selectedIndex].durationSec * _pixelsPerSecond;
+    final visualCenter = startPx + selfW / 2 + nextDx;
+
+    var acc = 0.0;
+    var target = selectedIndex;
+    for (var i = 0; i < project.photos.length; i++) {
+      final w = project.photos[i].durationSec * _pixelsPerSecond;
+      final mid = acc + w / 2;
+      if (visualCenter < mid) {
+        target = i;
+        break;
+      }
+      target = i;
+      acc += w;
+    }
+
+    if (target != selectedIndex) {
+      HapticFeedback.selectionClick();
+      project.reorderPhoto(selectedIndex, target);
+      // After reorder, Positioned.left jumps to the new slot — keep the same
+      // visual center under the finger by adjusting residual drag.
+      var newStart = 0.0;
+      for (var i = 0; i < target; i++) {
+        newStart += project.photos[i].durationSec * _pixelsPerSecond;
+      }
+      setState(() {
+        _reorderDragDx = visualCenter - (newStart + selfW / 2);
+      });
+    } else {
+      setState(() => _reorderDragDx = nextDx);
+    }
+  }
+
   /// Photo index currently under the fixed green playhead (for "+" insert).
   /// Returns that index so new images are inserted *before* it.
   int _photoIndexAtPlayhead(SlideshowProject project) {
@@ -231,6 +295,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _listenedProject?.previewPositionListenable.removeListener(
       _onPreviewPosition,
     );
@@ -303,21 +368,21 @@ class _EditorScreenState extends State<EditorScreen> {
   void _openTextTools() {
     final project = context.read<SlideshowProject>();
     project.stopPreviewPlayback();
-    // Prefer existing text overlay, else start fresh entry.
-    final existing = project.overlays
-        .where((o) => o.kind == OverlayKind.text)
-        .toList();
-    final selected = existing.isNotEmpty ? existing.last : null;
-    _textController.text = selected?.text ?? '';
+    // Navbar Text always starts a *new* text. Edit existing via canvas Edit handle.
+    _textController.text = '';
     setState(() {
       _tool = null;
       _musicToolsOpen = false;
       _effectsToolsOpen = false;
       _textToolsOpen = true;
-      _selectedTextOverlayId = selected?.id;
+      _selectedTextOverlayId = null;
       _photoTool = null;
     });
     project.clearTimelinePhotoSelection();
+    // Focus input so keyboard opens for the new text.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _textFocusNode.requestFocus();
+    });
   }
 
   void _closeTextTools() {
@@ -629,9 +694,8 @@ class _EditorScreenState extends State<EditorScreen> {
                       key: _photoStripListKey,
                       controller: _stripController,
                       scrollDirection: Axis.horizontal,
-                      // Keep scrollable during play so user can scrub; only lock
-                      // while dragging photo duration handles.
-                      physics: _photoDurationDragging
+                      // Lock strip while trimming duration or reordering a clip.
+                      physics: (_photoDurationDragging || _photoReordering)
                           ? const NeverScrollableScrollPhysics()
                           : const BouncingScrollPhysics(),
                       padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
@@ -820,12 +884,13 @@ class _EditorScreenState extends State<EditorScreen> {
                           }
 
                           return Positioned(
-                            left: left,
+                            left: left + (_photoReordering ? _reorderDragDx : 0),
                             top: 0,
                             width: clipW + handleW * 2,
                             height: _thumbH,
                             child: _SelectedPhotoClip(
-                              key: ValueKey('sel-photo-$sel'),
+                              // Stable across index changes so long-press isn't cancelled.
+                              key: ValueKey('sel-photo-${photo.id}'),
                               height: _thumbH,
                               durationSec: photo.durationSec,
                               pixelsPerSecond: _pixelsPerSecond,
@@ -848,6 +913,27 @@ class _EditorScreenState extends State<EditorScreen> {
                               },
                               onCommitDuration: (sec) {
                                 project.changePhotoDuration(sel, sec);
+                              },
+                              onReorderStart: () {
+                                setState(() {
+                                  _photoReordering = true;
+                                  _reorderDragDx = 0;
+                                  _photoDurationDragging = true;
+                                });
+                              },
+                              onReorderDelta: (dx) {
+                                _applyPhotoReorderDrag(
+                                  project: project,
+                                  selectedIndex: sel,
+                                  deltaDx: dx,
+                                );
+                              },
+                              onReorderEnd: () {
+                                setState(() {
+                                  _photoReordering = false;
+                                  _reorderDragDx = 0;
+                                  _photoDurationDragging = false;
+                                });
                               },
                             ),
                           );
@@ -2512,7 +2598,8 @@ class _EditorScreenState extends State<EditorScreen> {
 
     return Scaffold(
       backgroundColor: Colors.white,
-      resizeToAvoidBottomInset: _textToolsOpen,
+      // Keep preview fixed; text sheet / keyboard overlay instead of resizing body.
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: const Text('Editor'),
         actions: [
@@ -2565,43 +2652,41 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Column(
         children: [
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: aspect,
-                  child: DecoratedBox(
-                    decoration: const BoxDecoration(color: Colors.black),
-                    child: ClipRRect(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          if (project.selectedPhotoIndex != null)
+                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
+                  child: Center(
+              child: AspectRatio(
+                      aspectRatio: aspect,
+                child: DecoratedBox(
+                        decoration: const BoxDecoration(color: Colors.black),
+                  child: ClipRRect(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                          if (project.selectedPhotoIndex case final sel?
+                              when sel >= 0 && sel < project.photos.length)
                             _LiveClipPreview(
-                              key: ValueKey(project.selectedPhotoIndex),
-                              photoIndex: project.selectedPhotoIndex!,
-                              photo:
-                                  project.photos[project.selectedPhotoIndex!],
+                              key: ValueKey(sel),
+                              photoIndex: sel,
+                              photo: project.photos[sel],
                               backgroundArgb:
-                                  project
-                                      .photos[project.selectedPhotoIndex!]
-                                      .backgroundArgb ??
+                                  project.photos[sel].backgroundArgb ??
                                   project.backgroundArgb,
-                              backgroundBlurLevel: project
-                                  .photos[project.selectedPhotoIndex!]
-                                  .backgroundBlurLevel,
+                              backgroundBlurLevel:
+                                  project.photos[sel].backgroundBlurLevel,
                               replayToken: _liveToken,
                               mode: _liveMode,
                               inSecOverride: _inDurationDrag,
                               outSecOverride: _outDurationDrag,
+                              // Capture [sel] — selection can clear before
+                              // the animation ticker fires onFraction again.
                               onFraction: (fraction) =>
-                                  project.setLivePreviewClock(
-                                    project.selectedPhotoIndex!,
-                                    fraction,
-                                  ),
+                                  project.setLivePreviewClock(sel, fraction),
                               onFinished: () {
                                 project.finishLiveClip();
                                 if (mounted) {
@@ -2609,7 +2694,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                 }
                               },
                             )
-                          else
+                        else
                             RepaintBoundary(
                               child:
                                   ValueListenableBuilder<
@@ -2659,8 +2744,8 @@ class _EditorScreenState extends State<EditorScreen> {
                                             );
                                           }
                                           return const Center(
-                                            child: Text(
-                                              'No preview',
+                            child: Text(
+                              'No preview',
                                               style: TextStyle(
                                                 color: Colors.white54,
                                               ),
@@ -2669,12 +2754,12 @@ class _EditorScreenState extends State<EditorScreen> {
                                         },
                                       );
                                     },
-                                  ),
                             ),
-                          if (project.selectedFrameAsset != null)
+                          ),
+                        if (project.selectedFrameAsset != null)
                             IgnorePointer(
                               child: Image.asset(
-                                project.selectedFrameAsset!,
+                            project.selectedFrameAsset!,
                                 key: ValueKey(project.selectedFrameAsset),
                                 fit: BoxFit.fill,
                                 gaplessPlayback: false,
@@ -2689,7 +2774,7 @@ class _EditorScreenState extends State<EditorScreen> {
                               project: project,
                               effect: project.selectedOverlayEffect!,
                             ),
-                          // Live text overlays (edit handles when text tools open).
+                          // Live text: tap to select/move; Edit opens sheet.
                           LiveTextOverlaysLayer(
                             project: project,
                             selectedOverlayId: _selectedTextOverlayId,
@@ -2703,12 +2788,24 @@ class _EditorScreenState extends State<EditorScreen> {
                                   if (o?.text != null) {
                                     _textController.text = o!.text!;
                                   }
-                                  if (!_textToolsOpen) {
-                                    _textToolsOpen = true;
-                                    _tool = null;
-                                  }
                                 }
                               });
+                            },
+                            onEditOverlay: (id) {
+                              final o = project.overlays
+                                  .where((e) => e.id == id)
+                                  .firstOrNull;
+                              setState(() {
+                                _selectedTextOverlayId = id;
+                                _textController.text = o?.text ?? '';
+                                _tool = null;
+                                _musicToolsOpen = false;
+                                _effectsToolsOpen = false;
+                                _photoTool = null;
+                                _textToolsOpen = true;
+                              });
+                              project.clearTimelinePhotoSelection();
+                              project.stopPreviewPlayback();
                             },
                             editing: _textToolsOpen,
                           ),
@@ -2741,69 +2838,43 @@ class _EditorScreenState extends State<EditorScreen> {
                               ),
                             ),
                           // Export-only progress.
-                          if (project.isProcessing)
-                            Container(
-                              color: Colors.black54,
-                              child: Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    CircularProgressIndicator(
+                        if (project.isProcessing)
+                          Container(
+                            color: Colors.black54,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(
                                       color: AppColors.primary,
-                                      value: project.processProgress > 0
-                                          ? project.processProgress
-                                          : null,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
+                                    value: project.processProgress > 0
+                                        ? project.processProgress
+                                        : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
                                       'Exporting ${(project.processProgress * 100).toInt()}%',
                                       style: const TextStyle(
                                         color: Colors.white,
                                       ),
-                                    ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
-                        ],
-                      ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
           ),
+          ),
 
+          // Text sheet overlays — keep idle chrome underneath so preview size/position stays fixed.
           if (_textToolsOpen) ...[
-            Builder(
-              builder: (context) {
-                final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-                final hasOverlay = _selectedTextOverlayId != null;
-                // Keyboard-only entry bar first; full tab panel after ✓ creates overlay.
-                final bodyH = hasOverlay
-                    ? TextToolsSheet.sheetBodyHeight
-                    : 64.0;
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  height: bodyH + (hasOverlay ? 0 : keyboard),
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    border: Border(top: BorderSide(color: AppColors.border)),
-                  ),
-                  child: TextToolsSheet(
-                    project: project,
-                    controller: _textController,
-                    focusNode: _textFocusNode,
-                    selectedOverlayId: _selectedTextOverlayId,
-                    onSelectedOverlayId: (id) =>
-                        setState(() => _selectedTextOverlayId = id),
-                    onClose: _closeTextTools,
-                    onConfirm: () => setState(() {}),
-                    compactKeyboardPhase: !hasOverlay,
-                  ),
-                );
-              },
-            ),
+            _idleToolPanel(project),
+            _editorToolbar(),
           ] else if (photoToolReplacesTimeline) ...[
             _idleToolPanel(
               project,
@@ -2947,6 +3018,64 @@ class _EditorScreenState extends State<EditorScreen> {
               _editorToolbar(),
           ],
           SizedBox(height: MediaQuery.paddingOf(context).bottom),
+            ],
+          ),
+          if (_textToolsOpen)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: ListenableBuilder(
+                listenable: _textFocusNode,
+                builder: (context, _) {
+                  final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+                  final safeBottom = MediaQuery.paddingOf(context).bottom;
+                  final keyboardOpen =
+                      keyboard > 0 || _textFocusNode.hasFocus;
+                  final hasOverlay = _selectedTextOverlayId != null;
+                  // Typing: input bar only (tabs hide under keyboard). Idle + overlay: full panel.
+                  final bodyH = (hasOverlay && !keyboardOpen)
+                      ? TextToolsSheet.sheetBodyHeight
+                      : 64.0;
+                  return AnimatedPadding(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    // Lift sheet with keyboard; preview stays put (resizeToAvoidBottomInset: false).
+                    padding: EdgeInsets.only(
+                      bottom: keyboard > 0 ? keyboard : safeBottom,
+                    ),
+                    child: Material(
+                      elevation: 12,
+                      color: Colors.white,
+                      clipBehavior: Clip.hardEdge,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeOut,
+                        height: bodyH,
+                        clipBehavior: Clip.hardEdge,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          border: Border(
+                            top: BorderSide(color: AppColors.border),
+                          ),
+                        ),
+                        child: TextToolsSheet(
+                          project: project,
+                          controller: _textController,
+                          focusNode: _textFocusNode,
+                          selectedOverlayId: _selectedTextOverlayId,
+                          onSelectedOverlayId: (id) =>
+                              setState(() => _selectedTextOverlayId = id),
+                          onClose: _closeTextTools,
+                          onConfirm: () => setState(() {}),
+                          compactKeyboardPhase: !hasOverlay || keyboardOpen,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
         ],
       ),
     );
@@ -3614,8 +3743,9 @@ class _MusicCollapsedLineState extends State<_MusicCollapsedLine> {
   }
 }
 
-/// Selected photo clip: white shell + chevron trim handles + hold-drag duration.
+/// Selected photo clip: white shell + chevron trim handles + hold-drag reorder.
 /// Painted in an overlay so left/right handles overlap neighboring clips.
+/// Duration: drag `<` / `>` handles. Reorder: long-press body, drag left/right.
 class _SelectedPhotoClip extends StatefulWidget {
   const _SelectedPhotoClip({
     super.key,
@@ -3628,6 +3758,9 @@ class _SelectedPhotoClip extends StatefulWidget {
     required this.onScrollTimeline,
     required this.onDragStart,
     required this.onDragEnd,
+    required this.onReorderStart,
+    required this.onReorderDelta,
+    required this.onReorderEnd,
   });
 
   static const handleW = 22.0;
@@ -3643,6 +3776,9 @@ class _SelectedPhotoClip extends StatefulWidget {
   final ValueChanged<double> onScrollTimeline;
   final VoidCallback onDragStart;
   final VoidCallback onDragEnd;
+  final VoidCallback onReorderStart;
+  final ValueChanged<double> onReorderDelta;
+  final VoidCallback onReorderEnd;
 
   @override
   State<_SelectedPhotoClip> createState() => _SelectedPhotoClipState();
@@ -3656,12 +3792,13 @@ class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
   double? _liveDuration;
   double _holdOriginDx = 0;
   bool _dragging = false;
+  bool _reordering = false;
 
   double get _duration =>
       (_liveDuration ?? widget.durationSec).clamp(_minSec, _maxSec);
 
   void _beginDrag() {
-    if (_dragging) return;
+    if (_dragging || _reordering) return;
     _dragging = true;
     _liveDuration = widget.durationSec;
     widget.onDragStart();
@@ -3683,6 +3820,26 @@ class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
     _liveDuration = null;
     widget.onCommitDuration(sec);
     widget.onDragEnd();
+  }
+
+  void _beginReorder() {
+    if (_reordering || _dragging) return;
+    _reordering = true;
+    _holdOriginDx = 0;
+    HapticFeedback.mediumImpact();
+    widget.onReorderStart();
+  }
+
+  void _applyReorderDelta(double deltaDx) {
+    if (!_reordering || deltaDx.abs() < 0.01) return;
+    widget.onReorderDelta(deltaDx);
+  }
+
+  void _endReorder() {
+    if (!_reordering) return;
+    _reordering = false;
+    _holdOriginDx = 0;
+    widget.onReorderEnd();
   }
 
   Widget _handle({required bool isStart}) {
@@ -3758,22 +3915,16 @@ class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
                 height: thumbH,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  dragStartBehavior: DragStartBehavior.down,
-                  onLongPressStart: (_) {
-                    HapticFeedback.selectionClick();
-                    _holdOriginDx = 0;
-                    _beginDrag();
-                  },
+                  // Long-press body → reorder left/right. Duration = handles only.
+                  onLongPressStart: (_) => _beginReorder(),
                   onLongPressMoveUpdate: (d) {
                     final dx = d.localOffsetFromOrigin.dx;
                     final delta = dx - _holdOriginDx;
                     _holdOriginDx = dx;
-                    if (delta.abs() <= 0.01) return;
-                    _applyDeltaSec(delta / widget.pixelsPerSecond);
-                    widget.onScrollTimeline(-delta);
+                    _applyReorderDelta(delta);
                   },
-                  onLongPressEnd: (_) => _endDrag(),
-                  onLongPressCancel: _endDrag,
+                  onLongPressEnd: (_) => _endReorder(),
+                  onLongPressCancel: _endReorder,
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -4749,7 +4900,8 @@ class _MusicPickerSheet extends StatefulWidget {
   State<_MusicPickerSheet> createState() => _MusicPickerSheetState();
 }
 
-class _MusicPickerSheetState extends State<_MusicPickerSheet> {
+class _MusicPickerSheetState extends State<_MusicPickerSheet>
+    with WidgetsBindingObserver {
   /// Sheet opens with My Music selected by default.
   _MusicSourceTab _source = _MusicSourceTab.myMusic;
   final AudioPlayer _previewPlayer = AudioPlayer();
@@ -4757,9 +4909,40 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet> {
   bool _previewPlaying = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_previewPlayer.dispose());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      // Home / Recents while previewing a track → pause immediately.
+      unawaited(_pausePreviewForBackground());
+    }
+  }
+
+  Future<void> _pausePreviewForBackground() async {
+    try {
+      await _previewPlayer.pause();
+    } catch (_) {}
+    if (!mounted) {
+      _previewPlaying = false;
+      return;
+    }
+    if (_previewPlaying) {
+      setState(() => _previewPlaying = false);
+    }
   }
 
   Future<void> _stopPreview() async {
@@ -4794,7 +4977,7 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet> {
         _previewPath = track.path;
         _previewPlaying = true;
       });
-    } catch (e) {
+                            } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Playback failed: $e')));
@@ -4880,7 +5063,10 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet> {
                     image: 'assets/images/my_music.png',
                     label: 'My Music',
                     selected: _source == _MusicSourceTab.myMusic,
-                    onTap: () {
+                    onTap: () async {
+                      if (_source == _MusicSourceTab.myMusic) return;
+                      await _stopPreview();
+                      if (!mounted) return;
                       setState(() => _source = _MusicSourceTab.myMusic);
                     },
                   ),
@@ -4891,7 +5077,10 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet> {
                     image: 'assets/images/local_music.png',
                     label: 'Local',
                     selected: isLocal,
-                    onTap: () {
+                    onTap: () async {
+                      if (_source == _MusicSourceTab.local) return;
+                      await _stopPreview();
+                      if (!mounted) return;
                       setState(() => _source = _MusicSourceTab.local);
                     },
                   ),
@@ -4992,7 +5181,7 @@ class _MusicSourceButton extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Row(
+      child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Image.asset(image, color: fg, width: 24),
@@ -5183,8 +5372,8 @@ class _EffectsPickerSheetState extends State<_EffectsPickerSheet> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               itemCount: effects.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 10),
-              itemBuilder: (context, i) {
+      separatorBuilder: (_, _) => const SizedBox(width: 10),
+      itemBuilder: (context, i) {
                 final effect = effects[i];
                 final isSel = selected?.id == effect.id;
                 final playing = isSel && _previewId == effect.id;
@@ -5222,7 +5411,7 @@ class _EffectOverlayTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+        return GestureDetector(
       onTap: onTap,
       child: SizedBox(
         width: 88,
@@ -5231,12 +5420,12 @@ class _EffectOverlayTile extends StatelessWidget {
             Container(
               width: 88,
               height: 72,
-              decoration: BoxDecoration(
+            decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(2),
-                border: Border.all(
+              border: Border.all(
                   color: selected ? AppColors.primary : AppColors.border,
-                  width: selected ? 2 : 1,
-                ),
+                width: selected ? 2 : 1,
+              ),
                 color: Colors.black,
               ),
               clipBehavior: Clip.antiAlias,
@@ -5247,21 +5436,21 @@ class _EffectOverlayTile extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            Text(
+                Text(
               effect.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
                 fontSize: 12,
                 color: selected ? AppColors.primaryDark : AppColors.textDark,
-              ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
-    );
+          ),
+        );
   }
 }
 
@@ -5398,7 +5587,7 @@ class _FramePanel extends StatelessWidget {
         if (i == 0) {
           final selected = project.selectedFrameAsset == null;
           return _frameTile(
-            selected: selected,
+          selected: selected,
             label: 'Default',
             onTap: () {
               project.selectFrame(null);
@@ -5727,7 +5916,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+        return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -5752,7 +5941,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -6201,9 +6390,9 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
                   );
                 }
                 return ClipRect(
-                  child: Stack(
+          child: Stack(
                     fit: StackFit.expand,
-                    children: [
+            children: [
                       ImageFiltered(
                         imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: _photoImage(),
@@ -6669,7 +6858,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-                Positioned(
+              Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -6729,9 +6918,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                    ),
-                  ),
-              ],
+                ),
+              ),
+            ],
             ),
           ),
         );

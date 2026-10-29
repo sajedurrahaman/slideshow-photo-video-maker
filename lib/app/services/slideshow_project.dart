@@ -13,11 +13,28 @@ import 'package:image/image.dart' as img;
 
 import '../core/constants/app_constants.dart';
 import '../models/models.dart';
+import 'effect_overlay_service.dart';
 import 'frame_compositor.dart';
 import 'photo_animation_engine.dart';
 import 'transition_engine.dart';
 
-Uint8List _preparePhotoInWorker(Map<String, Object> args) {
+class _PreparedPhotoLayers {
+  const _PreparedPhotoLayers({
+    required this.composed,
+    required this.background,
+    required this.subject,
+    required this.subjectDx,
+    required this.subjectDy,
+  });
+
+  final img.Image composed;
+  final img.Image background;
+  final img.Image subject;
+  final int subjectDx;
+  final int subjectDy;
+}
+
+Map<String, Object> _preparePhotoInWorker(Map<String, Object> args) {
   final decoded = img.decodeImage(args['bytes'] as Uint8List);
   if (decoded == null) throw const FormatException('Unsupported image file');
 
@@ -113,15 +130,30 @@ Uint8List _preparePhotoInWorker(Map<String, Object> args) {
   }
 
   final blurLevel = args['backgroundBlurLevel'] as int?;
-  final canvas = FrameCompositor.placeOnCanvas(
+  final w = args['width'] as int;
+  final h = args['height'] as int;
+  // Match live _blurFill (BoxFit.cover) — stretch-to-fit left black bars
+  // when the plate aspect differs from the canvas.
+  final blurPlate = blurLevel != null
+      ? TransitionEngine.coverCrop(filtered, w, h)
+      : null;
+  final layers = FrameCompositor.placeOnCanvasLayers(
     src: filtered,
-    w: args['width'] as int,
-    h: args['height'] as int,
+    w: w,
+    h: h,
     bgArgb: args['photoBackground'] as int,
-    blurPlate: blurLevel != null ? filtered : null,
+    blurPlate: blurPlate,
     blurLevel: blurLevel ?? 0,
   );
-  return Uint8List.fromList(img.encodeJpg(canvas, quality: 90));
+  return {
+    'composed': Uint8List.fromList(img.encodeJpg(layers.composed, quality: 90)),
+    'background': Uint8List.fromList(
+      img.encodeJpg(layers.background, quality: 90),
+    ),
+    'subject': Uint8List.fromList(img.encodePng(layers.subject)),
+    'subjectDx': layers.dx,
+    'subjectDy': layers.dy,
+  };
 }
 
 class SlideshowProject extends ChangeNotifier {
@@ -187,6 +219,7 @@ class SlideshowProject extends ChangeNotifier {
   /// In-memory JPEG frames for smooth editor preview (no % overlay).
   final List<Uint8List> _previewMemoryFrames = [];
   final List<img.Image?> _decodedPreview = [];
+  final List<_PreparedPhotoLayers?> _decodedPreviewLayers = [];
   final List<String> _decodedPreviewKeys = [];
   final List<int> _previewSegmentCounts = [];
   String? _previewCacheKey;
@@ -254,8 +287,37 @@ class SlideshowProject extends ChangeNotifier {
     required int inFrames,
     required int outFrames,
     required int background,
+    _PreparedPhotoLayers? layers,
   }) {
     final outStart = totalFrames - outFrames;
+    final useLayers = layers != null;
+    img.Image applyMotion({
+      required PhotoAnimationType type,
+      required double progress,
+      required bool reverse,
+      required img.Image current,
+    }) {
+      if (useLayers) {
+        return PhotoAnimationEngine.applyLayered(
+          background: layers.background,
+          subject: layers.subject,
+          subjectDx: layers.subjectDx,
+          subjectDy: layers.subjectDy,
+          type: type,
+          progress: progress,
+          backgroundArgb: background,
+          reverse: reverse,
+        );
+      }
+      return PhotoAnimationEngine.apply(
+        image: reverse ? source : current,
+        type: type,
+        progress: progress,
+        backgroundArgb: background,
+        reverse: reverse,
+      );
+    }
+
     var frame = source;
     if (photo.animationIn != PhotoAnimationType.none &&
         inFrames > 0 &&
@@ -263,23 +325,22 @@ class SlideshowProject extends ChangeNotifier {
       final progress = frameIndex < inFrames
           ? (frameIndex + 1) / inFrames
           : 1.0;
-      frame = PhotoAnimationEngine.apply(
-        image: source,
+      frame = applyMotion(
         type: photo.animationIn,
         progress: progress,
-        backgroundArgb: background,
+        reverse: false,
+        current: source,
       );
     }
     if (photo.animationOut != PhotoAnimationType.none &&
         outFrames > 0 &&
         frameIndex >= outStart) {
       final outIndex = frameIndex - outStart;
-      frame = PhotoAnimationEngine.apply(
-        image: source,
+      frame = applyMotion(
         type: photo.animationOut,
         progress: (outIndex + 1) / outFrames,
-        backgroundArgb: background,
         reverse: true,
+        current: source,
       );
     }
     if (photo.animationLoop != PhotoAnimationType.none) {
@@ -287,12 +348,24 @@ class SlideshowProject extends ChangeNotifier {
         1,
         _animFrames(photo.animationLoopDurationSec, photo.durationSec),
       );
-      frame = PhotoAnimationEngine.apply(
-        image: frame,
-        type: photo.animationLoop,
-        progress: (frameIndex % loopFrames) / loopFrames,
-        backgroundArgb: background,
-      );
+      if (useLayers) {
+        frame = PhotoAnimationEngine.applyLayered(
+          background: layers.background,
+          subject: layers.subject,
+          subjectDx: layers.subjectDx,
+          subjectDy: layers.subjectDy,
+          type: photo.animationLoop,
+          progress: (frameIndex % loopFrames) / loopFrames,
+          backgroundArgb: background,
+        );
+      } else {
+        frame = PhotoAnimationEngine.apply(
+          image: frame,
+          type: photo.animationLoop,
+          progress: (frameIndex % loopFrames) / loopFrames,
+          backgroundArgb: background,
+        );
+      }
     }
     return frame;
   }
@@ -463,14 +536,11 @@ class SlideshowProject extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    // Pixel change (blur/BG/crop/filter): drop stale frames so Play cannot
+    // keep using the old black letterbox while the rebake is in flight.
+    _invalidatePreviewCache();
     notifyListeners();
-    final canSplice =
-        _previewSegmentCounts.length == photos.length &&
-        _previewMemoryFrames.isNotEmpty &&
-        isPreviewReady;
-    if (canSplice) {
-      unawaited(_resplicePhotoPreview(index));
-    } else if (photos.length >= AppConstants.minPhotos) {
+    if (photos.length >= AppConstants.minPhotos) {
       unawaited(preparePreviewFrames(showLoading: false));
     } else {
       unawaited(_refreshPhotoPreview(index));
@@ -504,12 +574,29 @@ class SlideshowProject extends ChangeNotifier {
 
   void reorderPhoto(int oldIndex, int newIndex) {
     if (oldIndex == newIndex) return;
+    if (oldIndex < 0 || oldIndex >= photos.length) return;
     if (newIndex < 0 || newIndex >= photos.length) return;
     _recordHistory();
     final item = photos.removeAt(oldIndex);
     photos.insert(newIndex, item);
+    // Keep selection on the moved clip.
+    if (selectedPhotoIndex == oldIndex) {
+      selectedPhotoIndex = newIndex;
+    } else if (selectedPhotoIndex != null) {
+      final s = selectedPhotoIndex!;
+      if (oldIndex < s && newIndex >= s) {
+        selectedPhotoIndex = s - 1;
+      } else if (oldIndex > s && newIndex <= s) {
+        selectedPhotoIndex = s + 1;
+      }
+    }
+    stopPreviewPlayback();
     _clearDecodedPreview();
+    _invalidatePreviewCache();
     notifyListeners();
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames(showLoading: false));
+    }
   }
 
   void removePhoto(int index) {
@@ -543,7 +630,11 @@ class SlideshowProject extends ChangeNotifier {
     try {
       final (w, h) = previewSize;
       final image = await _preparePhoto(photos[index], w, h);
-      final baked = await _finalize(image, includeDecorativeFrame: false);
+      final baked = await _finalize(
+        image,
+        includeDecorativeFrame: false,
+        includeTextOverlays: false,
+      );
       _setPreviewFrame(
         Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
       );
@@ -702,19 +793,21 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool get isLiveEffectVisible {
+  bool get isLiveEffectVisible => isEffectVisibleAt(previewPositionSec);
+
+  bool isEffectVisibleAt(double timelineSec) {
     if (!isEffectOverlayEnabled || selectedOverlayEffect == null) return false;
-    final t = previewPositionSec;
     final start = overlayTimelineStartSec;
     final end = overlayTimelineEndSec ?? estimatedDurationSec;
-    return t >= start && t <= end;
+    return timelineSec >= start && timelineSec <= end;
   }
 
   /// Local time inside the effect clip for seeking the live VideoPlayer.
-  double liveEffectLocalSec() {
-    final t = previewPositionSec;
+  double liveEffectLocalSec() => effectLocalSecAt(previewPositionSec);
+
+  double effectLocalSecAt(double timelineSec) {
     final start = overlayTimelineStartSec;
-    final local = (t - start).clamp(0.0, 36000.0);
+    final local = (timelineSec - start).clamp(0.0, 36000.0);
     final clip0 = overlayClipStartSec;
     final clip1 = overlayClipEndSec ?? overlaySourceDurationSec;
     if (clip1 != null && clip1 > clip0 + 0.05) {
@@ -745,6 +838,9 @@ class SlideshowProject extends ChangeNotifier {
     _previewSegmentCounts.clear();
     _previewCacheKey = null;
     isPreviewReady = false;
+    // Drop decoded layers too — otherwise a blur/BG change can briefly
+    // (or fully) replay stale black-letterbox frames while rebake runs.
+    _clearDecodedPreview();
   }
 
   String _previewPixelKey(SlideshowPhoto photo) {
@@ -763,21 +859,28 @@ class SlideshowProject extends ChangeNotifier {
 
   void _clearDecodedPreview() {
     _decodedPreview.clear();
+    _decodedPreviewLayers.clear();
     _decodedPreviewKeys.clear();
   }
 
-  Future<img.Image> _cachedPreviewPhoto(int index, int w, int h) async {
+  Future<_PreparedPhotoLayers> _cachedPreviewLayers(
+    int index,
+    int w,
+    int h,
+  ) async {
     final key = _previewPixelKey(photos[index]);
     while (_decodedPreview.length <= index) {
       _decodedPreview.add(null);
+      _decodedPreviewLayers.add(null);
       _decodedPreviewKeys.add('');
     }
-    final cached = _decodedPreview[index];
+    final cached = _decodedPreviewLayers[index];
     if (cached != null && _decodedPreviewKeys[index] == key) return cached;
-    final image = await _preparePhoto(photos[index], w, h);
-    _decodedPreview[index] = image;
+    final layers = await _preparePhotoLayers(photos[index], w, h);
+    _decodedPreview[index] = layers.composed;
+    _decodedPreviewLayers[index] = layers;
     _decodedPreviewKeys[index] = key;
-    return image;
+    return layers;
   }
 
   /// Build frames in background after transition select (shows loading UI).
@@ -1120,12 +1223,13 @@ class SlideshowProject extends ChangeNotifier {
     final frames = <Uint8List>[];
     final counts = <int>[];
     final (w, h) = previewSize;
-    final decoded = <img.Image>[];
+    final layers = <_PreparedPhotoLayers>[];
     for (var i = 0; i < photos.length; i++) {
       if (generation != _previewGeneration) return null;
-      decoded.add(await _cachedPreviewPhoto(i, w, h));
+      layers.add(await _cachedPreviewLayers(i, w, h));
     }
-    if (decoded.length < 2) return null;
+    if (layers.length < 2) return null;
+    final decoded = layers.map((e) => e.composed).toList(growable: false);
 
     final overlays = await _loadPreviewOverlays(w, h);
     final cursor = <int>[0];
@@ -1153,6 +1257,7 @@ class SlideshowProject extends ChangeNotifier {
       final segment = await _renderPhotoSegment(
         index: i,
         decoded: decoded,
+        layers: layers,
         generation: generation,
         overlays: overlays,
         frameCursor: cursor,
@@ -1186,52 +1291,6 @@ class SlideshowProject extends ChangeNotifier {
     return (frames: frames, counts: counts);
   }
 
-  Future<void> _resplicePhotoPreview(int index) async {
-    if (index < 0 ||
-        index >= photos.length ||
-        _previewSegmentCounts.length != photos.length) {
-      unawaited(preparePreviewFrames(showLoading: false));
-      return;
-    }
-    final generation = ++_previewGeneration;
-    try {
-      final (w, h) = previewSize;
-      final decoded = <img.Image>[];
-      for (var i = 0; i < photos.length; i++) {
-        if (generation != _previewGeneration) return;
-        decoded.add(await _cachedPreviewPhoto(i, w, h));
-      }
-      final segment = await _renderPhotoSegment(
-        index: index,
-        decoded: decoded,
-        generation: generation,
-      );
-      if (segment == null || generation != _previewGeneration) return;
-      final start = photoFrameStartIndex(index);
-      final oldCount = _previewSegmentCounts[index];
-      final end = math.min(start + oldCount, _previewMemoryFrames.length);
-      if (start < 0 || start > _previewMemoryFrames.length) {
-        unawaited(preparePreviewFrames(showLoading: false));
-        return;
-      }
-      _previewMemoryFrames.replaceRange(start, end, segment);
-      _previewSegmentCounts[index] = segment.length;
-      _previewCacheKey = _buildPreviewCacheKey();
-      isPreviewReady = _previewMemoryFrames.isNotEmpty;
-      final frameIndex = start
-          .clamp(0, _previewMemoryFrames.length - 1)
-          .toInt();
-      previewFrameIndex = frameIndex;
-      _setPreviewPosition(frameIndex / previewFps);
-      _setPreviewFrame(_previewMemoryFrames[frameIndex]);
-      notifyListeners();
-    } catch (_) {
-      if (generation == _previewGeneration) {
-        unawaited(preparePreviewFrames(showLoading: false));
-      }
-    }
-  }
-
   /// Editor preview never bakes FX — live VideoPlayer layer handles it.
   Future<List<img.Image>> _loadPreviewOverlays(int w, int h) async {
     return const [];
@@ -1242,7 +1301,11 @@ class SlideshowProject extends ChangeNotifier {
     List<img.Image> overlays,
     List<int> frameCursor,
   ) async {
-    final baked = await _finalize(image, includeDecorativeFrame: false);
+    final baked = await _finalize(
+      image,
+      includeDecorativeFrame: false,
+      includeTextOverlays: false,
+    );
     frameCursor[0] = frameCursor[0] + 1;
     return Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 70));
   }
@@ -1272,6 +1335,7 @@ class SlideshowProject extends ChangeNotifier {
   Future<List<Uint8List>?> _renderPhotoSegment({
     required int index,
     required List<img.Image> decoded,
+    required List<_PreparedPhotoLayers> layers,
     required int generation,
     List<img.Image> overlays = const [],
     List<int>? frameCursor,
@@ -1287,6 +1351,7 @@ class SlideshowProject extends ChangeNotifier {
     final background = photo.backgroundArgb ?? backgroundArgb;
     final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
     final soloFrames = totalFrames - transitionFrames;
+    final photoLayers = index < layers.length ? layers[index] : null;
     final frames = <Uint8List>[];
     final cursor = frameCursor ?? <int>[0];
     Uint8List? lastBytes;
@@ -1320,6 +1385,7 @@ class SlideshowProject extends ChangeNotifier {
           inFrames: inFrames,
           outFrames: outFrames,
           background: background,
+          layers: photoLayers,
         ),
       );
       if (!kept) return null;
@@ -1341,6 +1407,7 @@ class SlideshowProject extends ChangeNotifier {
           inFrames: inFrames,
           outFrames: outFrames,
           background: background,
+          layers: photoLayers,
         );
         final blended = TransitionEngine.apply(
           from: fromFrame,
@@ -1542,6 +1609,8 @@ class SlideshowProject extends ChangeNotifier {
     _invalidatePreviewCache();
     notifyListeners();
     if (photos.length >= AppConstants.minPhotos) {
+      // Must rebake — showLoading false keeps UI calm, but cache was cleared
+      // so Play waits for the blur/color frames instead of stale letterbox.
       unawaited(preparePreviewFrames(showLoading: false));
     }
   }
@@ -1566,7 +1635,10 @@ class SlideshowProject extends ChangeNotifier {
 
   void addOverlay(SlideOverlay overlay) {
     overlays.add(overlay);
+    // Drop any frames that may have baked text; live layer owns text now.
+    _invalidatePreviewCache();
     notifyListeners();
+    unawaited(refreshLivePreview());
   }
 
   void updateOverlay(SlideOverlay overlay) {
@@ -1578,15 +1650,27 @@ class SlideshowProject extends ChangeNotifier {
 
   void removeOverlay(String id) {
     overlays.removeWhere((e) => e.id == id);
+    _invalidatePreviewCache();
     notifyListeners();
+    unawaited(refreshLivePreview());
   }
 
   void clearOverlays() {
     overlays.clear();
+    _invalidatePreviewCache();
     notifyListeners();
+    unawaited(refreshLivePreview());
   }
 
   Future<img.Image> _preparePhoto(SlideshowPhoto photo, int w, int h) async {
+    return (await _preparePhotoLayers(photo, w, h)).composed;
+  }
+
+  Future<_PreparedPhotoLayers> _preparePhotoLayers(
+    SlideshowPhoto photo,
+    int w,
+    int h,
+  ) async {
     final bytes = await File(photo.path).readAsBytes();
     // Full-resolution JPEG decode, filtering and resize can take long enough
     // to trigger an Android ANR when run on the UI isolate (especially after
@@ -1611,24 +1695,40 @@ class SlideshowProject extends ChangeNotifier {
     if (blurLevel != null) {
       workerArgs['backgroundBlurLevel'] = blurLevel;
     }
-    final preparedBytes = await compute(_preparePhotoInWorker, workerArgs);
-    final prepared = TransitionEngine.decode(preparedBytes);
-    if (prepared == null) {
+    final prepared = await compute(_preparePhotoInWorker, workerArgs);
+    final composed = TransitionEngine.decode(
+      prepared['composed'] as Uint8List,
+    );
+    final background = TransitionEngine.decode(
+      prepared['background'] as Uint8List,
+    );
+    final subject = img.decodeImage(prepared['subject'] as Uint8List);
+    if (composed == null || background == null || subject == null) {
       throw Exception('Could not decode ${photo.path}');
     }
-    return prepared;
+    return _PreparedPhotoLayers(
+      composed: composed,
+      background: background,
+      subject: subject,
+      subjectDx: prepared['subjectDx'] as int,
+      subjectDy: prepared['subjectDy'] as int,
+    );
   }
 
   /// [includeDecorativeFrame] is true for export. Editor preview keeps the
   /// decorative frame as a live Image overlay so switching frames never stacks.
+  ///
+  /// [includeTextOverlays] must stay false for editor preview — text is drawn
+  /// by [LiveTextOverlaysLayer]. Baking both causes a ghost duplicate when moving.
   Future<img.Image> _finalize(
     img.Image frame, {
     bool includeDecorativeFrame = true,
+    bool includeTextOverlays = true,
   }) {
     return FrameCompositor.bakeOverlays(
       base: frame,
       frameAsset: includeDecorativeFrame ? selectedFrameAsset : null,
-      overlays: List.of(overlays),
+      overlays: includeTextOverlays ? List.of(overlays) : const [],
     );
   }
 
@@ -1649,20 +1749,67 @@ class SlideshowProject extends ChangeNotifier {
       await outDir.create(recursive: true);
 
       final (w, h) = outputSize;
-      final decoded = <img.Image>[];
+      final photoLayers = <_PreparedPhotoLayers>[];
       for (final photo in photos) {
-        decoded.add(await _preparePhoto(photo, w, h));
+        photoLayers.add(await _preparePhotoLayers(photo, w, h));
       }
-      if (decoded.length < 2) {
+      if (photoLayers.length < 2) {
         throw Exception('Could not decode enough photos');
+      }
+      final decoded =
+          photoLayers.map((e) => e.composed).toList(growable: false);
+
+      // Bake FX with the same JPEG proxies + screenBlend as live preview so
+      // export does not pick up FFmpeg full-res screen haze.
+      final exportEffect = isEffectOverlayEnabled ? selectedOverlayEffect : null;
+      List<File> effectFrameFiles = const [];
+      if (exportEffect != null) {
+        final (ew, eh) = EffectOverlayService.cappedSize(w, h, maxSide: 360);
+        effectFrameFiles = await EffectOverlayService.previewFrames(
+          effect: exportEffect,
+          width: ew,
+          height: eh,
+        );
+        if (overlaySourceDurationSec == null && effectFrameFiles.isNotEmpty) {
+          overlaySourceDurationSec =
+              effectFrameFiles.length / EffectOverlayService.previewFps;
+        }
       }
 
       final frames = <File>[];
       var frameIndex = 0;
       final pairs = decoded.length - 1;
 
+      Future<img.Image> applyExportEffect(img.Image image) async {
+        if (exportEffect == null || effectFrameFiles.isEmpty) return image;
+        final t = frameIndex / previewFps;
+        if (!isEffectVisibleAt(t)) return image;
+        final local = effectLocalSecAt(t);
+        final idx =
+            (local * EffectOverlayService.previewFps).floor() %
+            effectFrameFiles.length;
+        final fx = TransitionEngine.decode(
+          await effectFrameFiles[idx].readAsBytes(),
+        );
+        if (fx == null) return image;
+        return EffectOverlayService.compose(
+          image,
+          fx,
+          blend: exportEffect.blend,
+        );
+      }
+
       Future<void> writeFrame(img.Image image) async {
-        final baked = await _finalize(image);
+        // Live stack: photo → decorative frame → FX → text.
+        var out = await _finalize(image, includeTextOverlays: false);
+        out = await applyExportEffect(out);
+        if (overlays.isNotEmpty) {
+          out = await FrameCompositor.bakeOverlays(
+            base: out,
+            frameAsset: null,
+            overlays: List.of(overlays),
+          );
+        }
         final file = File(
           p.join(
             outDir.path,
@@ -1670,7 +1817,7 @@ class SlideshowProject extends ChangeNotifier {
           ),
         );
         await file.writeAsBytes(
-          TransitionEngine.encodeJpeg(baked, quality: 82),
+          TransitionEngine.encodeJpeg(out, quality: 82),
         );
         frames.add(file);
         frameIndex++;
@@ -1723,6 +1870,7 @@ class SlideshowProject extends ChangeNotifier {
               inFrames: inFrames,
               outFrames: outFrames,
               background: background,
+              layers: photoLayers[i],
             ),
           );
           processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
@@ -1740,6 +1888,7 @@ class SlideshowProject extends ChangeNotifier {
               inFrames: inFrames,
               outFrames: outFrames,
               background: background,
+              layers: photoLayers[i],
             );
             final toFrame = decoded[i + 1];
             final blended = TransitionEngine.apply(
@@ -1837,7 +1986,11 @@ class SlideshowProject extends ChangeNotifier {
       final (w, h) = previewSize;
       final index = selectedPhotoIndex ?? 0;
       final prepared = await _preparePhoto(photos[index], w, h);
-      final baked = await _finalize(prepared, includeDecorativeFrame: false);
+      final baked = await _finalize(
+        prepared,
+        includeDecorativeFrame: false,
+        includeTextOverlays: false,
+      );
       _setPreviewFrame(
         Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
       );

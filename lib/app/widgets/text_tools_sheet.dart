@@ -1,17 +1,18 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
 import 'text_overlay_paint.dart';
 
-enum TextToolsMainTab { template, fontStyle, colorStyle }
+enum TextToolsMainTab { fontStyle, colorStyle }
 
 enum TextColorSubTab { text, stroke, bg, shadow, alignment }
 
-/// CapCut-style text tools: input bar + Template / Font Style / Color Style.
+/// CapCut-style text tools: input bar + Font Style / Color Style.
 class TextToolsSheet extends StatefulWidget {
   const TextToolsSheet({
     super.key,
@@ -43,7 +44,7 @@ class TextToolsSheet extends StatefulWidget {
 }
 
 class _TextToolsSheetState extends State<TextToolsSheet> {
-  TextToolsMainTab _mainTab = TextToolsMainTab.template;
+  TextToolsMainTab _mainTab = TextToolsMainTab.fontStyle;
   TextColorSubTab _colorSub = TextColorSubTab.text;
   bool _showTabs = false;
 
@@ -106,99 +107,104 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
     widget.project.updateOverlay(fn(cur));
   }
 
-  void _onCheck() {
+  bool get _isTyping {
+    return widget.focusNode.hasFocus ||
+        MediaQuery.viewInsetsOf(context).bottom > 0;
+  }
+
+  void _commitTextIfNeeded() {
     final value = widget.controller.text.trim();
-    if (value.isEmpty && _selected == null) {
-      widget.onClose();
-      return;
-    }
+    if (value.isEmpty && _selected == null) return;
     _ensureOverlay(text: value.isEmpty ? 'Photo Editor' : value);
     if (widget.controller.text.trim().isEmpty) {
       widget.controller.text = 'Photo Editor';
     }
+  }
+
+  /// Keyboard open: hide keyboard only; keep text bottom sheet + show tools.
+  void _onKeyboardDone() {
+    _commitTextIfNeeded();
+    if (widget.controller.text.trim().isEmpty && _selected == null) {
+      widget.onClose();
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
     widget.focusNode.unfocus();
     setState(() => _showTabs = true);
     widget.onConfirm();
   }
 
-  void _applyTemplate(({String id, String label, SlideOverlay style}) t) {
-    _ensureOverlay(
-      text: widget.controller.text.trim().isEmpty
-          ? t.label
-          : widget.controller.text.trim(),
-    );
-    _patch((o) {
-      final s = t.style;
-      if (widget.controller.text.trim().isEmpty) {
-        widget.controller.text = t.label;
-      }
-      return o.copyWith(
-        text: widget.controller.text.trim().isEmpty ? t.label : o.text,
-        colorArgb: s.colorArgb,
-        opacity: s.opacity,
-        fontFamily: s.fontFamily,
-        fontWeight: s.fontWeight,
-        strokeColorArgb: s.strokeColorArgb,
-        strokeWidth: s.strokeWidth,
-        bgColorArgb: s.bgColorArgb,
-        bgOpacity: s.bgOpacity,
-        bgCorner: s.bgCorner,
-        shadowColorArgb: s.shadowColorArgb,
-        shadowDistance: s.shadowDistance,
-        shadowAngle: s.shadowAngle,
-        shadowOpacity: s.shadowOpacity,
-        shadowBlur: s.shadowBlur,
-        gradientEndArgb: s.gradientEndArgb,
-        textCase: s.textCase,
-        templateId: t.id,
-      );
-    });
+  /// Style panel: same as AppBar Done — hide text bottom sheet.
+  void _onCheck() {
+    if (_isTyping) {
+      _onKeyboardDone();
+      return;
+    }
+    _commitTextIfNeeded();
+    if (widget.controller.text.trim().isEmpty && _selected == null) {
+      widget.onClose();
+      return;
+    }
+    widget.focusNode.unfocus();
+    widget.onClose();
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: widget.project,
+      animation: Listenable.merge([widget.project, widget.focusNode]),
       builder: (context, _) {
-        return Container(
-          color: Colors.white,
-          child: Column(
-            children: [
-              _inputBar(),
-              if (_showTabs) ...[
-                _mainTabs(),
-                Expanded(child: _tabBody()),
-              ] else
-                const SizedBox(height: 8),
-            ],
-          ),
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+            // Parent AnimatedContainer may still be mid-size (64→280). Only
+            // mount tabs once height can fit input + tabs + body.
+            final tallEnough = constraints.maxHeight >= 160;
+            final showPanel =
+                _showTabs &&
+                tallEnough &&
+                !widget.compactKeyboardPhase &&
+                !keyboardOpen &&
+                !widget.focusNode.hasFocus;
+            return ColoredBox(
+              color: Colors.white,
+              child: Column(
+                children: [
+                  _inputBar(typing: keyboardOpen || widget.focusNode.hasFocus),
+                  if (showPanel) ...[_mainTabs(), Expanded(child: _tabBody())],
+                ],
+              ),
+            );
+          },
         );
       },
     );
   }
 
-  Widget _inputBar() {
+  Widget _inputBar({required bool typing}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+      padding: const EdgeInsets.fromLTRB(12, 2, 8, 2),
       child: Row(
         children: [
           Expanded(
             child: TextField(
               controller: widget.controller,
               focusNode: widget.focusNode,
+              textInputAction: TextInputAction.done,
               onChanged: (v) {
                 final o = _selected;
                 if (o != null) {
                   widget.project.updateOverlay(o.copyWith(text: v));
                 }
               },
-              onSubmitted: (_) => _onCheck(),
+              onSubmitted: (_) => _onKeyboardDone(),
               style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
                 color: AppColors.textDark,
               ),
               decoration: InputDecoration(
+                isDense: true,
                 hintText: 'Enter text',
                 hintStyle: const TextStyle(
                   color: AppColors.textMuted,
@@ -207,21 +213,45 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
                 filled: true,
                 fillColor: const Color(0xFFF0F1F5),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(6),
                   borderSide: BorderSide.none,
                 ),
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 14,
-                  vertical: 12,
+                  vertical: 10,
                 ),
               ),
             ),
           ),
-          IconButton(
-            onPressed: _onCheck,
-            icon: const Icon(Icons.check_rounded, size: 28),
-            color: Colors.black87,
-          ),
+          if (typing)
+            // Keyboard-done key style (hide keyboard, keep sheet).
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Material(
+                color: const Color(0xFF1A73E8),
+                borderRadius: BorderRadius.circular(8),
+                child: InkWell(
+                  onTap: _onKeyboardDone,
+                  borderRadius: BorderRadius.circular(8),
+                  child: const SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: Icon(
+                      Icons.keyboard_alt_outlined,
+                      size: 26,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              onPressed: _onCheck,
+              icon: const Icon(Icons.check_rounded, size: 28),
+              color: Colors.black87,
+              tooltip: 'Done',
+            ),
         ],
       ),
     );
@@ -236,7 +266,7 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
+                padding: const EdgeInsets.symmetric(vertical: 5),
                 child: Text(
                   label,
                   textAlign: TextAlign.center,
@@ -263,7 +293,6 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
       ),
       child: Row(
         children: [
-          tab(TextToolsMainTab.template, 'Template'),
           tab(TextToolsMainTab.fontStyle, 'Font Style'),
           tab(TextToolsMainTab.colorStyle, 'Color Style'),
         ],
@@ -273,79 +302,32 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
 
   Widget _tabBody() {
     return switch (_mainTab) {
-      TextToolsMainTab.template => _templateGrid(),
       TextToolsMainTab.fontStyle => _fontGrid(),
       TextToolsMainTab.colorStyle => _colorStyleBody(),
     };
-  }
-
-  Widget _templateGrid() {
-    final sel = _selected?.templateId ?? 'default';
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 1,
-      ),
-      itemCount: TextToolCatalog.templates.length,
-      itemBuilder: (context, i) {
-        final t = TextToolCatalog.templates[i];
-        final on = sel == t.id;
-        return GestureDetector(
-          onTap: () => _applyTemplate(t),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: on ? textToolAccent : AppColors.border,
-                width: on ? 2 : 1,
-              ),
-            ),
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(6),
-                child: t.id == 'default'
-                    ? Text(
-                        'Default',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: on ? textToolAccent : AppColors.textDark,
-                          fontSize: 12,
-                        ),
-                      )
-                    : FittedBox(
-                        child: TextOverlayPaint.styledText(
-                          t.style.copyWith(text: t.label),
-                          fontSize: 16,
-                        ),
-                      ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Widget _fontGrid() {
     final family = _selected?.fontFamily ?? '';
     final weight = _selected?.fontWeight ?? 700;
     return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 1,
+        crossAxisCount: 3,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+        childAspectRatio: 2.25,
       ),
       itemCount: TextToolCatalog.fonts.length,
       itemBuilder: (context, i) {
         final f = TextToolCatalog.fonts[i];
-        final on = family == f.family && weight == f.weight ||
+        final on =
+            (family == f.family && weight == f.weight) ||
             (i == 0 && family.isEmpty && (_selected == null || weight == 700));
+        final previewFamily = TextOverlayPaint.resolvedFamily(
+          f.family,
+          weight: f.weight,
+        );
         return GestureDetector(
           onTap: () {
             _ensureOverlay();
@@ -355,7 +337,7 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
           },
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: Colors.white,
+              // color: const Color(0xFFF7F8FA),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: on ? textToolAccent : AppColors.border,
@@ -363,15 +345,19 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
               ),
             ),
             child: Center(
-              child: Text(
-                i == 0 ? 'Default' : 'Font Style',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: f.family.isEmpty ? null : f.family,
-                  fontWeight: TextOverlayPaint.weightOf(f.weight),
-                  fontSize: 12,
-                  color: on ? textToolAccent : AppColors.textDark,
-                  fontStyle: f.id == 'italic' ? FontStyle.italic : null,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  f.label,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: previewFamily,
+                    fontWeight: TextOverlayPaint.weightOf(f.weight),
+                    fontSize: 13,
+                    color: on ? textToolAccent : AppColors.textDark,
+                  ),
                 ),
               ),
             ),
@@ -385,10 +371,10 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
     return Column(
       children: [
         SizedBox(
-          height: 44,
+          height: 40,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
             children: [
               for (final s in TextColorSubTab.values)
                 Padding(
@@ -439,47 +425,53 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
   Widget _textColorPane() {
     final o = _selected;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       children: [
         SizedBox(
-          height: 52,
+          height: 48,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: TextToolCatalog.colorPresets.length,
             separatorBuilder: (_, _) => const SizedBox(width: 8),
             itemBuilder: (context, i) {
               final p = TextToolCatalog.colorPresets[i];
+              final isNone = i == 0 || p.id == 'preset_none';
               return GestureDetector(
                 onTap: () {
                   _ensureOverlay();
                   _patch(
                     (cur) => cur.copyWith(
                       colorArgb: p.colorArgb,
-                      strokeColorArgb: p.strokeColorArgb,
-                      strokeWidth: p.strokeWidth,
-                      bgColorArgb: p.bgColorArgb,
-                      bgOpacity: p.bgOpacity,
-                      bgCorner: p.bgCorner,
-                      shadowColorArgb: p.shadowColorArgb,
-                      shadowBlur: p.shadowBlur,
-                      shadowDistance: p.shadowDistance,
-                      shadowOpacity: p.shadowOpacity,
-                      gradientEndArgb: p.gradientEndArgb,
+                      strokeColorArgb: isNone ? null : p.strokeColorArgb,
+                      strokeWidth: isNone ? 0 : p.strokeWidth,
+                      strokeDoubleColorArgb: null,
+                      // Clear BG / shadow; apply gradient only when preset has one.
+                      bgColorArgb: null,
+                      bgOpacity: 0.15,
+                      shadowColorArgb: null,
+                      shadowBlur: 0,
+                      shadowDistance: 0,
+                      shadowOpacity: 0,
+                      gradientEndArgb: isNone ? null : p.gradientEndArgb,
                       fontWeight: p.fontWeight,
                     ),
                   );
                 },
                 child: Container(
-                  width: 52,
+                  width: 48,
+                  height: 48,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: AppColors.border),
                   ),
-                  child: TextOverlayPaint.styledText(
-                    p.copyWith(text: 'Aa'),
-                    fontSize: 18,
-                  ),
+                  child: isNone
+                      ? const Icon(Icons.block, size: 26, color: Colors.black45)
+                      : TextOverlayPaint.styledText(
+                          p.copyWith(text: 'T'),
+                          fontSize: 22,
+                        ),
                 ),
               );
             },
@@ -495,10 +487,7 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
             onPick: (c) {
               if (c == null) return;
               _patch(
-                (cur) => cur.copyWith(
-                  colorArgb: c,
-                  gradientEndArgb: null,
-                ),
+                (cur) => cur.copyWith(colorArgb: c, gradientEndArgb: null),
               );
             },
             onRainbow: () {
@@ -533,10 +522,8 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
                 for (final g in TextToolCatalog.gradients) ...[
                   GestureDetector(
                     onTap: () => _patch(
-                      (cur) => cur.copyWith(
-                        colorArgb: g.$1,
-                        gradientEndArgb: g.$2,
-                      ),
+                      (cur) =>
+                          cur.copyWith(colorArgb: g.$1, gradientEndArgb: g.$2),
                     ),
                     child: Container(
                       width: 28,
@@ -548,8 +535,7 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
                         ),
                         border: Border.all(
                           color:
-                              o?.colorArgb == g.$1 &&
-                                  o?.gradientEndArgb == g.$2
+                              o?.colorArgb == g.$1 && o?.gradientEndArgb == g.$2
                               ? textToolAccent
                               : Colors.transparent,
                           width: 2,
@@ -577,47 +563,275 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
 
   Widget _strokePane() {
     final o = _selected;
+    final hasSingle = o?.strokeColorArgb != null && (o?.strokeWidth ?? 0) > 0.1;
+    // CapCut thickness UI is 0–100; paint width = value / 10.
+    final thicknessUi = ((o?.strokeWidth ?? 0) * 10).round().clamp(0, 100);
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 12),
       children: [
-        _colorRow(
-          selected: o?.strokeColorArgb,
-          includeNone: true,
-          includeRainbow: true,
-          onPick: (c) => _patch(
-            (cur) => cur.copyWith(
-              strokeColorArgb: c,
-              strokeWidth: c == null ? 0 : math.max(cur.strokeWidth, 2),
-            ),
-          ),
-          onRainbow: () => _patch(
-            (cur) => cur.copyWith(
-              strokeColorArgb: 0xFFF44336,
-              strokeWidth: math.max(cur.strokeWidth, 2),
-            ),
-          ),
+        _strokeModeRow(
+          label: 'Single',
+          doubleMode: false,
+          enabled: true,
+          selectedColor: hasSingle ? o!.strokeColorArgb : null,
+          noneSelected: !hasSingle,
         ),
-        const SizedBox(height: 8),
-        _colorRow(
-          selected: o?.strokeColorArgb,
-          includeNone: true,
-          includeRainbow: false,
-          onPick: (c) => _patch(
-            (cur) => cur.copyWith(
-              strokeColorArgb: c,
-              strokeWidth: c == null ? 0 : math.max(cur.strokeWidth, 2),
-            ),
-          ),
+        const SizedBox(height: 10),
+        // Double unlocks only after Single color is chosen.
+        _strokeModeRow(
+          label: 'Double',
+          doubleMode: true,
+          enabled: hasSingle,
+          selectedColor: hasSingle ? o!.strokeDoubleColorArgb : null,
+          noneSelected: hasSingle && o!.strokeDoubleColorArgb == null,
         ),
         const SizedBox(height: 12),
         _sliderRow(
           'Thickness',
-          (o?.strokeWidth ?? 0).round().clamp(0, 20),
+          thicknessUi,
           0,
-          20,
-          (v) => _patch((cur) => cur.copyWith(strokeWidth: v.toDouble())),
+          100,
+          (v) => _patch(
+            (cur) => cur.copyWith(
+              strokeWidth: v / 10.0,
+              strokeColorArgb:
+                  cur.strokeColorArgb ?? (v > 0 ? 0xFF000000 : null),
+            ),
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _strokeModeRow({
+    required String label,
+    required bool doubleMode,
+    required bool enabled,
+    required int? selectedColor,
+    required bool noneSelected,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.38,
+      child: IgnorePointer(
+        ignoring: !enabled,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 72,
+              child: Row(
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: AppColors.textDark,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  _strokeModeGlyph(doubleMode: doubleMode),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SizedBox(
+                height: 36,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    _strokeSwatch(
+                      child: const Icon(
+                        Icons.block,
+                        size: 18,
+                        color: Colors.black45,
+                      ),
+                      selected: noneSelected,
+                      onTap: () {
+                        if (doubleMode) {
+                          // Clear only outer (Double) layer.
+                          _patch(
+                            (cur) => cur.copyWith(strokeDoubleColorArgb: null),
+                          );
+                        } else {
+                          // Clear Single + Double together.
+                          _patch(
+                            (cur) => cur.copyWith(
+                              strokeColorArgb: null,
+                              strokeDoubleColorArgb: null,
+                              strokeWidth: 0,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    _strokeSwatch(
+                      child: const Icon(
+                        Icons.colorize_rounded,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                      gradient: true,
+                      selected: false,
+                      onTap: () {
+                        const pick = 0xFFF44336;
+                        if (doubleMode) {
+                          _patch(
+                            (cur) => cur.copyWith(
+                              strokeDoubleColorArgb: pick,
+                              strokeWidth: math.max(cur.strokeWidth, 4),
+                            ),
+                          );
+                        } else {
+                          _patch(
+                            (cur) => cur.copyWith(
+                              strokeColorArgb: pick,
+                              strokeWidth: math.max(cur.strokeWidth, 4),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    for (final c in TextToolCatalog.strokeSwatches) ...[
+                      _strokeSwatch(
+                        color: Color(c),
+                        selected: selectedColor == c,
+                        onTap: () {
+                          if (doubleMode) {
+                            // Outer layer on top of existing Single color.
+                            _patch(
+                              (cur) => cur.copyWith(
+                                strokeDoubleColorArgb: c,
+                                strokeWidth: math.max(cur.strokeWidth, 4),
+                              ),
+                            );
+                          } else {
+                            // Inner Single layer (keeps Double if already set).
+                            _patch(
+                              (cur) => cur.copyWith(
+                                strokeColorArgb: c,
+                                strokeWidth: math.max(cur.strokeWidth, 4),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _strokeModeGlyph({required bool doubleMode}) {
+    if (!doubleMode) {
+      return const Text(
+        'A',
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w900,
+          color: Colors.black87,
+        ),
+      );
+    }
+    return SizedBox(
+      width: 16,
+      height: 18,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            'A',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              foreground: Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 3.4
+                ..color = Colors.black87,
+            ),
+          ),
+          Text(
+            'A',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              foreground: Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 1.3
+                ..color = Colors.white,
+            ),
+          ),
+          const Text(
+            'A',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              color: Colors.black87,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _strokeSwatch({
+    Color? color,
+    Widget? child,
+    bool gradient = false,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        _ensureOverlay();
+        onTap();
+      },
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: gradient ? null : (color ?? Colors.white),
+          gradient: gradient
+              ? const SweepGradient(
+                  colors: [
+                    Colors.red,
+                    Colors.yellow,
+                    Colors.green,
+                    Colors.cyan,
+                    Colors.blue,
+                    Colors.purple,
+                    Colors.red,
+                  ],
+                )
+              : null,
+          border: Border.all(
+            color: selected
+                ? const Color(0xFFFF5CA8)
+                : (color == const Color(0xFFFFFFFF)
+                      ? AppColors.border
+                      : Colors.black12),
+            width: selected ? 2.5 : 1,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x14000000),
+              blurRadius: 3,
+              offset: Offset(0, 1),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: child,
+      ),
     );
   }
 
@@ -714,7 +928,7 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
   Widget _alignPane() {
     final o = _selected;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       children: [
         _labeledRow(
           'Case',
@@ -743,41 +957,36 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 10),
-        _labeledRow(
-          'Alignment',
-          Row(
-            children: [
-              for (final a in TextAlignMode.values)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: _squareToggle(
-                    selected: (o?.align ?? TextAlignMode.center) == a,
-                    onTap: () => _patch((cur) => cur.copyWith(align: a)),
-                    child: Icon(
-                      switch (a) {
-                        TextAlignMode.left => Icons.format_align_left,
-                        TextAlignMode.center => Icons.format_align_center,
-                        TextAlignMode.right => Icons.format_align_right,
-                      },
-                      size: 18,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        // const SizedBox(height: 10),
+        // _labeledRow(
+        //   'Alignment',
+        //   Row(
+        //     children: [
+        //       for (final a in TextAlignMode.values)
+        //         Padding(
+        //           padding: const EdgeInsets.only(right: 8),
+        //           child: _squareToggle(
+        //             selected: (o?.align ?? TextAlignMode.center) == a,
+        //             onTap: () => _patch((cur) => cur.copyWith(align: a)),
+        //             child: Icon(switch (a) {
+        //               TextAlignMode.left => Icons.format_align_left,
+        //               TextAlignMode.center => Icons.format_align_center,
+        //               TextAlignMode.right => Icons.format_align_right,
+        //             }, size: 18),
+        //           ),
+        //         ),
+        //     ],
+        //   ),
+        // ),
         const SizedBox(height: 8),
-        _sliderRow(
-          'Curve',
-          (o?.curve ?? 0).round(),
-          0,
-          100,
+        // CapCut-style: center 0 = straight, ±100 = full circle. Snaps to 0 near center.
+        _curveSliderRow(
+          (o?.curve ?? 0).round().clamp(-100, 100),
           (v) => _patch((cur) => cur.copyWith(curve: v.toDouble())),
         ),
         _sliderRow(
           'Size',
-          (o?.fontSize ?? 36).round().clamp(12, 96),
+          (o?.fontSize ?? 20).round().clamp(12, 96),
           12,
           96,
           (v) => _patch((cur) => cur.copyWith(fontSize: v.toDouble())),
@@ -789,14 +998,13 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
           40,
           (v) => _patch((cur) => cur.copyWith(letterSpacing: v.toDouble())),
         ),
-        _sliderRow(
-          'Line',
-          (((o?.lineHeight ?? 1.2) - 0.8) * 50).round().clamp(0, 100),
-          0,
-          100,
-          (v) =>
-              _patch((cur) => cur.copyWith(lineHeight: 0.8 + (v / 50))),
-        ),
+        // _sliderRow(
+        //   'Line',
+        //   (((o?.lineHeight ?? 1.2) - 0.8) * 50).round().clamp(0, 100),
+        //   0,
+        //   100,
+        //   (v) => _patch((cur) => cur.copyWith(lineHeight: 0.8 + (v / 50))),
+        // ),
       ],
     );
   }
@@ -821,6 +1029,82 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
     );
   }
 
+  Widget _curveSliderRow(int value, ValueChanged<int> onChanged) {
+    const snapZone = 6; // |v| <= 6 → lock to exact 0
+    int snap(int v) => v.abs() <= snapZone ? 0 : v;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 72,
+            child: Text(
+              'Curve',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+            ),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: textToolAccent,
+                inactiveTrackColor: textToolAccent.withValues(alpha: 0.2),
+                thumbColor: textToolAccent,
+                overlayColor: textToolAccent.withValues(alpha: 0.12),
+                trackHeight: 4,
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Visual center mark at 0.
+                  IgnorePointer(
+                    child: Container(
+                      width: 2,
+                      height: 12,
+                      color: textToolAccent.withValues(alpha: 0.45),
+                    ),
+                  ),
+                  Slider(
+                    value: value.clamp(-100, 100).toDouble(),
+                    min: -100,
+                    max: 100,
+                    onChanged: (v) {
+                      _ensureOverlay();
+                      final next = snap(v.round());
+                      if (next == 0 && value != 0) {
+                        HapticFeedback.selectionClick();
+                      }
+                      onChanged(next);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 36,
+            child: GestureDetector(
+              onTap: () {
+                _ensureOverlay();
+                HapticFeedback.selectionClick();
+                onChanged(0);
+              },
+              child: Text(
+                '$value',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: value == 0 ? textToolAccent : AppColors.textDark,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _sliderRow(
     String label,
     int value,
@@ -836,10 +1120,7 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
             width: 72,
             child: Text(
               label,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
             ),
           ),
           Expanded(
@@ -863,14 +1144,11 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
             ),
           ),
           SizedBox(
-            width: 28,
+            width: 36,
             child: Text(
-              value.toString().padLeft(2, '0'),
+              '$value',
               textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
             ),
           ),
         ],
@@ -993,18 +1271,33 @@ class LiveTextOverlaysLayer extends StatefulWidget {
     required this.selectedOverlayId,
     required this.onSelectedOverlayId,
     required this.editing,
+    this.onEditOverlay,
   });
 
   final SlideshowProject project;
   final String? selectedOverlayId;
   final ValueChanged<String?> onSelectedOverlayId;
+  /// True while text bottom sheet is open.
   final bool editing;
+  /// Opens text tools for the selected overlay (Edit handle).
+  final ValueChanged<String>? onEditOverlay;
 
   @override
   State<LiveTextOverlaysLayer> createState() => _LiveTextOverlaysLayerState();
 }
 
 class _LiveTextOverlaysLayerState extends State<LiveTextOverlaysLayer> {
+  String? _handleGestureId;
+  Offset? _rotatePivotGlobal;
+  double? _rotateStartAngle;
+  double? _rotateStartRotation;
+  double? _scaleStart;
+  double? _scaleStartDist;
+
+  SlideOverlay? _latest(String id) {
+    return widget.project.overlays.where((e) => e.id == id).firstOrNull;
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -1021,12 +1314,20 @@ class _LiveTextOverlaysLayerState extends State<LiveTextOverlaysLayer> {
             return Stack(
               clipBehavior: Clip.none,
               children: [
+                // Tap empty canvas → hide selection border (idle only).
+                if (!widget.editing && widget.selectedOverlayId != null)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => widget.onSelectedOverlayId(null),
+                    ),
+                  ),
                 for (final o in texts)
                   _positionedText(
                     o,
                     canvasW: w,
                     canvasH: h,
-                    selected: widget.editing && widget.selectedOverlayId == o.id,
+                    selected: widget.selectedOverlayId == o.id,
                   ),
               ],
             );
@@ -1036,6 +1337,10 @@ class _LiveTextOverlaysLayerState extends State<LiveTextOverlaysLayer> {
     );
   }
 
+  // Must keep handles inside Stack layout bounds — Flutter ignores taps on
+  // children painted outside the Stack's size (clipBehavior does not help hits).
+  static const _handleSlot = 36.0;
+
   Widget _positionedText(
     SlideOverlay o, {
     required double canvasW,
@@ -1043,6 +1348,8 @@ class _LiveTextOverlaysLayerState extends State<LiveTextOverlaysLayer> {
     required bool selected,
   }) {
     final fontSize = o.fontSize * o.scale;
+    final sheetOpen = widget.editing;
+    final edge = selected ? _handleSlot / 2 : 0.0;
     return Positioned(
       left: o.nx * canvasW,
       top: o.ny * canvasH,
@@ -1050,98 +1357,227 @@ class _LiveTextOverlaysLayerState extends State<LiveTextOverlaysLayer> {
         translation: const Offset(-0.5, -0.5),
         child: Transform.rotate(
           angle: o.rotation,
-          child: GestureDetector(
-            onTap: () {
-              if (!widget.editing) return;
-              widget.onSelectedOverlayId(o.id);
-            },
-            onPanUpdate: selected
-                ? (d) {
-                    widget.project.updateOverlay(
-                      o.copyWith(
-                        nx: (o.nx + d.delta.dx / canvasW).clamp(0.05, 0.95),
-                        ny: (o.ny + d.delta.dy / canvasH).clamp(0.05, 0.95),
-                      ),
-                    );
-                  }
-                : null,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: selected
-                      ? BoxDecoration(
-                          border: Border.all(
-                            color: textToolAccent,
-                            width: 1.5,
-                          ),
-                        )
+          child: Stack(
+            children: [
+              // Padding is the sizing child → Stack grows so corner slots hit-test.
+              Padding(
+                padding: EdgeInsets.all(edge),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => widget.onSelectedOverlayId(o.id),
+                  onPanUpdate: selected
+                      ? (d) {
+                          if (_handleGestureId != null) return;
+                          final latest = _latest(o.id);
+                          if (latest == null) return;
+                          widget.project.updateOverlay(
+                            latest.copyWith(
+                              nx: (latest.nx + d.delta.dx / canvasW)
+                                  .clamp(0.05, 0.95),
+                              ny: (latest.ny + d.delta.dy / canvasH)
+                                  .clamp(0.05, 0.95),
+                            ),
+                          );
+                        }
                       : null,
-                  child: TextOverlayPaint.styledText(o, fontSize: fontSize),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: selected
+                        ? BoxDecoration(
+                            border: Border.all(
+                              color: textToolAccent,
+                              width: 1.5,
+                            ),
+                          )
+                        : null,
+                    child: TextOverlayPaint.styledText(o, fontSize: fontSize),
+                  ),
                 ),
-                if (selected) ...[
+              ),
+              if (selected) ...[
+                // Idle selection: close + edit. Sheet open: hide those two.
+                if (!sheetOpen) ...[
                   Positioned(
-                    left: -14,
-                    top: -14,
-                    child: _handleBtn(
-                      Icons.close_rounded,
-                      () {
-                        widget.project.removeOverlay(o.id);
-                        widget.onSelectedOverlayId(null);
-                      },
+                    left: 0,
+                    top: 0,
+                    width: _handleSlot,
+                    height: _handleSlot,
+                    child: Center(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          widget.project.removeOverlay(o.id);
+                          widget.onSelectedOverlayId(null);
+                        },
+                        child: _handleBtn(Icons.close_rounded),
+                      ),
                     ),
                   ),
                   Positioned(
-                    left: -14,
-                    bottom: -14,
-                    child: GestureDetector(
-                      onPanUpdate: (d) {
-                        final next = o.rotation + d.delta.dx * 0.01;
-                        widget.project.updateOverlay(
-                          o.copyWith(rotation: next),
-                        );
-                      },
-                      child: _handleBtn(Icons.rotate_right_rounded, null),
-                    ),
-                  ),
-                  Positioned(
-                    right: -14,
-                    bottom: -14,
-                    child: GestureDetector(
-                      onPanUpdate: (d) {
-                        final next = (o.scale + d.delta.dx * 0.01)
-                            .clamp(0.4, 4.0)
-                            .toDouble();
-                        widget.project.updateOverlay(o.copyWith(scale: next));
-                      },
-                      child: _handleBtn(Icons.open_in_full_rounded, null),
+                    right: 0,
+                    top: 0,
+                    width: _handleSlot,
+                    height: _handleSlot,
+                    child: Center(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => widget.onEditOverlay?.call(o.id),
+                        child: _handleBtn(Icons.edit_rounded),
+                      ),
                     ),
                   ),
                 ],
+                Positioned(
+                  left: 0,
+                  bottom: 0,
+                  width: _handleSlot,
+                  height: _handleSlot,
+                  child: Center(
+                    child: _rotateHandle(
+                      o.id,
+                      canvasW: canvasW,
+                      canvasH: canvasH,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  width: _handleSlot,
+                  height: _handleSlot,
+                  child: Center(
+                    child: _resizeHandle(
+                      o.id,
+                      canvasW: canvasW,
+                      canvasH: canvasH,
+                    ),
+                  ),
+                ),
               ],
-            ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _handleBtn(IconData icon, VoidCallback? onTap) {
+  Widget _rotateHandle(
+    String id, {
+    required double canvasW,
+    required double canvasH,
+  }) {
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 26,
-        height: 26,
-        decoration: const BoxDecoration(
-          color: Colors.black87,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, size: 14, color: Colors.white),
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (d) {
+        final latest = _latest(id);
+        if (latest == null) return;
+        _handleGestureId = id;
+        _rotateStartRotation = latest.rotation;
+        _rotatePivotGlobal = Offset(
+          latest.nx * canvasW,
+          latest.ny * canvasH,
+        );
+        // Convert local handle drag start to angle around text center.
+        // Use global position vs pivot approximated in overlay parent space.
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final globalPivot = box.localToGlobal(_rotatePivotGlobal!);
+        _rotateStartAngle = math.atan2(
+          d.globalPosition.dy - globalPivot.dy,
+          d.globalPosition.dx - globalPivot.dx,
+        );
+      },
+      onPanUpdate: (d) {
+        final latest = _latest(id);
+        if (latest == null ||
+            _rotateStartAngle == null ||
+            _rotateStartRotation == null ||
+            _rotatePivotGlobal == null) {
+          return;
+        }
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final globalPivot = box.localToGlobal(_rotatePivotGlobal!);
+        final angle = math.atan2(
+          d.globalPosition.dy - globalPivot.dy,
+          d.globalPosition.dx - globalPivot.dx,
+        );
+        final delta = angle - _rotateStartAngle!;
+        widget.project.updateOverlay(
+          latest.copyWith(rotation: _rotateStartRotation! + delta),
+        );
+      },
+      onPanEnd: (_) => _clearHandleGesture(),
+      onPanCancel: _clearHandleGesture,
+      child: _handleBtn(Icons.rotate_right_rounded),
+    );
+  }
+
+  Widget _resizeHandle(
+    String id, {
+    required double canvasW,
+    required double canvasH,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (d) {
+        final latest = _latest(id);
+        if (latest == null) return;
+        _handleGestureId = id;
+        _scaleStart = latest.scale;
+        final pivot = Offset(latest.nx * canvasW, latest.ny * canvasH);
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final globalPivot = box.localToGlobal(pivot);
+        _scaleStartDist = (d.globalPosition - globalPivot).distance
+            .clamp(12.0, 10000.0);
+      },
+      onPanUpdate: (d) {
+        final latest = _latest(id);
+        if (latest == null ||
+            _scaleStart == null ||
+            _scaleStartDist == null) {
+          return;
+        }
+        final pivot = Offset(latest.nx * canvasW, latest.ny * canvasH);
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final globalPivot = box.localToGlobal(pivot);
+        final dist = (d.globalPosition - globalPivot).distance
+            .clamp(12.0, 10000.0);
+        final next = (_scaleStart! * (dist / _scaleStartDist!))
+            .clamp(0.35, 5.0)
+            .toDouble();
+        widget.project.updateOverlay(latest.copyWith(scale: next));
+      },
+      onPanEnd: (_) => _clearHandleGesture(),
+      onPanCancel: _clearHandleGesture,
+      child: _handleBtn(Icons.open_in_full_rounded),
+    );
+  }
+
+  void _clearHandleGesture() {
+    _handleGestureId = null;
+    _rotatePivotGlobal = null;
+    _rotateStartAngle = null;
+    _rotateStartRotation = null;
+    _scaleStart = null;
+    _scaleStartDist = null;
+  }
+
+  Widget _handleBtn(IconData icon) {
+    return Container(
+      width: 30,
+      height: 30,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        color: Colors.black87,
+        shape: BoxShape.circle,
       ),
+      child: Icon(icon, size: 15, color: Colors.white),
     );
   }
 }

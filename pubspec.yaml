@@ -28,6 +28,7 @@ dependencies:
   image: ^4.5.4
   intl: ^0.20.2
   ffmpeg_kit_flutter_new: ^4.6.2
+  google_fonts: ^9.0.0
 
 dev_dependencies:
   flutter_test:

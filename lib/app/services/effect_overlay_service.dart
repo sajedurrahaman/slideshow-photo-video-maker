@@ -123,6 +123,9 @@ class EffectOverlayService {
   }
 
   /// Black pixels leave the slideshow untouched; bright pixels reveal the FX.
+  ///
+  /// Uses a peak-channel gate (not pure RGB&lt;8) so H.264 chroma bleed and soft
+  /// magenta glow in the FX "black" areas do not wash the whole export.
   static img.Image screenBlend(img.Image base, img.Image effect) {
     final overlay = effect.width == base.width && effect.height == base.height
         ? effect
@@ -139,8 +142,9 @@ class EffectOverlayService {
         final sr = src.r.toInt();
         final sg = src.g.toInt();
         final sb = src.b.toInt();
-        // Skip near-black — keeps photo clean with no haze.
-        if (sr < 8 && sg < 8 && sb < 8) continue;
+        // Skip dark FX plate — keeps photo clean with no reddish haze.
+        final peak = sr > sg ? (sr > sb ? sr : sb) : (sg > sb ? sg : sb);
+        if (peak < 28) continue;
         final dst = base.getPixel(x, y);
         result.setPixelRgba(
           x,
@@ -233,9 +237,15 @@ class EffectOverlayService {
     final enable = timelineEndSec == null
         ? "enable='gte(t,$t0)'"
         : "enable='between(t,$t0,${timelineEndSec.toStringAsFixed(3)})'";
+    // Crush dark FX plate before screen so export matches Dart [screenBlend]
+    // (FFmpeg raw screen otherwise leaves a full-frame magenta/red haze).
+    const crush =
+        "geq=r='if(lt(max(max(r(X\\,Y)\\,g(X\\,Y))\\,b(X\\,Y))\\,28)\\,0\\,r(X\\,Y))':"
+        "g='if(lt(max(max(r(X\\,Y)\\,g(X\\,Y))\\,b(X\\,Y))\\,28)\\,0\\,g(X\\,Y))':"
+        "b='if(lt(max(max(r(X\\,Y)\\,g(X\\,Y))\\,b(X\\,Y))\\,28)\\,0\\,b(X\\,Y))'";
     return switch (blend) {
       OverlayBlendMode.screen =>
-        '$prep[effect];[0:v][effect]blend=all_mode=screen:$enable[screened]',
+        '$prep,$crush[effect];[0:v][effect]blend=all_mode=screen:$enable[screened]',
       OverlayBlendMode.chromaGreen =>
         '$prep,'
             'chromakey=0x00FF00:0.35:0.12[effect];'

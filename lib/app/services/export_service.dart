@@ -10,7 +10,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/constants/app_constants.dart';
-import 'effect_overlay_service.dart';
 import 'slideshow_project.dart';
 
 class ExportService {
@@ -49,12 +48,10 @@ class ExportService {
       }
     }
 
-    final overlayEffect = project.isEffectOverlayEnabled
-        ? project.selectedOverlayEffect
-        : null;
-    final overlayPath = overlayEffect != null
-        ? await EffectOverlayService.assetFilePath(overlayEffect.assetPath)
-        : null;
+    // Particle FX is already baked into slideshow JPGs by
+    // [SlideshowProject.generatePreviewFrames] (same screenBlend as preview).
+    // Do not screen the raw effect MP4 again in FFmpeg — that caused a
+    // full-frame reddish haze on export.
 
     final videoDur = project.estimatedDurationSec;
     final musicStart = (music?.timelineStartSec ?? 0).clamp(0.0, videoDur);
@@ -101,37 +98,13 @@ class ExportService {
       ..write('-y -framerate ${fps.toStringAsFixed(3)} ')
       ..write('-i $framesDir/img%05d.jpg ');
 
-    var nextInputIndex = 1;
-    int? overlayInputIndex;
-    if (overlayPath != null) {
-      overlayInputIndex = nextInputIndex++;
-      cmd.write('-stream_loop -1 -i "$overlayPath" ');
-    }
-
     int? musicInputIndex;
     if (musicPath != null) {
-      musicInputIndex = nextInputIndex++;
+      musicInputIndex = 1;
       cmd.write('-stream_loop -1 -i "$musicPath" ');
     }
 
-    if (overlayInputIndex != null && overlayEffect != null) {
-      final (width, height) = project.outputSize;
-      final filter = EffectOverlayService.exportFilterComplex(
-        overlayInputIndex: overlayInputIndex,
-        width: width,
-        height: height,
-        fps: fps,
-        blend: overlayEffect.blend,
-        clipStartSec: project.overlayClipStartSec,
-        clipEndSec: project.overlayClipEndSec,
-        timelineStartSec: project.overlayTimelineStartSec,
-        timelineEndSec: project.overlayTimelineEndSec,
-      );
-      cmd.write('-filter_complex "$filter" -map "[screened]" ');
-    } else {
-      cmd.write('-map 0:v:0 ');
-    }
-
+    cmd.write('-map 0:v:0 ');
     if (musicInputIndex != null) {
       cmd.write('-map $musicInputIndex:a:0 ');
     }
