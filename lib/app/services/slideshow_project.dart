@@ -920,11 +920,11 @@ class SlideshowProject extends ChangeNotifier {
           _previewBaseCacheKey == _buildPreviewBaseCacheKey() &&
           _previewMemoryFrames.isNotEmpty &&
           _previewSegmentCounts.length == photos.length;
-      final unlockReady =
+      final firstStripReady =
           option.type == SlideTransitionType.none ||
-          _priorityTransitionStripsReady(option);
-      // Prefetched A→B→C strips → no Lottie; otherwise short debounce.
-      if (baseReady && unlockReady) {
+          _transitionStripCache.containsKey(_transitionStripKey(0, option));
+      // Prefetched / cached first A→B → no Lottie; otherwise short debounce.
+      if (baseReady && firstStripReady) {
         unawaited(preparePreviewFrames(showLoading: false));
       } else {
         isPreparingPreview = true;
@@ -959,7 +959,7 @@ class SlideshowProject extends ChangeNotifier {
       if (!isPreviewReady || _previewMemoryFrames.isEmpty) {
         await preparePreviewFrames(showLoading: false);
       }
-      // Prefetch first-5 A→B→C strips so picker taps skip the long load.
+      // Prefetch first-5 A→B strips so picker taps skip the long load.
       await _warmPriorityTransitionStrips();
     } finally {
       _isWarmingPreviewCache = false;
@@ -977,23 +977,8 @@ class SlideshowProject extends ChangeNotifier {
   static List<SlideTransitionOption> get _prioritySlideOptions =>
       SlideTransitionOption.all.take(5).toList(growable: false);
 
-  /// Unlock Lottie after A→B (2 photos) or A→B→C (3+ photos).
-  int get _priorityUnlockPairCount =>
-      photos.length < 2 ? 0 : math.min(2, photos.length - 1);
-
   String _transitionStripKey(int pairIndex, SlideTransitionOption option) {
     return '${_buildPreviewBaseCacheKey()}|$pairIndex|${option.id}';
-  }
-
-  bool _priorityTransitionStripsReady(SlideTransitionOption option) {
-    final n = _priorityUnlockPairCount;
-    if (n <= 0) return true;
-    for (var i = 0; i < n; i++) {
-      if (!_transitionStripCache.containsKey(_transitionStripKey(i, option))) {
-        return false;
-      }
-    }
-    return true;
   }
 
   void _storeTransitionStrip(String key, List<Uint8List> frames) {
@@ -1008,30 +993,25 @@ class SlideshowProject extends ChangeNotifier {
     if (photos.length < 2 || _previewBaseCacheKey == null) return;
     final epoch = _transitionWarmEpoch;
     final (w, h) = previewSize;
-    final unlockPairs = _priorityUnlockPairCount;
-    final n = AppConstants.framesPerTransition;
+    final fromLayers = await _cachedPreviewLayers(0, w, h);
+    final toLayers = await _cachedPreviewLayers(1, w, h);
+    if (epoch != _transitionWarmEpoch) return;
 
-    for (var pair = 0; pair < unlockPairs; pair++) {
+    for (final opt in _prioritySlideOptions) {
       if (epoch != _transitionWarmEpoch) return;
-      final fromLayers = await _cachedPreviewLayers(pair, w, h);
-      final toLayers = await _cachedPreviewLayers(pair + 1, w, h);
+      if (opt.type == SlideTransitionType.none) continue;
+      final key = _transitionStripKey(0, opt);
+      if (_transitionStripCache.containsKey(key)) continue;
+      final n = AppConstants.framesPerTransition;
+      final rendered = await _renderTransitionFramesOffThread(
+        fromFrames: [fromLayers.composed],
+        toImage: toLayers.composed,
+        option: opt,
+        frameCount: n,
+      );
       if (epoch != _transitionWarmEpoch) return;
-
-      for (final opt in _prioritySlideOptions) {
-        if (epoch != _transitionWarmEpoch) return;
-        if (opt.type == SlideTransitionType.none) continue;
-        final key = _transitionStripKey(pair, opt);
-        if (_transitionStripCache.containsKey(key)) continue;
-        final rendered = await _renderTransitionFramesOffThread(
-          fromFrames: [fromLayers.composed],
-          toImage: toLayers.composed,
-          option: opt,
-          frameCount: n,
-        );
-        if (epoch != _transitionWarmEpoch) return;
-        _storeTransitionStrip(key, rendered);
-        await Future<void>.delayed(const Duration(milliseconds: 24));
-      }
+      _storeTransitionStrip(key, rendered);
+      await Future<void>.delayed(const Duration(milliseconds: 24));
     }
   }
 
@@ -1126,8 +1106,8 @@ class SlideshowProject extends ChangeNotifier {
       final built = canRebuildTransitionsOnly
           ? await _rebuildTransitionFrames(
               generation: generation,
-              // Drop Lottie once A→B→C priority strips are spliced.
-              onPriorityPairsReady: showLoading
+              // Drop Lottie as soon as the first A→B strip is spliced.
+              onFirstPairReady: showLoading
                   ? (frames, counts) {
                       if (generation != _previewGeneration) return;
                       _previewMemoryFrames
@@ -1226,8 +1206,7 @@ class SlideshowProject extends ChangeNotifier {
   Future<({List<Uint8List> frames, List<int> counts})?>
   _rebuildTransitionFrames({
     required int generation,
-    void Function(List<Uint8List> frames, List<int> counts)?
-    onPriorityPairsReady,
+    void Function(List<Uint8List> frames, List<int> counts)? onFirstPairReady,
   }) async {
     final (w, h) = previewSize;
     final layers = <_PreparedPhotoLayers>[];
@@ -1246,27 +1225,11 @@ class SlideshowProject extends ChangeNotifier {
           photo.animationOut != PhotoAnimationType.none ||
           photo.animationLoop != PhotoAnimationType.none,
     );
-    // A→B (1 pair) or A→B→C (2 pairs) before hiding Lottie.
-    final unlockAfterPair = _priorityUnlockPairCount - 1;
-    var unlocked = false;
     var segmentStart = startingCard == null
         ? 0
         : frameCountForDuration(startingCard!.durationSec)
               .clamp(4, 300)
               .toInt();
-
-    void maybeUnlock(int pairIndex) {
-      if (unlocked ||
-          onPriorityPairsReady == null ||
-          pairIndex < unlockAfterPair) {
-        return;
-      }
-      unlocked = true;
-      onPriorityPairsReady(
-        List<Uint8List>.of(frames),
-        List<int>.of(_previewSegmentCounts),
-      );
-    }
 
     for (var i = 0; i < photos.length - 1; i++) {
       if (generation != _previewGeneration) return null;
@@ -1290,7 +1253,12 @@ class SlideshowProject extends ChangeNotifier {
           frames[tailStart + t] = solo;
         }
         segmentStart += segmentCount;
-        maybeUnlock(i);
+        if (i == 0 && onFirstPairReady != null) {
+          onFirstPairReady(
+            List<Uint8List>.of(frames),
+            List<int>.of(_previewSegmentCounts),
+          );
+        }
         continue;
       }
 
@@ -1338,8 +1306,13 @@ class SlideshowProject extends ChangeNotifier {
       }
       segmentStart += segmentCount;
 
-      // Unlock after A→B→C; remaining pairs continue quietly.
-      maybeUnlock(i);
+      // Unlock UI after first pair — remaining pairs continue quietly.
+      if (i == 0 && onFirstPairReady != null) {
+        onFirstPairReady(
+          List<Uint8List>.of(frames),
+          List<int>.of(_previewSegmentCounts),
+        );
+      }
     }
 
     if (generation != _previewGeneration) return null;

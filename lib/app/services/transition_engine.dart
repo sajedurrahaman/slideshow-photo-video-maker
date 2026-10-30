@@ -1242,8 +1242,8 @@ class TransitionEngine {
         shade: 0.62 + 0.38 * sinA,
         taperTop: true,
         edgeOn: math.cos(angle),
-      );
-    } else {
+          );
+        } else {
       // BT (blue): exact opposite — old top-aligned; new from bottom.
       blitFace(
         src: oldPixels,
