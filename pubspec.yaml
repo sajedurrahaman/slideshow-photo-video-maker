@@ -29,6 +29,7 @@ dependencies:
   intl: ^0.20.2
   ffmpeg_kit_flutter_new: ^4.6.2
   google_fonts: ^9.0.0
+  lottie: ^3.8.0
 
 dev_dependencies:
   flutter_test:
@@ -48,3 +49,4 @@ flutter:
     - assets/images/editor/photo_tools/
     - assets/images/editor/music_tools/
     - assets/images/editor/transitions/
+    - assets/lottie/

@@ -22,6 +22,7 @@ import '../services/effect_overlay_service.dart';
 import '../services/slideshow_project.dart';
 import 'crop_screen.dart';
 import '../widgets/editTool_sheet.dart';
+import '../widgets/preparing_preview_overlay.dart';
 import '../widgets/text_tools_sheet.dart';
 
 enum EditorTool {
@@ -884,7 +885,8 @@ class _EditorScreenState extends State<EditorScreen>
                           }
 
                           return Positioned(
-                            left: left + (_photoReordering ? _reorderDragDx : 0),
+                            left:
+                                left + (_photoReordering ? _reorderDragDx : 0),
                             top: 0,
                             width: clipW + handleW * 2,
                             height: _thumbH,
@@ -2655,369 +2657,359 @@ class _EditorScreenState extends State<EditorScreen>
       body: Stack(
         children: [
           Column(
-        children: [
-          Expanded(
-            child: Padding(
+            children: [
+              Expanded(
+                child: Padding(
                   padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
                   child: Center(
-              child: AspectRatio(
+                    child: AspectRatio(
                       aspectRatio: aspect,
-                child: DecoratedBox(
+                      child: DecoratedBox(
                         decoration: const BoxDecoration(color: Colors.black),
-                  child: ClipRRect(
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                          if (project.selectedPhotoIndex case final sel?
-                              when sel >= 0 && sel < project.photos.length)
-                            _LiveClipPreview(
-                              key: ValueKey(sel),
-                              photoIndex: sel,
-                              photo: project.photos[sel],
-                              backgroundArgb:
-                                  project.photos[sel].backgroundArgb ??
-                                  project.backgroundArgb,
-                              backgroundBlurLevel:
-                                  project.photos[sel].backgroundBlurLevel,
-                              replayToken: _liveToken,
-                              mode: _liveMode,
-                              inSecOverride: _inDurationDrag,
-                              outSecOverride: _outDurationDrag,
-                              // Capture [sel] — selection can clear before
-                              // the animation ticker fires onFraction again.
-                              onFraction: (fraction) =>
-                                  project.setLivePreviewClock(sel, fraction),
-                              onFinished: () {
-                                project.finishLiveClip();
-                                if (mounted) {
-                                  setState(() => _liveMode = _LiveMode.idle);
-                                }
-                              },
-                            )
-                        else
-                            RepaintBoundary(
-                              child:
-                                  ValueListenableBuilder<
-                                    ({int index, double fraction})?
-                                  >(
-                                    valueListenable: project.scrubLive,
-                                    builder: (context, scrub, _) {
-                                      if (scrub != null &&
-                                          !project.isPreviewReady &&
-                                          scrub.index < project.photos.length) {
-                                        final photo =
-                                            project.photos[scrub.index];
-                                        return _LiveClipPreview(
-                                          key: ValueKey('scrub-${scrub.index}'),
-                                          photoIndex: scrub.index,
-                                          photo: photo,
-                                          backgroundArgb:
-                                              photo.backgroundArgb ??
-                                              project.backgroundArgb,
-                                          backgroundBlurLevel:
-                                              photo.backgroundBlurLevel,
-                                          replayToken: 0,
-                                          mode: _LiveMode.idle,
-                                          holdFraction: scrub.fraction,
-                                          onFraction: (_) {},
-                                          onFinished: () {},
-                                        );
-                                      }
-                                      return ValueListenableBuilder<Uint8List?>(
-                                        valueListenable:
-                                            project.previewFrameListenable,
-                                        builder: (context, bytes, _) {
-                                          if (bytes != null) {
-                                            return Image.memory(
-                                              bytes,
-                                              fit: BoxFit.contain,
-                                              gaplessPlayback: true,
-                                              filterQuality: FilterQuality.low,
-                                            );
-                                          }
-                                          if (project.photos.isNotEmpty) {
-                                            return Image.file(
-                                              File(project.photos.first.path),
-                                              fit: BoxFit.contain,
-                                              gaplessPlayback: true,
-                                              filterQuality: FilterQuality.high,
-                                            );
-                                          }
-                                          return const Center(
-                            child: Text(
-                              'No preview',
-                                              style: TextStyle(
-                                                color: Colors.white54,
+                        child: ClipRRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (project.selectedPhotoIndex case final sel?
+                                  when sel >= 0 && sel < project.photos.length)
+                                _LiveClipPreview(
+                                  key: ValueKey(sel),
+                                  photoIndex: sel,
+                                  photo: project.photos[sel],
+                                  backgroundArgb:
+                                      project.photos[sel].backgroundArgb ??
+                                      project.backgroundArgb,
+                                  backgroundBlurLevel:
+                                      project.photos[sel].backgroundBlurLevel,
+                                  replayToken: _liveToken,
+                                  mode: _liveMode,
+                                  inSecOverride: _inDurationDrag,
+                                  outSecOverride: _outDurationDrag,
+                                  // Capture [sel] — selection can clear before
+                                  // the animation ticker fires onFraction again.
+                                  onFraction: (fraction) => project
+                                      .setLivePreviewClock(sel, fraction),
+                                  onFinished: () {
+                                    project.finishLiveClip();
+                                    if (mounted) {
+                                      setState(
+                                        () => _liveMode = _LiveMode.idle,
+                                      );
+                                    }
+                                  },
+                                )
+                              else
+                                RepaintBoundary(
+                                  child:
+                                      ValueListenableBuilder<
+                                        ({int index, double fraction})?
+                                      >(
+                                        valueListenable: project.scrubLive,
+                                        builder: (context, scrub, _) {
+                                          if (scrub != null &&
+                                              !project.isPreviewReady &&
+                                              scrub.index <
+                                                  project.photos.length) {
+                                            final photo =
+                                                project.photos[scrub.index];
+                                            return _LiveClipPreview(
+                                              key: ValueKey(
+                                                'scrub-${scrub.index}',
                                               ),
-                                            ),
+                                              photoIndex: scrub.index,
+                                              photo: photo,
+                                              backgroundArgb:
+                                                  photo.backgroundArgb ??
+                                                  project.backgroundArgb,
+                                              backgroundBlurLevel:
+                                                  photo.backgroundBlurLevel,
+                                              replayToken: 0,
+                                              mode: _LiveMode.idle,
+                                              holdFraction: scrub.fraction,
+                                              onFraction: (_) {},
+                                              onFinished: () {},
+                                            );
+                                          }
+                                          return ValueListenableBuilder<
+                                            Uint8List?
+                                          >(
+                                            valueListenable:
+                                                project.previewFrameListenable,
+                                            builder: (context, bytes, _) {
+                                              if (bytes != null) {
+                                                return Image.memory(
+                                                  bytes,
+                                                  fit: BoxFit.contain,
+                                                  gaplessPlayback: true,
+                                                  filterQuality:
+                                                      FilterQuality.low,
+                                                );
+                                              }
+                                              if (project.photos.isNotEmpty) {
+                                                return Image.file(
+                                                  File(
+                                                    project.photos.first.path,
+                                                  ),
+                                                  fit: BoxFit.contain,
+                                                  gaplessPlayback: true,
+                                                  filterQuality:
+                                                      FilterQuality.high,
+                                                );
+                                              }
+                                              return const Center(
+                                                child: Text(
+                                                  'No preview',
+                                                  style: TextStyle(
+                                                    color: Colors.white54,
+                                                  ),
+                                                ),
+                                              );
+                                            },
                                           );
                                         },
-                                      );
-                                    },
-                            ),
-                          ),
-                        if (project.selectedFrameAsset != null)
-                            IgnorePointer(
-                              child: Image.asset(
-                            project.selectedFrameAsset!,
-                                key: ValueKey(project.selectedFrameAsset),
-                                fit: BoxFit.fill,
-                                gaplessPlayback: false,
-                                filterQuality: FilterQuality.medium,
-                              ),
-                            ),
-                          // Live effect layer (CapCut-style) — no frame bake / no loading.
-                          if (project.isEffectOverlayEnabled &&
-                              project.selectedOverlayEffect != null)
-                            _LiveEffectOverlayLayer(
-                              key: ValueKey(project.selectedOverlayEffect!.id),
-                              project: project,
-                              effect: project.selectedOverlayEffect!,
-                            ),
-                          // Live text: tap to select/move; Edit opens sheet.
-                          LiveTextOverlaysLayer(
-                            project: project,
-                            selectedOverlayId: _selectedTextOverlayId,
-                            onSelectedOverlayId: (id) {
-                              setState(() {
-                                _selectedTextOverlayId = id;
-                                if (id != null) {
+                                      ),
+                                ),
+                              if (project.selectedFrameAsset != null)
+                                IgnorePointer(
+                                  child: Image.asset(
+                                    project.selectedFrameAsset!,
+                                    key: ValueKey(project.selectedFrameAsset),
+                                    fit: BoxFit.fill,
+                                    gaplessPlayback: false,
+                                    filterQuality: FilterQuality.medium,
+                                  ),
+                                ),
+                              // Live effect layer (CapCut-style) — no frame bake / no loading.
+                              if (project.isEffectOverlayEnabled &&
+                                  project.selectedOverlayEffect != null)
+                                _LiveEffectOverlayLayer(
+                                  key: ValueKey(
+                                    project.selectedOverlayEffect!.id,
+                                  ),
+                                  project: project,
+                                  effect: project.selectedOverlayEffect!,
+                                ),
+                              // Live text: tap to select/move; Edit opens sheet.
+                              LiveTextOverlaysLayer(
+                                project: project,
+                                selectedOverlayId: _selectedTextOverlayId,
+                                onSelectedOverlayId: (id) {
+                                  setState(() {
+                                    _selectedTextOverlayId = id;
+                                    if (id != null) {
+                                      final o = project.overlays
+                                          .where((e) => e.id == id)
+                                          .firstOrNull;
+                                      if (o?.text != null) {
+                                        _textController.text = o!.text!;
+                                      }
+                                    }
+                                  });
+                                },
+                                onEditOverlay: (id) {
                                   final o = project.overlays
                                       .where((e) => e.id == id)
                                       .firstOrNull;
-                                  if (o?.text != null) {
-                                    _textController.text = o!.text!;
-                                  }
-                                }
-                              });
-                            },
-                            onEditOverlay: (id) {
-                              final o = project.overlays
-                                  .where((e) => e.id == id)
-                                  .firstOrNull;
-                              setState(() {
-                                _selectedTextOverlayId = id;
-                                _textController.text = o?.text ?? '';
-                                _tool = null;
-                                _musicToolsOpen = false;
-                                _effectsToolsOpen = false;
-                                _photoTool = null;
-                                _textToolsOpen = true;
-                              });
-                              project.clearTimelinePhotoSelection();
-                              project.stopPreviewPlayback();
-                            },
-                            editing: _textToolsOpen,
-                          ),
-                          // Loading while transition preview frames are prepared.
-                          if (project.isPreparingPreview)
-                            Container(
-                              color: Colors.black45,
-                              child: const Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    SizedBox(
-                                      width: 36,
-                                      height: 36,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 3,
-                                        color: Colors.white,
-                                      ),
+                                  setState(() {
+                                    _selectedTextOverlayId = id;
+                                    _textController.text = o?.text ?? '';
+                                    _tool = null;
+                                    _musicToolsOpen = false;
+                                    _effectsToolsOpen = false;
+                                    _photoTool = null;
+                                    _textToolsOpen = true;
+                                  });
+                                  project.clearTimelinePhotoSelection();
+                                  project.stopPreviewPlayback();
+                                },
+                                editing: _textToolsOpen,
+                              ),
+                              // Loading while transition preview frames are prepared.
+                              if (project.isPreparingPreview)
+                                const PreparingPreviewOverlay(),
+                              // Export-only progress.
+                              if (project.isProcessing)
+                                Container(
+                                  color: Colors.black54,
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        CircularProgressIndicator(
+                                          color: AppColors.primary,
+                                          value: project.processProgress > 0
+                                              ? project.processProgress
+                                              : null,
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          'Exporting ${(project.processProgress * 100).toInt()}%',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    SizedBox(height: 12),
-                                    Text(
-                                      'Preparing preview…',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                          // Export-only progress.
-                        if (project.isProcessing)
-                          Container(
-                            color: Colors.black54,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  CircularProgressIndicator(
-                                      color: AppColors.primary,
-                                    value: project.processProgress > 0
-                                        ? project.processProgress
-                                        : null,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                      'Exporting ${(project.processProgress * 100).toInt()}%',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                      ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                            ],
                           ),
-                      ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-          ),
 
-          // Text sheet overlays — keep idle chrome underneath so preview size/position stays fixed.
-          if (_textToolsOpen) ...[
-            _idleToolPanel(project),
-            _editorToolbar(),
-          ] else if (photoToolReplacesTimeline) ...[
-            _idleToolPanel(
-              project,
-              height:
-                  _timelineHeaderHeight +
-                  inlineSheetHeight +
-                  replacedSheetExtra,
-              timelineHeaderHeight: _timelineHeaderHeight,
-              timelineContent: _photoEditSheet(
-                project,
-                heightOverride: inlineSheetHeight + replacedSheetExtra,
-                compactContent: true,
-              ),
-            ),
-          ] else if (_tool == EditorTool.ratio || _tool == EditorTool.bg) ...[
-            _idleToolPanel(
-              project,
-              height:
-                  _timelineHeaderHeight +
-                  inlineSheetHeight +
-                  _photoToolbarHeight,
-              timelineHeaderHeight: _timelineHeaderHeight,
-              timelineContent: _editorCanvasSheet(
-                project,
-                height: inlineSheetHeight + _photoToolbarHeight,
-              ),
-            ),
-          ] else if (_tool == EditorTool.music) ...[
-            // Fixed height = idle panel + toolbar slot (no extra music bump).
-            Container(
-              height: _sheetHeight + _photoToolbarHeight,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: AppColors.border)),
-              ),
-              child: Column(
-                children: [
-                  SizedBox(
-                    height: _timelineHeaderHeight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 14, right: 6),
-                      child: _idlePreviewRow(project),
-                    ),
+              // Text sheet overlays — keep idle chrome underneath so preview size/position stays fixed.
+              if (_textToolsOpen) ...[
+                _idleToolPanel(project),
+                _editorToolbar(),
+              ] else if (photoToolReplacesTimeline) ...[
+                _idleToolPanel(
+                  project,
+                  height:
+                      _timelineHeaderHeight +
+                      inlineSheetHeight +
+                      replacedSheetExtra,
+                  timelineHeaderHeight: _timelineHeaderHeight,
+                  timelineContent: _photoEditSheet(
+                    project,
+                    heightOverride: inlineSheetHeight + replacedSheetExtra,
+                    compactContent: true,
                   ),
-                  Expanded(
-                    child: _MusicPickerSheet(
-                      project: project,
-                      onClose: _finishMusicPicker,
-                      onConfirm: _finishMusicPicker,
-                      onOpenLibrary: () => context.push('/music'),
-                      onPickLocal: _pickLocalMusic,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ] else if (_tool == EditorTool.effects) ...[
-            Container(
-              height: _sheetHeight + _photoToolbarHeight,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: AppColors.border)),
-              ),
-              child: Column(
-                children: [
-                  SizedBox(
-                    height: _timelineHeaderHeight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 14, right: 6),
-                      child: _idlePreviewRow(project),
-                    ),
-                  ),
-                  Expanded(
-                    child: _EffectsPickerSheet(
-                      project: project,
-                      onClose: _finishEffectsPicker,
-                      onConfirm: _finishEffectsPicker,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ] else if (_musicToolsOpen && _musicEditOpen) ...[
-            // Timeline strip hidden; same body height as idle (_sheetHeight).
-            Container(
-              height: _sheetHeight,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: AppColors.border)),
-              ),
-              child: Column(
-                children: [
-                  SizedBox(
-                    height: _timelineHeaderHeight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 14, right: 6),
-                      child: _idlePreviewRow(project),
-                    ),
-                  ),
-                  Expanded(
-                    child: _MusicEditSheet(
-                      project: project,
-                      onClose: () => setState(() => _musicEditOpen = false),
-                      onConfirm: () => setState(() => _musicEditOpen = false),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _musicEditorToolbar(project),
-          ] else ...[
-            // One shared idle strip for normal editing + photo selection so the
-            // ScrollController is not remounted onto a second ListView.
-            if (_tool == null)
-              _idleToolPanel(project)
-            else
-              SectionSheet(
-                title: _toolLabel(_tool!),
-                height: _sheetHeight,
-                headerRow: SizedBox(
-                  height: _timelineHeaderHeight,
-                  child: _idlePreviewRow(project),
                 ),
-                onClose: _dismissTool,
-                onConfirm: _dismissTool,
-                child: _buildPanel(project),
-              ),
+              ] else if (_tool == EditorTool.ratio ||
+                  _tool == EditorTool.bg) ...[
+                _idleToolPanel(
+                  project,
+                  height:
+                      _timelineHeaderHeight +
+                      inlineSheetHeight +
+                      _photoToolbarHeight,
+                  timelineHeaderHeight: _timelineHeaderHeight,
+                  timelineContent: _editorCanvasSheet(
+                    project,
+                    height: inlineSheetHeight + _photoToolbarHeight,
+                  ),
+                ),
+              ] else if (_tool == EditorTool.music) ...[
+                // Fixed height = idle panel + toolbar slot (no extra music bump).
+                Container(
+                  height: _sheetHeight + _photoToolbarHeight,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    border: Border(top: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        height: _timelineHeaderHeight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 14, right: 6),
+                          child: _idlePreviewRow(project),
+                        ),
+                      ),
+                      Expanded(
+                        child: _MusicPickerSheet(
+                          project: project,
+                          onClose: _finishMusicPicker,
+                          onConfirm: _finishMusicPicker,
+                          onOpenLibrary: () => context.push('/music'),
+                          onPickLocal: _pickLocalMusic,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else if (_tool == EditorTool.effects) ...[
+                Container(
+                  height: _sheetHeight + _photoToolbarHeight,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    border: Border(top: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        height: _timelineHeaderHeight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 14, right: 6),
+                          child: _idlePreviewRow(project),
+                        ),
+                      ),
+                      Expanded(
+                        child: _EffectsPickerSheet(
+                          project: project,
+                          onClose: _finishEffectsPicker,
+                          onConfirm: _finishEffectsPicker,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else if (_musicToolsOpen && _musicEditOpen) ...[
+                // Timeline strip hidden; same body height as idle (_sheetHeight).
+                Container(
+                  height: _sheetHeight,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    border: Border(top: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        height: _timelineHeaderHeight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 14, right: 6),
+                          child: _idlePreviewRow(project),
+                        ),
+                      ),
+                      Expanded(
+                        child: _MusicEditSheet(
+                          project: project,
+                          onClose: () => setState(() => _musicEditOpen = false),
+                          onConfirm: () =>
+                              setState(() => _musicEditOpen = false),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _musicEditorToolbar(project),
+              ] else ...[
+                // One shared idle strip for normal editing + photo selection so the
+                // ScrollController is not remounted onto a second ListView.
+                if (_tool == null)
+                  _idleToolPanel(project)
+                else
+                  SectionSheet(
+                    title: _toolLabel(_tool!),
+                    height: _sheetHeight,
+                    headerRow: SizedBox(
+                      height: _timelineHeaderHeight,
+                      child: _idlePreviewRow(project),
+                    ),
+                    onClose: _dismissTool,
+                    onConfirm: _dismissTool,
+                    child: _buildPanel(project),
+                  ),
 
-            if (project.selectedPhotoIndex != null) ...[
-              if (_photoTool == null)
-                _photoEditorToolbar(project)
-              else
-                _photoEditSheet(project),
-            ] else if (_musicToolsOpen)
-              _musicVolumeOpen
-                  ? _musicVolumeSheet(project)
-                  : _musicEditorToolbar(project)
-            else if (_effectsToolsOpen)
-              _effectsEditorToolbar(project)
-            else
-              _editorToolbar(),
-          ],
-          SizedBox(height: MediaQuery.paddingOf(context).bottom),
+                if (project.selectedPhotoIndex != null) ...[
+                  if (_photoTool == null)
+                    _photoEditorToolbar(project)
+                  else
+                    _photoEditSheet(project),
+                ] else if (_musicToolsOpen)
+                  _musicVolumeOpen
+                      ? _musicVolumeSheet(project)
+                      : _musicEditorToolbar(project)
+                else if (_effectsToolsOpen)
+                  _effectsEditorToolbar(project)
+                else
+                  _editorToolbar(),
+              ],
+              SizedBox(height: MediaQuery.paddingOf(context).bottom),
             ],
           ),
           if (_textToolsOpen)
@@ -3030,8 +3022,7 @@ class _EditorScreenState extends State<EditorScreen>
                 builder: (context, _) {
                   final keyboard = MediaQuery.viewInsetsOf(context).bottom;
                   final safeBottom = MediaQuery.paddingOf(context).bottom;
-                  final keyboardOpen =
-                      keyboard > 0 || _textFocusNode.hasFocus;
+                  final keyboardOpen = keyboard > 0 || _textFocusNode.hasFocus;
                   final hasOverlay = _selectedTextOverlayId != null;
                   // Typing: input bar only (tabs hide under keyboard). Idle + overlay: full panel.
                   final bodyH = (hasOverlay && !keyboardOpen)
@@ -4977,7 +4968,7 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet>
         _previewPath = track.path;
         _previewPlaying = true;
       });
-                            } catch (e) {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Playback failed: $e')));
@@ -5181,7 +5172,7 @@ class _MusicSourceButton extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
+            child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Image.asset(image, color: fg, width: 24),
@@ -5372,8 +5363,8 @@ class _EffectsPickerSheetState extends State<_EffectsPickerSheet> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               itemCount: effects.length,
-      separatorBuilder: (_, _) => const SizedBox(width: 10),
-      itemBuilder: (context, i) {
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (context, i) {
                 final effect = effects[i];
                 final isSel = selected?.id == effect.id;
                 final playing = isSel && _previewId == effect.id;
@@ -5411,7 +5402,7 @@ class _EffectOverlayTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-        return GestureDetector(
+    return GestureDetector(
       onTap: onTap,
       child: SizedBox(
         width: 88,
@@ -5420,12 +5411,12 @@ class _EffectOverlayTile extends StatelessWidget {
             Container(
               width: 88,
               height: 72,
-            decoration: BoxDecoration(
+              decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(2),
-              border: Border.all(
+                border: Border.all(
                   color: selected ? AppColors.primary : AppColors.border,
-                width: selected ? 2 : 1,
-              ),
+                  width: selected ? 2 : 1,
+                ),
                 color: Colors.black,
               ),
               clipBehavior: Clip.antiAlias,
@@ -5436,21 +5427,21 @@ class _EffectOverlayTile extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-                Text(
+            Text(
               effect.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
                 fontSize: 12,
                 color: selected ? AppColors.primaryDark : AppColors.textDark,
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-        );
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -5587,7 +5578,7 @@ class _FramePanel extends StatelessWidget {
         if (i == 0) {
           final selected = project.selectedFrameAsset == null;
           return _frameTile(
-          selected: selected,
+            selected: selected,
             label: 'Default',
             onTap: () {
               project.selectFrame(null);
@@ -5916,7 +5907,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-        return Padding(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -5941,7 +5932,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-          padding: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -6390,9 +6381,9 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
                   );
                 }
                 return ClipRect(
-          child: Stack(
+                  child: Stack(
                     fit: StackFit.expand,
-            children: [
+                    children: [
                       ImageFiltered(
                         imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: _photoImage(),
@@ -6858,7 +6849,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-              Positioned(
+                Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -6918,9 +6909,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                ),
-              ),
-            ],
+                    ),
+                  ),
+              ],
             ),
           ),
         );
