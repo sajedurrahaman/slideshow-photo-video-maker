@@ -191,30 +191,12 @@ Map<String, Object> _renderTransitionBatchInWorker(Map<String, Object> args) {
   final target = decodeWorkerImage(args['toImage'] as Map<String, Object>);
   final type = SlideTransitionType.values[args['type'] as int];
   final frameCount = args['frameCount'] as int;
-
-  // Single from plate (no motion): one size pass + shared pixel buffers.
-  if (sources.length == 1) {
-    return {
-      'frames': TransitionEngine.renderJpegBatch(
-        from: sources.first,
-        to: target,
-        type: type,
-        frameCount: frameCount,
-        gridCols: args['gridCols'] as int,
-        gridRows: args['gridRows'] as int,
-        reverseDiagonal: args['reverseDiagonal'] as bool,
-        topToBottom: args['topToBottom'] as bool,
-        pivotNx: args['pivotNx'] as double,
-        pivotNy: args['pivotNy'] as double,
-        quality: 70,
-      ),
-    };
-  }
-
   final rendered = <Uint8List>[];
+
   for (var frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+    final from = sources.length == 1 ? sources.first : sources[frameIndex];
     final frame = TransitionEngine.apply(
-      from: sources[frameIndex],
+      from: from,
       to: target,
       type: type,
       progress: (frameIndex + 1) / frameCount,
@@ -299,15 +281,21 @@ class SlideshowProject extends ChangeNotifier {
   String? _previewCacheKey;
   String? _previewBaseCacheKey;
   bool _isWarmingPreviewCache = false;
+  Completer<void>? _defaultWarmCompleter;
   int _previewGeneration = 0;
   Timer? _previewTimer;
   Timer? _transitionPreviewDebounce;
+  Timer? _transitionDemoTimer;
+  Timer? _preparingOverlayDelay;
 
-  /// Cached A→B transition JPEG strips (solo frames stay in the base preview).
+  /// A→B TransitionEngine JPEG strips — reused across effect taps.
+  /// After an effect is used, EVERY photo-pair strip for it stays cached.
   final LinkedHashMap<String, List<Uint8List>> _transitionStripCache =
       LinkedHashMap();
-  static const int _transitionStripCacheMax = 12;
-  int _transitionWarmEpoch = 0;
+  /// ~8 effects × ~7 pairs (max photos) without evicting a just-used effect.
+  static const int _transitionStripCacheMax = 64;
+  final LinkedHashSet<String> _cachedEffectIds = LinkedHashSet();
+  static const int _cachedEffectIdsMax = 10;
 
   /// Editor Play button — mixes selected music with the frame preview.
   AudioPlayer? _previewMusic;
@@ -572,14 +560,23 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
-  void clearTimelinePhotoSelection() {
+  void clearTimelinePhotoSelection({bool preservePlayback = false}) {
+    if (selectedPhotoIndex == null && preservePlayback) {
+      notifyListeners();
+      return;
+    }
     selectedPhotoIndex = null;
-    stopPreviewPlayback();
+    // Play path must not bump _previewGeneration — that cancels default warm.
+    if (!preservePlayback) {
+      stopPreviewPlayback();
+    }
     if (_previewMemoryFrames.isNotEmpty) {
-      previewFrameIndex = 0;
-      _setPreviewPosition(0);
-      _setPreviewFrame(_previewMemoryFrames.first);
-    } else if (photos.isNotEmpty) {
+      if (!isPreviewPlaying) {
+        previewFrameIndex = 0;
+        _setPreviewPosition(0);
+        _setPreviewFrame(_previewMemoryFrames.first);
+      }
+    } else if (photos.isNotEmpty && !preservePlayback) {
       unawaited(_refreshPhotoPreview(0));
     }
     notifyListeners();
@@ -902,83 +899,208 @@ class SlideshowProject extends ChangeNotifier {
 
   void selectSlideTransition(SlideTransitionOption option) {
     if (selectedSlideTransition.id == option.id) {
-      // Re-tap same item: ensure preview is prepared.
-      if (!_isWarmingPreviewCache && !isPreviewReady && !isPreparingPreview) {
-        unawaited(preparePreviewFrames());
+      if (isPreviewReady && _previewMemoryFrames.isNotEmpty) {
+        unawaited(_playFirstTransitionDemo());
+        return;
+      }
+      if (!_isWarmingPreviewCache && !isPreparingPreview) {
+        unawaited(_applySlideTransitionFast(option));
       }
       return;
     }
     _recordHistory();
     selectedSlideTransition = option;
-    if (!_isWarmingPreviewCache) stopPreviewPlayback();
-    // A slide effect only changes the transition frames. Keep prepared photos
-    // and the current frame list so only those frames need to be rebuilt.
-    _previewCacheKey = null;
-    isPreviewReady = false;
-    if (!_isWarmingPreviewCache) {
-      final baseReady =
-          _previewBaseCacheKey == _buildPreviewBaseCacheKey() &&
+    // Keep prepared photos + base frames; only swap transition strips.
+    _previewTimer?.cancel();
+    _previewTimer = null;
+    _transitionDemoTimer?.cancel();
+    _transitionDemoTimer = null;
+    _transitionPreviewDebounce?.cancel();
+    _preparingOverlayDelay?.cancel();
+    unawaited(_stopPreviewMusic());
+    isPreviewPlaying = false;
+    isPlaying = false;
+    // Do NOT flash Lottie immediately — strip cache / first-pair rebuild is fast.
+    isPreparingPreview = false;
+    notifyListeners();
+
+    _transitionPreviewDebounce = Timer(const Duration(milliseconds: 40), () {
+      _transitionPreviewDebounce = null;
+      unawaited(_applySlideTransitionFast(option));
+    });
+  }
+
+  /// Fast path: reuse base preview; rebuild/cache only A→B transition JPEGs.
+  Future<void> _applySlideTransitionFast(SlideTransitionOption option) async {
+    if (photos.length < AppConstants.minPhotos || isProcessing) return;
+    // Cancel any in-flight prepare/demo from a previous tile.
+    _previewGeneration++;
+    var generation = _previewGeneration;
+    final baseKey = _buildPreviewBaseCacheKey();
+    final fullKey = _buildPreviewCacheKey(option);
+
+    // Show Lottie only if work is still running after a short grace period.
+    _preparingOverlayDelay?.cancel();
+    _preparingOverlayDelay = Timer(const Duration(milliseconds: 140), () {
+      if (generation != _previewGeneration) return;
+      if (isPreviewReady && _previewCacheKey == fullKey) return;
+      isPreparingPreview = true;
+      notifyListeners();
+    });
+
+    try {
+      final hasBase =
+          _previewBaseCacheKey == baseKey &&
           _previewMemoryFrames.isNotEmpty &&
           _previewSegmentCounts.length == photos.length;
-      final firstStripReady =
-          option.type == SlideTransitionType.none ||
-          _transitionStripCache.containsKey(_transitionStripKey(0, option));
-      // Prefetched / cached first A→B → no Lottie; otherwise short debounce.
-      if (baseReady && firstStripReady) {
-        unawaited(preparePreviewFrames(showLoading: false));
-      } else {
-        isPreparingPreview = true;
-        _transitionPreviewDebounce?.cancel();
-        _transitionPreviewDebounce = Timer(const Duration(milliseconds: 80), () {
-          _transitionPreviewDebounce = null;
-          unawaited(preparePreviewFrames());
-        });
+
+      if (!hasBase) {
+        // Hold-only base (none) — effect strips are spliced after.
+        await preparePreviewFrames(
+          showLoading: false,
+          transitionOption: SlideTransitionOption.all.first,
+        );
+        generation = _previewGeneration;
+        if (_previewMemoryFrames.isEmpty) return;
+      }
+
+      if (option.type == SlideTransitionType.none) {
+        if (_previewMemoryFrames.isNotEmpty) {
+          _previewCacheKey = fullKey;
+          _previewBaseCacheKey = baseKey;
+          isPreviewReady = true;
+          isPreparingPreview = false;
+          previewFrameIndex = 0;
+          _setPreviewPosition(0);
+          _setPreviewFrame(_previewMemoryFrames.first);
+          notifyListeners();
+        }
+        return;
+      }
+
+      // All pairs already cached for this effect → splice full timeline instantly.
+      if (_allStripsCachedForEffect(option)) {
+        _spliceAllCachedStrips(option);
+        _previewCacheKey = fullKey;
+        _previewBaseCacheKey = baseKey;
+        isPreviewReady = true;
+        isPreparingPreview = false;
+        _preparingOverlayDelay?.cancel();
+        _rememberCachedEffect(option.id);
+        notifyListeners();
+        unawaited(_playFirstTransitionDemo());
+        return;
+      }
+
+      // Instant first A→B (warmed or just baked), then cache remaining pairs.
+      final strip = await _ensureTransitionStrip(
+        fromIndex: 0,
+        toIndex: 1,
+        option: option,
+        generation: generation,
+      );
+      if (generation != _previewGeneration || strip == null) return;
+
+      _spliceTransitionStrip(photoIndex: 0, strip: strip);
+      _previewCacheKey = fullKey;
+      _previewBaseCacheKey = baseKey;
+      isPreviewReady = true;
+      isPreparingPreview = false;
+      _preparingOverlayDelay?.cancel();
+      _rememberCachedEffect(option.id);
+      notifyListeners();
+      unawaited(_playFirstTransitionDemo());
+
+      // Cache EVERY remaining strip for this effect (survives switching tiles).
+      unawaited(_cacheAllStripsForEffect(option));
+    } finally {
+      _preparingOverlayDelay?.cancel();
+      _preparingOverlayDelay = null;
+      if (generation == _previewGeneration) {
+        isPreparingPreview = false;
+        notifyListeners();
       }
     }
-    notifyListeners();
   }
 
-  /// Quietly prepare a no-effect preview after the editor opens, so the first
-  /// transition selection only needs to replace its transition frames.
+  /// Editor open: quietly ready **default (None)** slide so Play works with
+  /// no Lottie. Other effects cache all strips only after the user taps them.
   Future<void> warmPreviewCache() async {
     if (_isWarmingPreviewCache ||
-        isPreparingPreview ||
         isProcessing ||
-        photos.length < AppConstants.minPhotos ||
-        photos.any(
-          (photo) =>
-              photo.animationIn != PhotoAnimationType.none ||
-              photo.animationOut != PhotoAnimationType.none ||
-              photo.animationLoop != PhotoAnimationType.none,
-        )) {
-      return;
+        photos.length < AppConstants.minPhotos) {
+      return _defaultWarmCompleter?.future ?? Future<void>.value();
     }
+
     _isWarmingPreviewCache = true;
-    final transitionAtStart = selectedSlideTransition.id;
+    _defaultWarmCompleter = Completer<void>();
     try {
-      if (!isPreviewReady || _previewMemoryFrames.isEmpty) {
-        await preparePreviewFrames(showLoading: false);
+      await _ensureDefaultNonePreviewReady();
+      // If user already picked a non-default effect, finish its strip cache.
+      final def = selectedSlideTransition;
+      if (def.type != SlideTransitionType.none && photos.length >= 2) {
+        await _cacheAllStripsForEffect(def);
       }
-      // Prefetch first-5 A→B strips so picker taps skip the long load.
-      await _warmPriorityTransitionStrips();
     } finally {
       _isWarmingPreviewCache = false;
-      final baseIsCurrent = _previewBaseCacheKey == _buildPreviewBaseCacheKey();
-      final effectIsCurrent =
-          _previewCacheKey == _buildPreviewCacheKey(selectedSlideTransition);
-      if (!baseIsCurrent && transitionAtStart == selectedSlideTransition.id) {
+      final c = _defaultWarmCompleter;
+      _defaultWarmCompleter = null;
+      if (c != null && !c.isCompleted) c.complete();
+      // Sharpen may have changed paths — quiet re-warm only, never show Lottie.
+      if (_previewBaseCacheKey != _buildPreviewBaseCacheKey()) {
         unawaited(warmPreviewCache());
-      } else if (!baseIsCurrent || !effectIsCurrent) {
-        unawaited(preparePreviewFrames());
       }
     }
   }
 
-  static List<SlideTransitionOption> get _prioritySlideOptions =>
-      SlideTransitionOption.all.take(5).toList(growable: false);
+  /// Default red-mark "None" timeline (hold frames for A→B→C→…).
+  Future<void> _ensureDefaultNonePreviewReady() async {
+    final none = SlideTransitionOption.all.first;
+    final baseKey = _buildPreviewBaseCacheKey();
+    final noneKey = _buildPreviewCacheKey(none);
+    if (_previewMemoryFrames.isNotEmpty &&
+        _previewBaseCacheKey == baseKey &&
+        _previewSegmentCounts.length == photos.length) {
+      if (selectedSlideTransition.type == SlideTransitionType.none) {
+        _previewCacheKey = noneKey;
+        isPreviewReady = true;
+        if (previewFrameListenable.value == null) {
+          previewFrameIndex = 0;
+          _setPreviewPosition(0);
+          _setPreviewFrame(_previewMemoryFrames.first);
+        }
+        notifyListeners();
+      }
+      return;
+    }
 
-  String _transitionStripKey(int pairIndex, SlideTransitionOption option) {
-    return '${_buildPreviewBaseCacheKey()}|$pairIndex|${option.id}';
+    await preparePreviewFrames(showLoading: false, transitionOption: none);
+    if (_previewMemoryFrames.isEmpty) return;
+
+    _previewCacheKey = noneKey;
+    _previewBaseCacheKey = baseKey;
+    if (selectedSlideTransition.type == SlideTransitionType.none) {
+      isPreviewReady = true;
+      isPreparingPreview = false;
+      previewFrameIndex = 0;
+      _setPreviewPosition(0);
+      _setPreviewFrame(_previewMemoryFrames.first);
+      notifyListeners();
+    }
+  }
+
+  bool _photoHasMotion(SlideshowPhoto photo) =>
+      photo.animationIn != PhotoAnimationType.none ||
+      photo.animationOut != PhotoAnimationType.none ||
+      photo.animationLoop != PhotoAnimationType.none;
+
+  String _transitionStripKey(
+    int fromIndex,
+    int toIndex,
+    SlideTransitionOption option,
+  ) {
+    return '${_previewPixelKey(photos[fromIndex])}|'
+        '${_previewPixelKey(photos[toIndex])}|${option.id}';
   }
 
   void _storeTransitionStrip(String key, List<Uint8List> frames) {
@@ -989,30 +1111,205 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
-  Future<void> _warmPriorityTransitionStrips() async {
-    if (photos.length < 2 || _previewBaseCacheKey == null) return;
-    final epoch = _transitionWarmEpoch;
-    final (w, h) = previewSize;
-    final fromLayers = await _cachedPreviewLayers(0, w, h);
-    final toLayers = await _cachedPreviewLayers(1, w, h);
-    if (epoch != _transitionWarmEpoch) return;
-
-    for (final opt in _prioritySlideOptions) {
-      if (epoch != _transitionWarmEpoch) return;
-      if (opt.type == SlideTransitionType.none) continue;
-      final key = _transitionStripKey(0, opt);
-      if (_transitionStripCache.containsKey(key)) continue;
-      final n = AppConstants.framesPerTransition;
-      final rendered = await _renderTransitionFramesOffThread(
-        fromFrames: [fromLayers.composed],
-        toImage: toLayers.composed,
-        option: opt,
-        frameCount: n,
-      );
-      if (epoch != _transitionWarmEpoch) return;
-      _storeTransitionStrip(key, rendered);
-      await Future<void>.delayed(const Duration(milliseconds: 24));
+  void _rememberCachedEffect(String effectId) {
+    _cachedEffectIds.remove(effectId);
+    _cachedEffectIds.add(effectId);
+    while (_cachedEffectIds.length > _cachedEffectIdsMax) {
+      _cachedEffectIds.remove(_cachedEffectIds.first);
     }
+  }
+
+  bool _allStripsCachedForEffect(SlideTransitionOption option) {
+    if (option.type == SlideTransitionType.none || photos.length < 2) {
+      return true;
+    }
+    for (var i = 0; i < photos.length - 1; i++) {
+      final key = _transitionStripKey(i, i + 1, option);
+      final hit = _transitionStripCache[key];
+      if (hit == null || hit.isEmpty) return false;
+    }
+    return true;
+  }
+
+  void _spliceAllCachedStrips(SlideTransitionOption option) {
+    for (var i = 0; i < photos.length - 1; i++) {
+      final key = _transitionStripKey(i, i + 1, option);
+      final strip = _transitionStripCache[key];
+      if (strip == null || strip.isEmpty) continue;
+      // LRU touch
+      _transitionStripCache.remove(key);
+      _transitionStripCache[key] = strip;
+      _spliceTransitionStrip(photoIndex: i, strip: strip);
+    }
+  }
+
+  Future<List<Uint8List>?> _ensureTransitionStrip({
+    required int fromIndex,
+    required int toIndex,
+    required SlideTransitionOption option,
+    required int generation,
+    bool ignoreGeneration = false,
+  }) async {
+    if (option.type == SlideTransitionType.none ||
+        fromIndex < 0 ||
+        toIndex <= fromIndex ||
+        toIndex >= photos.length) {
+      return const [];
+    }
+    bool cancelled() => !ignoreGeneration && generation != _previewGeneration;
+
+    final key = _transitionStripKey(fromIndex, toIndex, option);
+    final hit = _transitionStripCache.remove(key);
+    if (hit != null && hit.isNotEmpty) {
+      _transitionStripCache[key] = hit;
+      return hit;
+    }
+
+    final (w, h) = previewSize;
+    final fromLayers = await _cachedPreviewLayers(fromIndex, w, h);
+    final toLayers = await _cachedPreviewLayers(toIndex, w, h);
+    if (cancelled()) return null;
+
+    final photo = photos[fromIndex];
+    final totalFrames = frameCountForDuration(photo.durationSec);
+    final transitionFrames = math.min(
+      AppConstants.framesPerTransition,
+      totalFrames,
+    );
+    final background = photo.backgroundArgb ?? backgroundArgb;
+    final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
+    final soloFrames = totalFrames - transitionFrames;
+
+    // No motion → one shared composed image (worker already supports this).
+    final List<img.Image> fromFrames;
+    if (!_photoHasMotion(photo) || (inFrames == 0 && outFrames == 0)) {
+      fromFrames = <img.Image>[fromLayers.composed];
+    } else {
+      fromFrames = <img.Image>[];
+      for (var t = 0; t < transitionFrames; t++) {
+        if (cancelled()) return null;
+        fromFrames.add(
+          _animatePhotoFrame(
+            source: fromLayers.composed,
+            photo: photo,
+            frameIndex: soloFrames + t,
+            totalFrames: totalFrames,
+            inFrames: inFrames,
+            outFrames: outFrames,
+            background: background,
+            layers: fromLayers,
+          ),
+        );
+      }
+    }
+
+    final rendered = await _renderTransitionFramesOffThread(
+      fromFrames: fromFrames,
+      toImage: toLayers.composed,
+      option: option,
+      frameCount: transitionFrames,
+    );
+    if (cancelled()) return null;
+    _storeTransitionStrip(key, rendered);
+    return rendered;
+  }
+
+  void _spliceTransitionStrip({
+    required int photoIndex,
+    required List<Uint8List> strip,
+  }) {
+    if (_previewSegmentCounts.length != photos.length ||
+        photoIndex >= _previewSegmentCounts.length ||
+        strip.isEmpty) {
+      return;
+    }
+    var segmentStart = startingCard == null
+        ? 0
+        : frameCountForDuration(startingCard!.durationSec).clamp(4, 300).toInt();
+    for (var i = 0; i < photoIndex; i++) {
+      segmentStart += _previewSegmentCounts[i];
+    }
+    final segmentCount = _previewSegmentCounts[photoIndex];
+    final transitionFrames = math.min(strip.length, segmentCount);
+    final tailStart = segmentStart + segmentCount - transitionFrames;
+    if (tailStart < 0 ||
+        tailStart + transitionFrames > _previewMemoryFrames.length) {
+      return;
+    }
+    for (var t = 0; t < transitionFrames; t++) {
+      _previewMemoryFrames[tailStart + t] = strip[t];
+    }
+  }
+
+  /// After an effect is used: bake+keep every photo-pair strip in cache.
+  /// Continues even if the user taps another effect (ignoreGeneration).
+  Future<void> _cacheAllStripsForEffect(SlideTransitionOption option) async {
+    if (option.type == SlideTransitionType.none || photos.length < 2) return;
+    for (var i = 0; i < photos.length - 1; i++) {
+      final strip = await _ensureTransitionStrip(
+        fromIndex: i,
+        toIndex: i + 1,
+        option: option,
+        generation: _previewGeneration,
+        ignoreGeneration: true,
+      );
+      if (strip == null || strip.isEmpty) continue;
+      // Live timeline only if this effect is still selected.
+      if (selectedSlideTransition.id == option.id) {
+        _spliceTransitionStrip(photoIndex: i, strip: strip);
+      }
+      await Future<void>.delayed(Duration.zero);
+    }
+    _rememberCachedEffect(option.id);
+  }
+
+  Future<void> _playFirstTransitionDemo() async {
+    if (_previewMemoryFrames.isEmpty || !isPreviewReady) return;
+    _transitionDemoTimer?.cancel();
+    _previewTimer?.cancel();
+    _previewTimer = null;
+    isPreviewPlaying = false;
+    isPlaying = false;
+
+    final effect = selectedSlideTransition.type;
+    if (effect == SlideTransitionType.none || photos.length < 2) return;
+
+    final total0 = frameCountForDuration(photos[0].durationSec);
+    final trans = math.min(AppConstants.framesPerTransition, total0);
+    final solo = total0 - trans;
+    var intro = 0;
+    if (startingCard != null) {
+      intro = frameCountForDuration(startingCard!.durationSec).clamp(4, 300);
+    }
+    final start = (intro + solo).clamp(0, _previewMemoryFrames.length - 1);
+    final end = (intro + total0).clamp(0, _previewMemoryFrames.length).toInt();
+    if (start >= end - 1) return;
+
+    previewFrameIndex = start;
+    _setPreviewFrame(_previewMemoryFrames[start]);
+    _setPreviewPosition(start / previewFps);
+    notifyListeners();
+
+    final generation = _previewGeneration;
+    final stepMs = (1000 / previewFps).round().clamp(28, 48);
+    var i = start;
+    _transitionDemoTimer = Timer.periodic(Duration(milliseconds: stepMs), (
+      timer,
+    ) {
+      if (generation != _previewGeneration) {
+        timer.cancel();
+        return;
+      }
+      i++;
+      if (i >= end || i >= _previewMemoryFrames.length) {
+        timer.cancel();
+        _transitionDemoTimer = null;
+        return;
+      }
+      previewFrameIndex = i;
+      _setPreviewFrame(_previewMemoryFrames[i]);
+      _setPreviewPosition(i / previewFps);
+    });
   }
 
   void _invalidatePreviewCache() {
@@ -1022,7 +1319,7 @@ class SlideshowProject extends ChangeNotifier {
     _previewBaseCacheKey = null;
     isPreviewReady = false;
     _transitionStripCache.clear();
-    _transitionWarmEpoch++;
+    _cachedEffectIds.clear();
     // Drop decoded layers too — otherwise a blur/BG change can briefly
     // (or fully) replay stale black-letterbox frames while rebake runs.
     _clearDecodedPreview();
@@ -1030,13 +1327,14 @@ class SlideshowProject extends ChangeNotifier {
 
   String _previewPixelKey(SlideshowPhoto photo) {
     final (w, h) = previewSize;
+    // Overlays are live — not part of baked pixel identity.
     return '${photo.path}|${photo.filter.index}|${photo.backgroundArgb}|'
         '${photo.backgroundBlurLevel}|'
         '${photo.cropAspectRatio}|${photo.cropLeft}|${photo.cropTop}|'
         '${photo.cropWidth}|${photo.cropHeight}|${photo.cropDegrees}|'
         '${photo.mirrored}|${photo.flipped}|'
         '${photo.rotationQuarterTurns}|$backgroundArgb|${w}x$h|'
-        '${selectedFrameAsset ?? ''}|${overlays.length}';
+        '${selectedFrameAsset ?? ''}';
   }
 
   bool _samePreviewPixels(SlideshowPhoto a, SlideshowPhoto b) =>
@@ -1071,7 +1369,10 @@ class SlideshowProject extends ChangeNotifier {
   /// Build frames in background after transition select (shows loading UI).
   /// Duration and animation edits pass [showLoading] false so the current
   /// frame stays on screen while only the changed work runs.
-  Future<void> preparePreviewFrames({bool showLoading = true}) async {
+  Future<void> preparePreviewFrames({
+    bool showLoading = true,
+    SlideTransitionOption? transitionOption,
+  }) async {
     _transitionPreviewDebounce?.cancel();
     _transitionPreviewDebounce = null;
     if (photos.length < AppConstants.minPhotos || isProcessing) {
@@ -1082,8 +1383,8 @@ class SlideshowProject extends ChangeNotifier {
     }
 
     final baseKey = _buildPreviewBaseCacheKey();
-    final transitionOption = selectedSlideTransition;
-    final key = _buildPreviewCacheKey(transitionOption);
+    final option = transitionOption ?? selectedSlideTransition;
+    final key = _buildPreviewCacheKey(option);
     if (_previewCacheKey == key && _previewMemoryFrames.isNotEmpty) {
       isPreviewReady = true;
       isPreparingPreview = false;
@@ -1100,44 +1401,19 @@ class SlideshowProject extends ChangeNotifier {
 
     try {
       final canRebuildTransitionsOnly =
+          option.type != SlideTransitionType.none &&
           _previewBaseCacheKey == baseKey &&
           _previewMemoryFrames.isNotEmpty &&
           _previewSegmentCounts.length == photos.length;
       final built = canRebuildTransitionsOnly
           ? await _rebuildTransitionFrames(
               generation: generation,
-              // Drop Lottie as soon as the first A→B strip is spliced.
-              onFirstPairReady: showLoading
-                  ? (frames, counts) {
-                      if (generation != _previewGeneration) return;
-                      _previewMemoryFrames
-                        ..clear()
-                        ..addAll(frames);
-                      _previewSegmentCounts
-                        ..clear()
-                        ..addAll(counts);
-                      _previewCacheKey = key;
-                      _previewBaseCacheKey = baseKey;
-                      isPreviewReady = true;
-                      isPreparingPreview = false;
-                      final selectedStart = selectedPhotoIndex == null
-                          ? 0
-                          : photoFrameStartIndex(selectedPhotoIndex!);
-                      previewFrameIndex = selectedStart
-                          .clamp(0, _previewMemoryFrames.length - 1)
-                          .toInt();
-                      _setPreviewPosition(previewFrameIndex / previewFps);
-                      _setPreviewFrame(
-                        _previewMemoryFrames[previewFrameIndex],
-                      );
-                      notifyListeners();
-                    }
-                  : null,
+              option: option,
             )
           : await _buildPreviewMemoryFrames(
               generation: generation,
               cacheKey: key,
-              transitionOption: transitionOption,
+              transitionOption: option,
             );
       if (generation != _previewGeneration || built == null) return;
       _previewMemoryFrames
@@ -1148,10 +1424,10 @@ class SlideshowProject extends ChangeNotifier {
         ..addAll(built.counts);
       _previewCacheKey = key;
       _previewBaseCacheKey = baseKey;
-      isPreviewReady =
-          _previewMemoryFrames.isNotEmpty &&
+      final forSelected =
           key == _buildPreviewCacheKey(selectedSlideTransition);
-      if (isPreviewReady) {
+      isPreviewReady = _previewMemoryFrames.isNotEmpty && forSelected;
+      if (_previewMemoryFrames.isNotEmpty && forSelected) {
         final selectedStart = selectedPhotoIndex == null
             ? 0
             : photoFrameStartIndex(selectedPhotoIndex!);
@@ -1191,7 +1467,7 @@ class SlideshowProject extends ChangeNotifier {
           )
           .join('|'),
       selectedTheme.id,
-      // Effect overlay is live-composited — not part of baked preview cache.
+      // Text/FX overlays are live-composited — not part of baked preview cache.
       slideDurationSec,
       aspectRatio.name,
       backgroundArgb,
@@ -1199,129 +1475,39 @@ class SlideshowProject extends ChangeNotifier {
       startingCard?.durationSec,
       endingCard?.title,
       endingCard?.durationSec,
-      overlays.length,
     ].join('::');
   }
 
   Future<({List<Uint8List> frames, List<int> counts})?>
   _rebuildTransitionFrames({
     required int generation,
-    void Function(List<Uint8List> frames, List<int> counts)? onFirstPairReady,
+    required SlideTransitionOption option,
   }) async {
-    final (w, h) = previewSize;
-    final layers = <_PreparedPhotoLayers>[];
-    for (var i = 0; i < photos.length; i++) {
-      if (generation != _previewGeneration) return null;
-      layers.add(await _cachedPreviewLayers(i, w, h));
-    }
-    if (layers.length < 2) return null;
-
-    final frames = List<Uint8List>.of(_previewMemoryFrames);
-    final decoded = layers.map((e) => e.composed).toList(growable: false);
-    final option = selectedSlideTransition;
-    final hasMotion = photos.any(
-      (photo) =>
-          photo.animationIn != PhotoAnimationType.none ||
-          photo.animationOut != PhotoAnimationType.none ||
-          photo.animationLoop != PhotoAnimationType.none,
-    );
-    var segmentStart = startingCard == null
-        ? 0
-        : frameCountForDuration(startingCard!.durationSec)
-              .clamp(4, 300)
-              .toInt();
-
     for (var i = 0; i < photos.length - 1; i++) {
       if (generation != _previewGeneration) return null;
-      final photo = photos[i];
-      final totalFrames = frameCountForDuration(photo.durationSec);
-      final segmentCount = _previewSegmentCounts[i];
-      final transitionFrames = math.min(
-        math.min(AppConstants.framesPerTransition, totalFrames),
-        segmentCount,
+      final strip = await _ensureTransitionStrip(
+        fromIndex: i,
+        toIndex: i + 1,
+        option: option,
+        generation: generation,
       );
-      if (transitionFrames <= 0) {
-        segmentStart += segmentCount;
-        continue;
-      }
-      final tailStart = segmentStart + segmentCount - transitionFrames;
-
-      // Restore hold frames when switching back to None (tail was blended).
-      if (option.type == SlideTransitionType.none) {
-        final solo = frames[segmentStart];
-        for (var t = 0; t < transitionFrames; t++) {
-          frames[tailStart + t] = solo;
-        }
-        segmentStart += segmentCount;
-        if (i == 0 && onFirstPairReady != null) {
-          onFirstPairReady(
-            List<Uint8List>.of(frames),
-            List<int>.of(_previewSegmentCounts),
-          );
-        }
-        continue;
-      }
-
-      final stripKey = _transitionStripKey(i, option);
-      var rendered = _transitionStripCache[stripKey];
-
-      if (rendered == null || rendered.length != transitionFrames) {
-        final background = photo.backgroundArgb ?? backgroundArgb;
-        final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
-        final List<img.Image> fromFrames;
-        if (!hasMotion) {
-          // Hold plate is static — one source image for the whole strip.
-          fromFrames = [decoded[i]];
-        } else {
-          fromFrames = <img.Image>[];
-          for (var t = 0; t < transitionFrames; t++) {
-            if (generation != _previewGeneration) return null;
-            fromFrames.add(
-              _animatePhotoFrame(
-                source: decoded[i],
-                photo: photo,
-                frameIndex: totalFrames - transitionFrames + t,
-                totalFrames: totalFrames,
-                inFrames: inFrames,
-                outFrames: outFrames,
-                background: background,
-                layers: layers[i],
-              ),
-            );
-            await Future<void>.delayed(Duration.zero);
-          }
-        }
-        rendered = await _renderTransitionFramesOffThread(
-          fromFrames: fromFrames,
-          toImage: decoded[i + 1],
-          option: option,
-          frameCount: transitionFrames,
-        );
-        if (generation != _previewGeneration) return null;
-        _storeTransitionStrip(stripKey, rendered);
-      }
-
-      for (var t = 0; t < rendered.length && t < transitionFrames; t++) {
-        frames[tailStart + t] = rendered[t];
-      }
-      segmentStart += segmentCount;
-
-      // Unlock UI after first pair — remaining pairs continue quietly.
-      if (i == 0 && onFirstPairReady != null) {
-        onFirstPairReady(
-          List<Uint8List>.of(frames),
-          List<int>.of(_previewSegmentCounts),
-        );
-      }
+      if (generation != _previewGeneration || strip == null) return null;
+      _spliceTransitionStrip(photoIndex: i, strip: strip);
     }
-
     if (generation != _previewGeneration) return null;
-    return (frames: frames, counts: List<int>.of(_previewSegmentCounts));
+    return (
+      frames: List<Uint8List>.of(_previewMemoryFrames),
+      counts: List<int>.of(_previewSegmentCounts),
+    );
   }
 
   void stopPreviewPlayback() {
     _transitionPreviewDebounce?.cancel();
     _transitionPreviewDebounce = null;
+    _preparingOverlayDelay?.cancel();
+    _preparingOverlayDelay = null;
+    _transitionDemoTimer?.cancel();
+    _transitionDemoTimer = null;
     _previewGeneration++;
     _previewTimer?.cancel();
     _previewTimer = null;
@@ -1482,29 +1668,57 @@ class SlideshowProject extends ChangeNotifier {
     _setPreviewPosition(frame / previewFps);
   }
 
-  /// Play only when frames are ready — otherwise wait for prepare.
+  /// Play: default None → direct (warmed cache, no Lottie). Other effects use
+  /// their strip cache after selection.
   Future<void> togglePreviewPlayback() async {
     if (isPreviewPlaying) {
       stopPreviewPlayback();
       return;
     }
-    if (isPreparingPreview) return;
-    // Effect is live-composited; only ensure base frames exist.
     if (selectedOverlayEffect != null) {
       await ensureOverlayReadyForPreview();
     }
-    if (!isPreviewReady || _previewMemoryFrames.isEmpty) {
-      await preparePreviewFrames();
-      if (!isPreviewReady) return;
+
+    final isDefaultNone =
+        selectedSlideTransition.type == SlideTransitionType.none;
+
+    if (isDefaultNone) {
+      // Prefer existing frames even if isPreviewReady was cleared by a race.
+      if (_previewMemoryFrames.isEmpty) {
+        final pendingWarm = _defaultWarmCompleter;
+        if (_isWarmingPreviewCache && pendingWarm != null) {
+          await pendingWarm.future;
+        }
+        if (_previewMemoryFrames.isEmpty) {
+          await _ensureDefaultNonePreviewReady();
+        }
+      }
+      if (_previewMemoryFrames.isEmpty) return;
+      selectedPhotoIndex = null;
+      isPreviewReady = true;
+      isPreparingPreview = false;
+      playSmoothPreview();
+      return;
     }
+
+    if (isPreparingPreview) return;
+    if (_previewMemoryFrames.isEmpty) {
+      await _applySlideTransitionFast(selectedSlideTransition);
+      if (_previewMemoryFrames.isEmpty) return;
+    }
+    selectedPhotoIndex = null;
+    isPreviewReady = true;
     playSmoothPreview();
   }
 
   void playSmoothPreview() {
     if (photos.length < AppConstants.minPhotos || isProcessing) return;
-    if (_previewMemoryFrames.isEmpty || !isPreviewReady) return;
+    if (_previewMemoryFrames.isEmpty) return;
+    isPreviewReady = true;
 
     _previewTimer?.cancel();
+    _transitionDemoTimer?.cancel();
+    _transitionDemoTimer = null;
     final generation = _previewGeneration;
 
     isPreviewPlaying = true;
@@ -1668,12 +1882,11 @@ class SlideshowProject extends ChangeNotifier {
     int? frameCount,
   }) async {
     if (fromFrames.isEmpty) return const [];
-    final count = frameCount ?? fromFrames.length;
-    if (count <= 0) return const [];
     final first = fromFrames.first;
     final sources = fromFrames.every((frame) => identical(frame, first))
         ? <img.Image>[first]
         : fromFrames;
+    final count = frameCount ?? fromFrames.length;
     final result = await compute(_renderTransitionBatchInWorker, {
       'fromFrames': sources
           .map(_transitionImageWorkerData)
@@ -1777,41 +1990,38 @@ class SlideshowProject extends ChangeNotifier {
     }
 
     if (transitionFrames > 0) {
-      final option = transitionOption;
-      final fromFrames = <img.Image>[];
-      for (var t = 0; t < transitionFrames; t++) {
-        if (generation != _previewGeneration) return null;
-        fromFrames.add(
-          _animatePhotoFrame(
-            source: decoded[index],
-            photo: photo,
-            frameIndex: soloFrames + t,
-            totalFrames: totalFrames,
-            inFrames: inFrames,
-            outFrames: outFrames,
-            background: background,
-            layers: photoLayers,
-          ),
-        );
-        await Future<void>.delayed(Duration.zero);
-      }
-
       if (overlays.isEmpty) {
-        final rendered = await _renderTransitionFramesOffThread(
-          fromFrames: fromFrames,
-          toImage: decoded[index + 1],
-          option: option,
+        final rendered = await _ensureTransitionStrip(
+          fromIndex: index,
+          toIndex: index + 1,
+          option: transitionOption,
+          generation: generation,
         );
-        if (generation != _previewGeneration) return null;
+        if (generation != _previewGeneration || rendered == null) return null;
         frames.addAll(rendered);
         cursor[0] = cursor[0] + rendered.length;
         lastSource = null;
         lastBytes = null;
       } else {
-        for (var t = 0; t < fromFrames.length; t++) {
+        final option = transitionOption;
+        final staticFrom =
+            !_photoHasMotion(photo) || (inFrames == 0 && outFrames == 0);
+        for (var t = 0; t < transitionFrames; t++) {
           if (generation != _previewGeneration) return null;
+          final fromFrame = staticFrom
+              ? decoded[index]
+              : _animatePhotoFrame(
+                  source: decoded[index],
+                  photo: photo,
+                  frameIndex: soloFrames + t,
+                  totalFrames: totalFrames,
+                  inFrames: inFrames,
+                  outFrames: outFrames,
+                  background: background,
+                  layers: photoLayers,
+                );
           final blended = TransitionEngine.apply(
-            from: fromFrames[t],
+            from: fromFrame,
             to: decoded[index + 1],
             type: effect,
             progress: (t + 1) / transitionFrames,
@@ -2037,10 +2247,9 @@ class SlideshowProject extends ChangeNotifier {
 
   void addOverlay(SlideOverlay overlay) {
     overlays.add(overlay);
-    // Drop any frames that may have baked text; live layer owns text now.
-    _invalidatePreviewCache();
+    // Text/FX overlays are live-composited — never wipe JPEG/strip caches
+    // (doing so + Slide tap rebake was OOM / Lost connection to device).
     notifyListeners();
-    unawaited(refreshLivePreview());
   }
 
   void updateOverlay(SlideOverlay overlay) {
@@ -2052,16 +2261,12 @@ class SlideshowProject extends ChangeNotifier {
 
   void removeOverlay(String id) {
     overlays.removeWhere((e) => e.id == id);
-    _invalidatePreviewCache();
     notifyListeners();
-    unawaited(refreshLivePreview());
   }
 
   void clearOverlays() {
     overlays.clear();
-    _invalidatePreviewCache();
     notifyListeners();
-    unawaited(refreshLivePreview());
   }
 
   Future<img.Image> _preparePhoto(SlideshowPhoto photo, int w, int h) async {
@@ -2371,8 +2576,16 @@ class SlideshowProject extends ChangeNotifier {
         await dest.writeAsBytes(bytes, flush: true);
         photos[i] = photos[i].copyWith(path: dest.path);
         await FileImage(file).evict();
+        // Path change invalidates pixel keys — refresh quietly (no Lottie).
+        while (_decodedPreviewKeys.length <= i) {
+          _decodedPreviewKeys.add('');
+        }
+        if (i < _decodedPreviewKeys.length) _decodedPreviewKeys[i] = '';
         notifyListeners();
       } catch (_) {}
+    }
+    if (token == _sharpenToken && photos.length >= AppConstants.minPhotos) {
+      unawaited(warmPreviewCache());
     }
   }
 

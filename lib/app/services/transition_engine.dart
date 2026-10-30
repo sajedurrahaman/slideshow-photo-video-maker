@@ -8,29 +8,20 @@ import '../models/models.dart';
 /// Read-only RGB view over an image's backing bytes. Transition renderers use
 /// this instead of allocating a Pixel object for every source pixel.
 class _PixelBuffer {
-  static final Expando<_PixelBuffer> _cache = Expando<_PixelBuffer>();
-
   factory _PixelBuffer(img.Image source) {
-    final cached = _cache[source];
-    if (cached != null) return cached;
     var image = source;
     if (image.hasPalette ||
         image.format != img.Format.uint8 ||
         image.numChannels < 3) {
       image = image.convert(format: img.Format.uint8, numChannels: 4);
-      final convertedHit = _cache[image];
-      if (convertedHit != null) return convertedHit;
     }
-    final buffer = _PixelBuffer._(
+    return _PixelBuffer._(
       image.toUint8List(),
       image.width,
       image.height,
       image.numChannels,
       image.rowStride,
     );
-    _cache[source] = buffer;
-    if (!identical(image, source)) _cache[image] = buffer;
-    return buffer;
   }
 
   const _PixelBuffer._(
@@ -1242,8 +1233,8 @@ class TransitionEngine {
         shade: 0.62 + 0.38 * sinA,
         taperTop: true,
         edgeOn: math.cos(angle),
-          );
-        } else {
+      );
+    } else {
       // BT (blue): exact opposite — old top-aligned; new from bottom.
       blitFace(
         src: oldPixels,
@@ -1322,75 +1313,6 @@ class TransitionEngine {
 
   static int _lerp(int a, int b, double t) =>
       (a + (b - a) * t).round().clamp(0, 255);
-
-  /// Editor preview batch: size plates once, render all progress steps, JPEG out.
-  /// Shared [_PixelBuffer]s so we do not rebuild per-pixel wrappers every frame.
-  static List<Uint8List> renderJpegBatch({
-    required img.Image from,
-    required img.Image to,
-    required SlideTransitionType type,
-    required int frameCount,
-    int gridCols = 12,
-    int gridRows = 20,
-    bool reverseDiagonal = false,
-    bool topToBottom = false,
-    double pivotNx = 0.5,
-    double pivotNy = 0.5,
-    int quality = 70,
-  }) {
-    if (frameCount <= 0) return const [];
-    final a = _ensureSameSize(from, to.width, to.height);
-    final b = _ensureSameSize(to, to.width, to.height);
-    final out = <Uint8List>[];
-    for (var i = 0; i < frameCount; i++) {
-      final frame = apply(
-        from: a,
-        to: b,
-        type: type,
-        progress: (i + 1) / frameCount,
-        gridCols: gridCols,
-        gridRows: gridRows,
-        reverseDiagonal: reverseDiagonal,
-        topToBottom: topToBottom,
-        pivotNx: pivotNx,
-        pivotNy: pivotNy,
-      );
-      out.add(encodeJpeg(frame, quality: quality));
-    }
-    return out;
-  }
-
-  /// Same as [apply] but keeps source buffers alive across a progress sweep.
-  static List<img.Image> applyProgressSweep({
-    required img.Image from,
-    required img.Image to,
-    required SlideTransitionType type,
-    required int frameCount,
-    int gridCols = 12,
-    int gridRows = 20,
-    bool reverseDiagonal = false,
-    bool topToBottom = false,
-    double pivotNx = 0.5,
-    double pivotNy = 0.5,
-  }) {
-    if (frameCount <= 0) return const [];
-    final a = _ensureSameSize(from, to.width, to.height);
-    final b = _ensureSameSize(to, to.width, to.height);
-    return List<img.Image>.generate(frameCount, (i) {
-      return apply(
-        from: a,
-        to: b,
-        type: type,
-        progress: (i + 1) / frameCount,
-        gridCols: gridCols,
-        gridRows: gridRows,
-        reverseDiagonal: reverseDiagonal,
-        topToBottom: topToBottom,
-        pivotNx: pivotNx,
-        pivotNy: pivotNy,
-      );
-    }, growable: false);
-  }
 
   static Uint8List encodeJpeg(img.Image image, {int quality = 85}) {
     return Uint8List.fromList(img.encodeJpg(image, quality: quality));

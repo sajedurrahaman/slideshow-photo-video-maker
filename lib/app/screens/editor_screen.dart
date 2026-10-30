@@ -149,7 +149,9 @@ class _EditorScreenState extends State<EditorScreen>
       final project = context.read<SlideshowProject>();
       await project.refreshLivePreview();
       if (!mounted) return;
-      unawaited(project.warmPreviewCache());
+      // Default None timeline must be ready before sharpen races the cache.
+      await project.warmPreviewCache();
+      if (!mounted) return;
       unawaited(project.sharpenPhotoSources());
     });
   }
@@ -309,7 +311,13 @@ class _EditorScreenState extends State<EditorScreen>
 
   Future<void> _preview() async {
     final project = context.read<SlideshowProject>();
-    if (project.selectedPhotoIndex != null) {
+    // Single-photo live preview only while editing that photo's animation.
+    // Slide tool / default None must always play the full slideshow timeline.
+    final animationLive =
+        project.selectedPhotoIndex != null &&
+        _photoTool == _PhotoTool.animation &&
+        _tool != EditorTool.slide;
+    if (animationLive) {
       if (project.isPreviewPlaying) {
         project.stopPreviewPlayback();
         setState(() => _liveMode = _LiveMode.idle);
@@ -321,6 +329,13 @@ class _EditorScreenState extends State<EditorScreen>
         _liveMode = _LiveMode.full;
       });
       return;
+    }
+    if (project.selectedPhotoIndex != null) {
+      // Keep warmed default frames — do not cancel in-flight bake.
+      project.clearTimelinePhotoSelection(preservePlayback: true);
+    }
+    if (_liveMode != _LiveMode.idle) {
+      setState(() => _liveMode = _LiveMode.idle);
     }
     try {
       await project.togglePreviewPlayback();
@@ -474,7 +489,11 @@ class _EditorScreenState extends State<EditorScreen>
 
   /// Preview row shown inside SectionSheet for every tool.
   Widget _previewRow(SlideshowProject project) {
-    final disabled = project.isProcessing || project.isPreparingPreview;
+    // Default None play stays enabled even while another effect is baking.
+    final disabled =
+        project.isProcessing ||
+        (project.isPreparingPreview &&
+            project.selectedSlideTransition.type != SlideTransitionType.none);
     return Row(
       children: [
         SizedBox(
@@ -506,7 +525,10 @@ class _EditorScreenState extends State<EditorScreen>
 
   /// Idle editor chrome: time + play + undo/redo (same slot as slide headerRow).
   Widget _idlePreviewRow(SlideshowProject project) {
-    final disabled = project.isProcessing || project.isPreparingPreview;
+    final disabled =
+        project.isProcessing ||
+        (project.isPreparingPreview &&
+            project.selectedSlideTransition.type != SlideTransitionType.none);
     return Row(
       children: [
         SizedBox(
@@ -793,7 +815,7 @@ class _EditorScreenState extends State<EditorScreen>
                                         });
                                         if (!project.isPreviewReady &&
                                             !project.isPreparingPreview) {
-                                          project.preparePreviewFrames();
+                                          unawaited(project.warmPreviewCache());
                                         }
                                       },
                                       child: Container(
@@ -1172,8 +1194,10 @@ class _EditorScreenState extends State<EditorScreen>
                   });
                   if (t == EditorTool.slide) {
                     final p = context.read<SlideshowProject>();
+                    p.clearTimelinePhotoSelection();
+                    // Quiet warm only — never full rebake (OOM after text add).
                     if (!p.isPreviewReady && !p.isPreparingPreview) {
-                      p.preparePreviewFrames();
+                      unawaited(p.warmPreviewCache());
                     }
                   }
                 },
