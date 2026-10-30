@@ -5,6 +5,77 @@ import 'package:image/image.dart' as img;
 
 import '../models/models.dart';
 
+/// Read-only RGB view over an image's backing bytes. Transition renderers use
+/// this instead of allocating a Pixel object for every source pixel.
+class _PixelBuffer {
+  static final Expando<_PixelBuffer> _cache = Expando<_PixelBuffer>();
+
+  factory _PixelBuffer(img.Image source) {
+    final cached = _cache[source];
+    if (cached != null) return cached;
+    var image = source;
+    if (image.hasPalette ||
+        image.format != img.Format.uint8 ||
+        image.numChannels < 3) {
+      image = image.convert(format: img.Format.uint8, numChannels: 4);
+      final convertedHit = _cache[image];
+      if (convertedHit != null) return convertedHit;
+    }
+    final buffer = _PixelBuffer._(
+      image.toUint8List(),
+      image.width,
+      image.height,
+      image.numChannels,
+      image.rowStride,
+    );
+    _cache[source] = buffer;
+    if (!identical(image, source)) _cache[image] = buffer;
+    return buffer;
+  }
+
+  const _PixelBuffer._(
+    this.bytes,
+    this.width,
+    this.height,
+    this.channels,
+    this.rowStride,
+  );
+
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final int channels;
+  final int rowStride;
+
+  void copyTo(Uint8List destination, int destinationOffset, int sourceOffset) {
+    destination[destinationOffset] = bytes[sourceOffset];
+    destination[destinationOffset + 1] = bytes[sourceOffset + 1];
+    destination[destinationOffset + 2] = bytes[sourceOffset + 2];
+    destination[destinationOffset + 3] = 255;
+  }
+
+  void shadeTo(
+    Uint8List destination,
+    int destinationOffset,
+    int sourceOffset,
+    double shade,
+  ) {
+    destination[destinationOffset] = (bytes[sourceOffset] * shade)
+        .round()
+        .clamp(0, 255)
+        .toInt();
+    destination[destinationOffset + 1] = (bytes[sourceOffset + 1] * shade)
+        .round()
+        .clamp(0, 255)
+        .toInt();
+    destination[destinationOffset + 2] = (bytes[sourceOffset + 2] * shade)
+        .round()
+        .clamp(0, 255)
+        .toInt();
+    destination[destinationOffset + 3] = 255;
+  }
+}
+
 /// Custom slide transition engine (Flutter port of MaskBitmap3D-style effects).
 /// Generates blended frames between two images for preview/export.
 class TransitionEngine {
@@ -124,23 +195,77 @@ class TransitionEngine {
     );
   }
 
+  static Uint8List _rgbaBytes(int width, int height) =>
+      Uint8List(width * height * 4);
+
+  static img.Image _imageFromRgba(Uint8List bytes, int width, int height) =>
+      img.Image.fromBytes(
+        width: width,
+        height: height,
+        bytes: bytes.buffer,
+        numChannels: 4,
+      );
+
+  static void _blendPixel(
+    Uint8List destination,
+    int destinationOffset,
+    _PixelBuffer a,
+    int aOffset,
+    _PixelBuffer b,
+    int bOffset,
+    double progress,
+  ) {
+    destination[destinationOffset] = _lerp(
+      a.bytes[aOffset],
+      b.bytes[bOffset],
+      progress,
+    );
+    destination[destinationOffset + 1] = _lerp(
+      a.bytes[aOffset + 1],
+      b.bytes[bOffset + 1],
+      progress,
+    );
+    destination[destinationOffset + 2] = _lerp(
+      a.bytes[aOffset + 2],
+      b.bytes[bOffset + 2],
+      progress,
+    );
+    destination[destinationOffset + 3] = 255;
+  }
+
+  static Uint8List _copyToRgba(_PixelBuffer source) {
+    final result = _rgbaBytes(source.width, source.height);
+    for (var y = 0; y < source.height; y++) {
+      final srcRow = y * source.rowStride;
+      final dstRow = y * source.width * 4;
+      for (var x = 0; x < source.width; x++) {
+        source.copyTo(result, dstRow + x * 4, srcRow + x * source.channels);
+      }
+    }
+    return result;
+  }
+
   static img.Image _crossfade(img.Image a, img.Image b, double p) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
-        final ca = a.getPixel(x, y);
-        final cb = b.getPixel(x, y);
-        out.setPixelRgba(
-          x,
-          y,
-          _lerp(ca.r.toInt(), cb.r.toInt(), p),
-          _lerp(ca.g.toInt(), cb.g.toInt(), p),
-          _lerp(ca.b.toInt(), cb.b.toInt(), p),
-          255,
+        _blendPixel(
+          bytes,
+          outRow + x * 4,
+          aPixels,
+          aRow + x * aPixels.channels,
+          bPixels,
+          bRow + x * bPixels.channels,
+          p,
         );
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   static img.Image _wipe(
@@ -150,8 +275,13 @@ class TransitionEngine {
     required bool horizontal,
     bool curved = false,
   }) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         double threshold;
         if (horizontal) {
@@ -163,11 +293,12 @@ class TransitionEngine {
           threshold = y / a.height;
         }
         final useB = threshold < p;
-        final c = useB ? b.getPixel(x, y) : a.getPixel(x, y);
-        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        final source = useB ? bPixels : aPixels;
+        final sourceRow = useB ? bRow : aRow;
+        source.copyTo(bytes, outRow + x * 4, sourceRow + x * source.channels);
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   /// Native Erase: full new image, keep old from wipeX→right, soft feather band
@@ -179,33 +310,40 @@ class TransitionEngine {
   ) {
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image.from(newImg);
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _copyToRgba(newPixels);
     final wipeX = (w * progress).round().clamp(0, w);
     final feather = math.max(1, w ~/ 8);
 
     for (var y = 0; y < h; y++) {
+      final oldRow = y * oldPixels.rowStride;
+      final newRow = y * newPixels.rowStride;
+      final outRow = y * w * 4;
       for (var x = 0; x < w; x++) {
         if (x >= wipeX) {
-          final c = oldImg.getPixel(x, y);
-          out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          oldPixels.copyTo(
+            bytes,
+            outRow + x * 4,
+            oldRow + x * oldPixels.channels,
+          );
         } else if (wipeX > 0 && x >= wipeX - feather) {
           // Soft edge: old fades out toward wipe line (transparent→opaque on old).
           final t = ((wipeX - x) / feather).clamp(0.0, 1.0);
-          final oc = oldImg.getPixel(x, y);
-          final nc = newImg.getPixel(x, y);
-          out.setPixelRgba(
-            x,
-            y,
-            (oc.r * t + nc.r * (1 - t)).round(),
-            (oc.g * t + nc.g * (1 - t)).round(),
-            (oc.b * t + nc.b * (1 - t)).round(),
-            255,
+          _blendPixel(
+            bytes,
+            outRow + x * 4,
+            newPixels,
+            newRow + x * newPixels.channels,
+            oldPixels,
+            oldRow + x * oldPixels.channels,
+            t,
           );
         }
         // else: already new image from Image.from(newImg)
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Diamond/pixel dissolve: cells grow from a corner / edge.
@@ -218,39 +356,66 @@ class TransitionEngine {
     bool reverseDiagonal = false,
     bool topToBottom = false,
   }) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
-    final cw = a.width / cols;
-    final ch = a.height / rows;
+    final w = a.width;
+    final h = a.height;
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(w, h);
+    final cw = w / cols;
+    final ch = h / rows;
     final maxD = (cols + rows - 2).toDouble().clamp(1, 9999);
     final rowMax = math.max(1, rows - 1).toDouble();
-
-    for (var y = 0; y < a.height; y++) {
-      for (var x = 0; x < a.width; x++) {
-        final c = (x / cw).floor().clamp(0, cols - 1);
-        final r = (y / ch).floor().clamp(0, rows - 1);
+    final cellProgress = List<double>.filled(cols * rows, 0);
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
         final delay = topToBottom
-            ? r /
-                  rowMax // top rows first → bottom
+            ? r / rowMax
             : reverseDiagonal
             ? ((cols - 1 - c) + r) / maxD
             : (c + (rows - 1 - r)) / maxD;
-        final cellP = ((t - delay * 0.6) / 0.4).clamp(0.0, 1.0);
+        cellProgress[r * cols + c] = ((t - delay * 0.6) / 0.4)
+            .clamp(0.0, 1.0)
+            .toDouble();
+      }
+    }
+    final cellColumns = List<int>.generate(
+      w,
+      (x) => (x / cw).floor().clamp(0, cols - 1).toInt(),
+      growable: false,
+    );
+    final cellRows = List<int>.generate(
+      h,
+      (y) => (y / ch).floor().clamp(0, rows - 1).toInt(),
+      growable: false,
+    );
+
+    for (var y = 0; y < h; y++) {
+      final r = cellRows[y];
+      final cy = r * ch + ch / 2;
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * w * 4;
+      for (var x = 0; x < w; x++) {
+        final c = cellColumns[x];
+        final cellP = cellProgress[r * cols + c];
 
         var useB = false;
-        if (cellP > 0) {
+        if (cellP >= 1) {
+          useB = true;
+        } else if (cellP > 0) {
           final cx = c * cw + cw / 2;
-          final cy = r * ch + ch / 2;
           final hw = cw * cellP;
           final hh = ch * cellP;
           // Point-in-diamond: |dx|/hw + |dy|/hh <= 1
           useB = ((x - cx).abs() / hw) + ((y - cy).abs() / hh) <= 1.0;
         }
 
-        final px = useB ? b.getPixel(x, y) : a.getPixel(x, y);
-        out.setPixelRgba(x, y, px.r.toInt(), px.g.toInt(), px.b.toInt(), 255);
+        final source = useB ? bPixels : aPixels;
+        final sourceRow = useB ? bRow : aRow;
+        source.copyTo(bytes, outRow + x * 4, sourceRow + x * source.channels);
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Random mosaic dissolve — cells flip in pseudo-random order.
@@ -261,11 +426,16 @@ class TransitionEngine {
     int cols = 22,
     int rows = 22,
   }) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     final cw = a.width / cols;
     final ch = a.height / rows;
 
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         final c = (x / cw).floor().clamp(0, cols - 1);
         final r = (y / ch).floor().clamp(0, rows - 1);
@@ -274,11 +444,12 @@ class TransitionEngine {
             ((c * 73856093) ^ (r * 19349663) ^ (c * r * 83492791)) & 0x7fffffff;
         final thresh = (hash % 10000) / 10000.0;
         final useB = t >= thresh;
-        final px = useB ? b.getPixel(x, y) : a.getPixel(x, y);
-        out.setPixelRgba(x, y, px.r.toInt(), px.g.toInt(), px.b.toInt(), 255);
+        final source = useB ? bPixels : aPixels;
+        final sourceRow = useB ? bRow : aRow;
+        source.copyTo(bytes, outRow + x * 4, sourceRow + x * source.channels);
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   /// Grid mosaic (slide_12) — matches native ClipCraft preview/video:
@@ -292,7 +463,9 @@ class TransitionEngine {
     int cols = 8,
     int rows = 8,
   }) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     final cw = a.width / cols;
     final ch = a.height / rows;
     final maxD = (cols + rows - 2).toDouble().clamp(1, 9999);
@@ -308,6 +481,9 @@ class TransitionEngine {
     final revealT = ((t - 0.12) / 0.78).clamp(0.0, 1.0);
 
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         final c = (x / cw).floor().clamp(0, cols - 1);
         final r = (y / ch).floor().clamp(0, rows - 1);
@@ -320,25 +496,23 @@ class TransitionEngine {
                 x >= cellLeft + cw - gapX ||
                 y < cellTop + gapY ||
                 y >= cellTop + ch - gapY)) {
-          out.setPixelRgba(x, y, 12, 16, 28, 255);
+          final outOffset = outRow + x * 4;
+          bytes[outOffset] = 12;
+          bytes[outOffset + 1] = 16;
+          bytes[outOffset + 2] = 28;
+          bytes[outOffset + 3] = 255;
           continue;
         }
 
         // Bottom-right → top-left stagger (matches reference video).
         final delay = ((cols - 1 - c) + (rows - 1 - r)) / maxD;
         final useB = revealT >= (delay * 0.88);
-        final px = useB ? b.getPixel(x, y) : a.getPixel(x, y);
-        out.setPixelRgba(
-          x,
-          y,
-          px.r.toInt(),
-          px.g.toInt(),
-          px.b.toInt(),
-          255,
-        );
+        final source = useB ? bPixels : aPixels;
+        final sourceRow = useB ? bRow : aRow;
+        source.copyTo(bytes, outRow + x * 4, sourceRow + x * source.channels);
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   /// Blinds / jalousie.
@@ -351,11 +525,16 @@ class TransitionEngine {
     required bool verticalStrips,
     bool rightToLeft = false,
   }) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     const strips = 8;
     final stripSize = (verticalStrips ? a.width : a.height) / strips;
 
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         final along = verticalStrips ? x : y;
         final strip = (along / stripSize).floor().clamp(0, strips - 1);
@@ -367,11 +546,13 @@ class TransitionEngine {
             ? (strips - 1 - strip)
             : strip;
         final open = (p * 1.25 - order * 0.04).clamp(0.0, 1.0);
-        final c = (local < open) ? b.getPixel(x, y) : a.getPixel(x, y);
-        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        final useB = local < open;
+        final source = useB ? bPixels : aPixels;
+        final sourceRow = useB ? bRow : aRow;
+        source.copyTo(bytes, outRow + x * 4, sourceRow + x * source.channels);
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   /// Native Jalousie_BT / LR — 8 slats flip 0→180° (OLD face → NEW face).
@@ -389,19 +570,22 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image(width: w, height: h, numChannels: 4);
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _rgbaBytes(w, h);
     // Gaps when edge-on → dark (matches native between-slat look).
-    for (var y = 0; y < h; y++) {
-      for (var x = 0; x < w; x++) {
-        out.setPixelRgba(x, y, 8, 8, 12, 255);
-      }
+    for (var offset = 0; offset < bytes.length; offset += 4) {
+      bytes[offset] = 8;
+      bytes[offset + 1] = 8;
+      bytes[offset + 2] = 12;
+      bytes[offset + 3] = 255;
     }
 
     final angle = p * math.pi; // 0 → 180°
     final showNew = angle >= math.pi / 2;
     final rot = angle < math.pi / 2 ? angle : (math.pi - angle);
     final scale = math.cos(rot).abs().clamp(0.02, 1.0);
-    final src = showNew ? newImg : oldImg;
+    final src = showNew ? newPixels : oldPixels;
 
     if (!verticalSlats) {
       // Horizontal louvers — foreshorten in Y (rotateX).
@@ -419,8 +603,10 @@ class TransitionEngine {
         for (var dy = 0; dy < destH; dy++) {
           final y = destTop + dy;
           if (y < 0 || y >= h) continue;
-          final sy =
-              (srcTop + (dy / destH) * srcH).floor().clamp(srcTop, srcBottom - 1);
+          final sy = (srcTop + (dy / destH) * srcH).floor().clamp(
+            srcTop,
+            srcBottom - 1,
+          );
           // Mild horizontal trapezoid squeeze toward strip edges (perspective).
           final edge = (dy / math.max(1, destH - 1) - 0.5).abs() * 2.0;
           final squeeze = 1.0 - (1.0 - scale) * 0.22 * edge;
@@ -429,17 +615,14 @@ class TransitionEngine {
           final x1 = ((w / 2.0) + halfW).round();
           for (var x = x0; x < x1; x++) {
             if (x < 0 || x >= w) continue;
-            final sx = ((x - x0) / math.max(1, x1 - x0) * w)
-                .floor()
-                .clamp(0, w - 1);
-            final c = src.getPixel(sx, sy);
-            out.setPixelRgba(
-              x,
-              y,
-              c.r.toInt(),
-              c.g.toInt(),
-              c.b.toInt(),
-              255,
+            final sx = ((x - x0) / math.max(1, x1 - x0) * w).floor().clamp(
+              0,
+              w - 1,
+            );
+            src.copyTo(
+              bytes,
+              (y * w + x) * 4,
+              sy * src.rowStride + sx * src.channels,
             );
           }
         }
@@ -460,9 +643,10 @@ class TransitionEngine {
         for (var dx = 0; dx < destW; dx++) {
           final x = destLeft + dx;
           if (x < 0 || x >= w) continue;
-          final sx = (srcLeft + (dx / destW) * srcW)
-              .floor()
-              .clamp(srcLeft, srcRight - 1);
+          final sx = (srcLeft + (dx / destW) * srcW).floor().clamp(
+            srcLeft,
+            srcRight - 1,
+          );
           final edge = (dx / math.max(1, destW - 1) - 0.5).abs() * 2.0;
           final squeeze = 1.0 - (1.0 - scale) * 0.22 * edge;
           final halfH = (h * squeeze) / 2.0;
@@ -470,23 +654,20 @@ class TransitionEngine {
           final y1 = ((h / 2.0) + halfH).round();
           for (var y = y0; y < y1; y++) {
             if (y < 0 || y >= h) continue;
-            final sy = ((y - y0) / math.max(1, y1 - y0) * h)
-                .floor()
-                .clamp(0, h - 1);
-            final c = src.getPixel(sx, sy);
-            out.setPixelRgba(
-              x,
-              y,
-              c.r.toInt(),
-              c.g.toInt(),
-              c.b.toInt(),
-              255,
+            final sy = ((y - y0) / math.max(1, y1 - y0) * h).floor().clamp(
+              0,
+              h - 1,
+            );
+            src.copyTo(
+              bytes,
+              (y * w + x) * 4,
+              sy * src.rowStride + sx * src.channels,
             );
           }
         }
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Native RollInTurn (MaskBitmap3D.drawRollInTurn) — CoverFlow strip wave.
@@ -507,11 +688,14 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image(width: w, height: h, numChannels: 4);
-    for (var y = 0; y < h; y++) {
-      for (var x = 0; x < w; x++) {
-        out.setPixelRgba(x, y, 8, 8, 12, 255);
-      }
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _rgbaBytes(w, h);
+    for (var offset = 0; offset < bytes.length; offset += 4) {
+      bytes[offset] = 8;
+      bytes[offset + 1] = 8;
+      bytes[offset + 2] = 12;
+      bytes[offset + 3] = 255;
     }
 
     // Span so last strip also reaches 90° when p→1.
@@ -523,9 +707,11 @@ class TransitionEngine {
         final deg = (base - i * 30.0).clamp(0.0, 90.0);
         final showNew = deg >= 45.0;
         final faceDeg = showNew ? (90.0 - deg) : deg;
-        final scale =
-            math.cos(faceDeg * math.pi / 180.0).abs().clamp(0.02, 1.0);
-        final src = showNew ? newImg : oldImg;
+        final scale = math
+            .cos(faceDeg * math.pi / 180.0)
+            .abs()
+            .clamp(0.02, 1.0);
+        final src = showNew ? newPixels : oldPixels;
 
         final srcLeft = (i * stripW).floor();
         final srcRight = ((i + 1) * stripW).floor().clamp(0, w);
@@ -539,9 +725,10 @@ class TransitionEngine {
         for (var dx = 0; dx < destW; dx++) {
           final x = destLeft + dx;
           if (x < 0 || x >= w) continue;
-          final sx = (srcLeft + (dx / destW) * srcW)
-              .floor()
-              .clamp(srcLeft, srcRight - 1);
+          final sx = (srcLeft + (dx / destW) * srcW).floor().clamp(
+            srcLeft,
+            srcRight - 1,
+          );
           // Mild vertical taper for perspective (icon trapezoid look).
           final edge = (dx / math.max(1, destW - 1)).clamp(0.0, 1.0);
           final squeeze = 1.0 - (1.0 - scale) * 0.18 * edge;
@@ -550,17 +737,14 @@ class TransitionEngine {
           final y1 = ((h / 2.0) + halfH).round();
           for (var y = y0; y < y1; y++) {
             if (y < 0 || y >= h) continue;
-            final sy = ((y - y0) / math.max(1, y1 - y0) * h)
-                .floor()
-                .clamp(0, h - 1);
-            final c = src.getPixel(sx, sy);
-            out.setPixelRgba(
-              x,
-              y,
-              c.r.toInt(),
-              c.g.toInt(),
-              c.b.toInt(),
-              255,
+            final sy = ((y - y0) / math.max(1, y1 - y0) * h).floor().clamp(
+              0,
+              h - 1,
+            );
+            src.copyTo(
+              bytes,
+              (y * w + x) * 4,
+              sy * src.rowStride + sx * src.channels,
             );
           }
         }
@@ -571,9 +755,11 @@ class TransitionEngine {
         final deg = (base - i * 30.0).clamp(0.0, 90.0);
         final showNew = deg >= 45.0;
         final faceDeg = showNew ? (90.0 - deg) : deg;
-        final scale =
-            math.cos(faceDeg * math.pi / 180.0).abs().clamp(0.02, 1.0);
-        final src = showNew ? newImg : oldImg;
+        final scale = math
+            .cos(faceDeg * math.pi / 180.0)
+            .abs()
+            .clamp(0.02, 1.0);
+        final src = showNew ? newPixels : oldPixels;
 
         final srcTop = (i * stripH).floor();
         final srcBottom = ((i + 1) * stripH).floor().clamp(0, h);
@@ -586,9 +772,10 @@ class TransitionEngine {
         for (var dy = 0; dy < destH; dy++) {
           final y = destTop + dy;
           if (y < 0 || y >= h) continue;
-          final sy = (srcTop + (dy / destH) * srcH)
-              .floor()
-              .clamp(srcTop, srcBottom - 1);
+          final sy = (srcTop + (dy / destH) * srcH).floor().clamp(
+            srcTop,
+            srcBottom - 1,
+          );
           final edge = (dy / math.max(1, destH - 1)).clamp(0.0, 1.0);
           final squeeze = 1.0 - (1.0 - scale) * 0.18 * edge;
           final halfW = (w * squeeze) / 2.0;
@@ -596,23 +783,20 @@ class TransitionEngine {
           final x1 = ((w / 2.0) + halfW).round();
           for (var x = x0; x < x1; x++) {
             if (x < 0 || x >= w) continue;
-            final sx = ((x - x0) / math.max(1, x1 - x0) * w)
-                .floor()
-                .clamp(0, w - 1);
-            final c = src.getPixel(sx, sy);
-            out.setPixelRgba(
-              x,
-              y,
-              c.r.toInt(),
-              c.g.toInt(),
-              c.b.toInt(),
-              255,
+            final sx = ((x - x0) / math.max(1, x1 - x0) * w).floor().clamp(
+              0,
+              w - 1,
+            );
+            src.copyTo(
+              bytes,
+              (y * w + x) * 4,
+              sy * src.rowStride + sx * src.channels,
             );
           }
         }
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Native Cross_Merge (MaskBitmap3D.barDraw) — matches reference video.
@@ -628,7 +812,9 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image.from(newImg);
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _copyToRgba(newPixels);
 
     final i = p * 21.0;
     // Grow until corners meet past center (full cover).
@@ -644,6 +830,8 @@ class TransitionEngine {
     ch = ch.clamp(0, h);
 
     for (var y = 0; y < h; y++) {
+      final oldRow = y * oldPixels.rowStride;
+      final outRow = y * w * 4;
       for (var x = 0; x < w; x++) {
         final inTl = x < cw && y < ch;
         final inTr = x >= w - cw && y < ch;
@@ -652,11 +840,14 @@ class TransitionEngine {
         if (inTl || inTr || inBl || inBr) {
           continue; // hole → NEW already in [out]
         }
-        final c = oldImg.getPixel(x, y);
-        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        oldPixels.copyTo(
+          bytes,
+          outRow + x * 4,
+          oldRow + x * oldPixels.channels,
+        );
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// slide_15 ↑↓←→ — Col_Split + Row_Split together (native door math).
@@ -667,7 +858,9 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image.from(newImg); // NEW underneath
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _copyToRgba(newPixels); // NEW underneath
     final i = p * 21.0;
     final leftEdge = ((0.5 - 0.0238 * i) * w).round().clamp(0, w);
     final rightEdge = ((0.5 + 0.0238 * i) * w).round().clamp(0, w);
@@ -675,18 +868,23 @@ class TransitionEngine {
     final bottomEdge = ((0.5 + 0.0238 * i) * h).round().clamp(0, h);
 
     for (var y = 0; y < h; y++) {
+      final oldRow = y * oldPixels.rowStride;
+      final outRow = y * w * 4;
       for (var x = 0; x < w; x++) {
         final inSideDoor = x < leftEdge || x >= rightEdge;
         final inTopBottomDoor = y < topEdge || y >= bottomEdge;
         // OLD only where both doors overlap = 4 corners.
         if (inSideDoor && inTopBottomDoor) {
-          final c = oldImg.getPixel(x, y);
-          out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          oldPixels.copyTo(
+            bytes,
+            outRow + x * 4,
+            oldRow + x * oldPixels.channels,
+          );
         }
         // else keep NEW (center cross growing outward)
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Row + Col split with hinge at [pivotNx],[pivotNy] (0–1).
@@ -704,7 +902,9 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image.from(newImg);
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _copyToRgba(newPixels);
 
     final px = (pivotNx.clamp(0.05, 0.95) * w);
     final py = (pivotNy.clamp(0.05, 0.95) * h);
@@ -721,6 +921,7 @@ class TransitionEngine {
     final slideYB = (bottomEdge - py).round().clamp(0, h);
 
     for (var y = 0; y < h; y++) {
+      final outRow = y * w * 4;
       for (var x = 0; x < w; x++) {
         final inVGap = x >= leftEdge && x < rightEdge;
         final inHGap = y >= topEdge && y < bottomEdge;
@@ -741,11 +942,14 @@ class TransitionEngine {
           sx = (x - slideXR).clamp(0, w - 1);
           sy = (y - slideYB).clamp(0, h - 1);
         }
-        final c = oldImg.getPixel(sx, sy);
-        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        oldPixels.copyTo(
+          bytes,
+          outRow + x * 4,
+          sy * oldPixels.rowStride + sx * oldPixels.channels,
+        );
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// slide_06 / Zoom_In icon: NEW expands from bottom-right over OLD.
@@ -760,24 +964,30 @@ class TransitionEngine {
     if (p <= 0.0) return img.Image.from(oldImg);
     if (p >= 1.0) return img.Image.from(newImg);
 
-    final out = img.Image.from(oldImg);
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _copyToRgba(oldPixels);
     final rw = math.max(1, (w * p).round());
     final rh = math.max(1, (h * p).round());
     final left = w - rw;
     final top = h - rh;
 
     for (var y = top; y < h; y++) {
+      final outRow = y * w * 4;
       for (var x = left; x < w; x++) {
         // Scale full NEW into the growing BR rect (picture-in-picture expand).
         final u = (x - left) / rw;
         final v = (y - top) / rh;
         final sx = (u * (w - 1)).round().clamp(0, w - 1);
         final sy = (v * (h - 1)).round().clamp(0, h - 1);
-        final c = newImg.getPixel(sx, sy);
-        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        newPixels.copyTo(
+          bytes,
+          outRow + x * 4,
+          sy * newPixels.rowStride + sx * newPixels.channels,
+        );
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Native center Rect_Zoom_In / Rect_Zoom_Out.
@@ -793,7 +1003,9 @@ class TransitionEngine {
     final h = oldImg.height;
     final cx = w / 2.0;
     final cy = h / 2.0;
-    final out = img.Image(width: w, height: h, numChannels: 4);
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _rgbaBytes(w, h);
 
     if (zoomIn) {
       // Native Rect_Zoom_In: scaleFactor = 1 - 0.014*i; hole ≈ (1-p)
@@ -804,6 +1016,8 @@ class TransitionEngine {
       final top = (h - holeH) ~/ 2;
 
       for (var y = 0; y < h; y++) {
+        final newRow = y * newPixels.rowStride;
+        final outRow = y * w * 4;
         for (var x = 0; x < w; x++) {
           final inHole =
               holeW > 0 &&
@@ -815,11 +1029,17 @@ class TransitionEngine {
           if (inHole) {
             final sx = ((x - cx) / scale + cx).round().clamp(0, w - 1);
             final sy = ((y - cy) / scale + cy).round().clamp(0, h - 1);
-            final c = oldImg.getPixel(sx, sy);
-            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+            oldPixels.copyTo(
+              bytes,
+              outRow + x * 4,
+              sy * oldPixels.rowStride + sx * oldPixels.channels,
+            );
           } else {
-            final c = newImg.getPixel(x, y);
-            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+            newPixels.copyTo(
+              bytes,
+              outRow + x * 4,
+              newRow + x * newPixels.channels,
+            );
           }
         }
       }
@@ -832,6 +1052,8 @@ class TransitionEngine {
       final top = (h - rh) ~/ 2;
 
       for (var y = 0; y < h; y++) {
+        final newRow = y * newPixels.rowStride;
+        final outRow = y * w * 4;
         for (var x = 0; x < w; x++) {
           final inRect =
               rw > 0 &&
@@ -841,18 +1063,24 @@ class TransitionEngine {
               y >= top &&
               y < top + rh;
           if (inRect) {
-            final c = newImg.getPixel(x, y);
-            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+            newPixels.copyTo(
+              bytes,
+              outRow + x * 4,
+              newRow + x * newPixels.channels,
+            );
           } else {
             final sx = ((x - cx) / scale + cx).round().clamp(0, w - 1);
             final sy = ((y - cy) / scale + cy).round().clamp(0, h - 1);
-            final c = oldImg.getPixel(sx, sy);
-            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+            oldPixels.copyTo(
+              bytes,
+              outRow + x * 4,
+              sy * oldPixels.rowStride + sx * oldPixels.channels,
+            );
           }
         }
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   /// Native Col_Split / Row_Split (MaskBitmap3D.rowDraw, frames i = 0…21).
@@ -871,17 +1099,24 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image.from(newImg); // NEW underneath
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _copyToRgba(newPixels); // NEW underneath
     final i = p * 21.0;
 
     if (horizontal) {
       final leftEdge = ((0.5 - 0.0238 * i) * w).round().clamp(0, w);
       final rightEdge = ((0.5 + 0.0238 * i) * w).round().clamp(0, w);
       for (var y = 0; y < h; y++) {
+        final oldRow = y * oldPixels.rowStride;
+        final outRow = y * w * 4;
         for (var x = 0; x < w; x++) {
           if (x < leftEdge || x >= rightEdge) {
-            final c = oldImg.getPixel(x, y);
-            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+            oldPixels.copyTo(
+              bytes,
+              outRow + x * 4,
+              oldRow + x * oldPixels.channels,
+            );
           }
         }
       }
@@ -889,21 +1124,31 @@ class TransitionEngine {
       final topEdge = ((0.5 - 0.0238 * i) * h).round().clamp(0, h);
       final bottomEdge = ((0.5 + 0.0238 * i) * h).round().clamp(0, h);
       for (var y = 0; y < h; y++) {
+        final oldRow = y * oldPixels.rowStride;
+        final outRow = y * w * 4;
         for (var x = 0; x < w; x++) {
           if (y < topEdge || y >= bottomEdge) {
-            final c = oldImg.getPixel(x, y);
-            out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+            oldPixels.copyTo(
+              bytes,
+              outRow + x * 4,
+              oldRow + x * oldPixels.channels,
+            );
           }
         }
       }
     }
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   static img.Image _crossShutter(img.Image a, img.Image b, double p) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     const cell = 24;
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         final cx = x ~/ cell;
         final cy = y ~/ cell;
@@ -911,11 +1156,12 @@ class TransitionEngine {
         final localY = (y % cell) / cell;
         final odd = (cx + cy).isOdd;
         final open = odd ? localX < p : localY < p;
-        final c = open ? b.getPixel(x, y) : a.getPixel(x, y);
-        out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+        final source = open ? bPixels : aPixels;
+        final sourceRow = open ? bRow : aRow;
+        source.copyTo(bytes, outRow + x * 4, sourceRow + x * source.channels);
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   /// Whole3D vertical fold (native Camera.rotateX).
@@ -931,11 +1177,11 @@ class TransitionEngine {
 
     final w = oldImg.width;
     final h = oldImg.height;
-    final out = img.Image(width: w, height: h, numChannels: 4);
-    for (var y = 0; y < h; y++) {
-      for (var x = 0; x < w; x++) {
-        out.setPixelRgba(x, y, 0, 0, 0, 255);
-      }
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _rgbaBytes(w, h);
+    for (var offset = 0; offset < bytes.length; offset += 4) {
+      bytes[offset + 3] = 255;
     }
 
     final angle = p * (math.pi / 2); // 0° → 90°
@@ -944,7 +1190,7 @@ class TransitionEngine {
     const persp = 0.55;
 
     void blitFace({
-      required img.Image src,
+      required _PixelBuffer src,
       required int y0,
       required int faceH,
       required double shade,
@@ -966,14 +1212,11 @@ class TransitionEngine {
           if (x < 0 || x >= w) continue;
           final u = ((x - x0) / span).clamp(0.0, 1.0);
           final sx = (u * (w - 1)).round().clamp(0, w - 1);
-          final c = src.getPixel(sx, sy);
-          out.setPixelRgba(
-            x,
-            y,
-            (c.r.toInt() * shade).round().clamp(0, 255),
-            (c.g.toInt() * shade).round().clamp(0, 255),
-            (c.b.toInt() * shade).round().clamp(0, 255),
-            255,
+          src.shadeTo(
+            bytes,
+            (y * w + x) * 4,
+            sy * src.rowStride + sx * src.channels,
+            shade,
           );
         }
       }
@@ -985,7 +1228,7 @@ class TransitionEngine {
     if (!bottomToTop) {
       // TB (green): old bottom-aligned; new from top.
       blitFace(
-        src: oldImg,
+        src: oldPixels,
         y0: h - oldH,
         faceH: oldH,
         shade: 0.62 + 0.38 * cosA,
@@ -993,7 +1236,7 @@ class TransitionEngine {
         edgeOn: math.sin(angle),
       );
       blitFace(
-        src: newImg,
+        src: newPixels,
         y0: 0,
         faceH: newH,
         shade: 0.62 + 0.38 * sinA,
@@ -1003,7 +1246,7 @@ class TransitionEngine {
     } else {
       // BT (blue): exact opposite — old top-aligned; new from bottom.
       blitFace(
-        src: oldImg,
+        src: oldPixels,
         y0: 0,
         faceH: oldH,
         shade: 0.62 + 0.38 * cosA,
@@ -1011,7 +1254,7 @@ class TransitionEngine {
         edgeOn: math.sin(angle),
       );
       blitFace(
-        src: newImg,
+        src: newPixels,
         y0: h - newH,
         faceH: newH,
         shade: 0.62 + 0.38 * sinA,
@@ -1020,60 +1263,134 @@ class TransitionEngine {
       );
     }
 
-    return out;
+    return _imageFromRgba(bytes, w, h);
   }
 
   static img.Image _flipPage(img.Image a, img.Image b, double p) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     final fold = (a.width * p).round();
     for (var y = 0; y < a.height; y++) {
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         if (x < a.width - fold) {
-          final c = a.getPixel(x, y);
-          out.setPixelRgba(x, y, c.r.toInt(), c.g.toInt(), c.b.toInt(), 255);
+          aPixels.copyTo(bytes, outRow + x * 4, aRow + x * aPixels.channels);
         } else {
           // mirrored curl-ish look
           final srcX = (2 * (a.width - fold) - x).clamp(0, a.width - 1);
           final shade = (0.7 + 0.3 * (1 - p));
-          final c = b.getPixel(srcX, y);
-          out.setPixelRgba(
-            x,
-            y,
-            (c.r.toInt() * shade).round().clamp(0, 255),
-            (c.g.toInt() * shade).round().clamp(0, 255),
-            (c.b.toInt() * shade).round().clamp(0, 255),
-            255,
+          bPixels.shadeTo(
+            bytes,
+            outRow + x * 4,
+            bRow + srcX * bPixels.channels,
+            shade,
           );
         }
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   static img.Image _tiltDrift(img.Image a, img.Image b, double p) {
-    final out = img.Image(width: a.width, height: a.height, numChannels: 4);
+    final aPixels = _PixelBuffer(a);
+    final bPixels = _PixelBuffer(b);
+    final bytes = _rgbaBytes(a.width, a.height);
     final dx = (a.width * 0.25 * p).round();
     for (var y = 0; y < a.height; y++) {
       final rowShift = ((y / a.height - 0.5) * 40 * p).round();
+      final aRow = y * aPixels.rowStride;
+      final bRow = y * bPixels.rowStride;
+      final outRow = y * a.width * 4;
       for (var x = 0; x < a.width; x++) {
         final ax = (x + dx + rowShift).clamp(0, a.width - 1);
-        final ca = a.getPixel(ax, y);
-        final cb = b.getPixel(x, y);
-        out.setPixelRgba(
-          x,
-          y,
-          _lerp(ca.r.toInt(), cb.r.toInt(), p),
-          _lerp(ca.g.toInt(), cb.g.toInt(), p),
-          _lerp(ca.b.toInt(), cb.b.toInt(), p),
-          255,
+        _blendPixel(
+          bytes,
+          outRow + x * 4,
+          aPixels,
+          aRow + ax * aPixels.channels,
+          bPixels,
+          bRow + x * bPixels.channels,
+          p,
         );
       }
     }
-    return out;
+    return _imageFromRgba(bytes, a.width, a.height);
   }
 
   static int _lerp(int a, int b, double t) =>
       (a + (b - a) * t).round().clamp(0, 255);
+
+  /// Editor preview batch: size plates once, render all progress steps, JPEG out.
+  /// Shared [_PixelBuffer]s so we do not rebuild per-pixel wrappers every frame.
+  static List<Uint8List> renderJpegBatch({
+    required img.Image from,
+    required img.Image to,
+    required SlideTransitionType type,
+    required int frameCount,
+    int gridCols = 12,
+    int gridRows = 20,
+    bool reverseDiagonal = false,
+    bool topToBottom = false,
+    double pivotNx = 0.5,
+    double pivotNy = 0.5,
+    int quality = 70,
+  }) {
+    if (frameCount <= 0) return const [];
+    final a = _ensureSameSize(from, to.width, to.height);
+    final b = _ensureSameSize(to, to.width, to.height);
+    final out = <Uint8List>[];
+    for (var i = 0; i < frameCount; i++) {
+      final frame = apply(
+        from: a,
+        to: b,
+        type: type,
+        progress: (i + 1) / frameCount,
+        gridCols: gridCols,
+        gridRows: gridRows,
+        reverseDiagonal: reverseDiagonal,
+        topToBottom: topToBottom,
+        pivotNx: pivotNx,
+        pivotNy: pivotNy,
+      );
+      out.add(encodeJpeg(frame, quality: quality));
+    }
+    return out;
+  }
+
+  /// Same as [apply] but keeps source buffers alive across a progress sweep.
+  static List<img.Image> applyProgressSweep({
+    required img.Image from,
+    required img.Image to,
+    required SlideTransitionType type,
+    required int frameCount,
+    int gridCols = 12,
+    int gridRows = 20,
+    bool reverseDiagonal = false,
+    bool topToBottom = false,
+    double pivotNx = 0.5,
+    double pivotNy = 0.5,
+  }) {
+    if (frameCount <= 0) return const [];
+    final a = _ensureSameSize(from, to.width, to.height);
+    final b = _ensureSameSize(to, to.width, to.height);
+    return List<img.Image>.generate(frameCount, (i) {
+      return apply(
+        from: a,
+        to: b,
+        type: type,
+        progress: (i + 1) / frameCount,
+        gridCols: gridCols,
+        gridRows: gridRows,
+        reverseDiagonal: reverseDiagonal,
+        topToBottom: topToBottom,
+        pivotNx: pivotNx,
+        pivotNy: pivotNy,
+      );
+    }, growable: false);
+  }
 
   static Uint8List encodeJpeg(img.Image image, {int quality = 85}) {
     return Uint8List.fromList(img.encodeJpg(image, quality: quality));

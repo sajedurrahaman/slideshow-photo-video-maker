@@ -149,6 +149,7 @@ class _EditorScreenState extends State<EditorScreen>
       final project = context.read<SlideshowProject>();
       await project.refreshLivePreview();
       if (!mounted) return;
+      unawaited(project.warmPreviewCache());
       unawaited(project.sharpenPhotoSources());
     });
   }
