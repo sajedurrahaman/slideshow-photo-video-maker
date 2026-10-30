@@ -274,6 +274,8 @@ class SlideshowProject extends ChangeNotifier {
 
   /// In-memory JPEG frames for smooth editor preview (no % overlay).
   final List<Uint8List> _previewMemoryFrames = [];
+  /// Pristine default (None) hold timeline — never mutated by effect splices.
+  final List<Uint8List> _previewBaseMemoryFrames = [];
   final List<img.Image?> _decodedPreview = [];
   final List<_PreparedPhotoLayers?> _decodedPreviewLayers = [];
   final List<String> _decodedPreviewKeys = [];
@@ -965,18 +967,25 @@ class SlideshowProject extends ChangeNotifier {
       }
 
       if (option.type == SlideTransitionType.none) {
-        if (_previewMemoryFrames.isNotEmpty) {
-          _previewCacheKey = fullKey;
-          _previewBaseCacheKey = baseKey;
-          isPreviewReady = true;
-          isPreparingPreview = false;
-          previewFrameIndex = 0;
-          _setPreviewPosition(0);
-          _setPreviewFrame(_previewMemoryFrames.first);
-          notifyListeners();
+        if (_previewBaseMemoryFrames.isEmpty) {
+          await preparePreviewFrames(
+            showLoading: false,
+            transitionOption: SlideTransitionOption.all.first,
+          );
+          generation = _previewGeneration;
+          if (_previewMemoryFrames.isNotEmpty) {
+            _storeBaseMemoryFramesFromWorking();
+          }
         }
+        _restoreDefaultNoneFrames();
         return;
       }
+
+      // Start from clean None holds, then splice this effect's strips.
+      if (_previewBaseMemoryFrames.isEmpty && _previewMemoryFrames.isNotEmpty) {
+        _storeBaseMemoryFramesFromWorking();
+      }
+      _resetWorkingFramesFromBase();
 
       // All pairs already cached for this effect → splice full timeline instantly.
       if (_allStripsCachedForEffect(option)) {
@@ -1058,18 +1067,11 @@ class SlideshowProject extends ChangeNotifier {
     final none = SlideTransitionOption.all.first;
     final baseKey = _buildPreviewBaseCacheKey();
     final noneKey = _buildPreviewCacheKey(none);
-    if (_previewMemoryFrames.isNotEmpty &&
+    if (_previewBaseMemoryFrames.isNotEmpty &&
         _previewBaseCacheKey == baseKey &&
         _previewSegmentCounts.length == photos.length) {
       if (selectedSlideTransition.type == SlideTransitionType.none) {
-        _previewCacheKey = noneKey;
-        isPreviewReady = true;
-        if (previewFrameListenable.value == null) {
-          previewFrameIndex = 0;
-          _setPreviewPosition(0);
-          _setPreviewFrame(_previewMemoryFrames.first);
-        }
-        notifyListeners();
+        _restoreDefaultNoneFrames();
       }
       return;
     }
@@ -1077,6 +1079,7 @@ class SlideshowProject extends ChangeNotifier {
     await preparePreviewFrames(showLoading: false, transitionOption: none);
     if (_previewMemoryFrames.isEmpty) return;
 
+    _storeBaseMemoryFramesFromWorking();
     _previewCacheKey = noneKey;
     _previewBaseCacheKey = baseKey;
     if (selectedSlideTransition.type == SlideTransitionType.none) {
@@ -1087,6 +1090,35 @@ class SlideshowProject extends ChangeNotifier {
       _setPreviewFrame(_previewMemoryFrames.first);
       notifyListeners();
     }
+  }
+
+  void _storeBaseMemoryFramesFromWorking() {
+    _previewBaseMemoryFrames
+      ..clear()
+      ..addAll(_previewMemoryFrames);
+  }
+
+  void _resetWorkingFramesFromBase() {
+    if (_previewBaseMemoryFrames.isEmpty) return;
+    _previewMemoryFrames
+      ..clear()
+      ..addAll(_previewBaseMemoryFrames);
+  }
+
+  /// Switch back to default None — restore pristine holds (not spliced FX).
+  void _restoreDefaultNoneFrames() {
+    final none = SlideTransitionOption.all.first;
+    final baseKey = _buildPreviewBaseCacheKey();
+    if (_previewBaseMemoryFrames.isEmpty) return;
+    _resetWorkingFramesFromBase();
+    _previewCacheKey = _buildPreviewCacheKey(none);
+    _previewBaseCacheKey = baseKey;
+    isPreviewReady = true;
+    isPreparingPreview = false;
+    previewFrameIndex = 0;
+    _setPreviewPosition(0);
+    _setPreviewFrame(_previewMemoryFrames.first);
+    notifyListeners();
   }
 
   bool _photoHasMotion(SlideshowPhoto photo) =>
@@ -1314,6 +1346,7 @@ class SlideshowProject extends ChangeNotifier {
 
   void _invalidatePreviewCache() {
     _previewMemoryFrames.clear();
+    _previewBaseMemoryFrames.clear();
     _previewSegmentCounts.clear();
     _previewCacheKey = null;
     _previewBaseCacheKey = null;
@@ -1422,6 +1455,10 @@ class SlideshowProject extends ChangeNotifier {
       _previewSegmentCounts
         ..clear()
         ..addAll(built.counts);
+      // Keep a pristine None copy whenever we bake the default hold timeline.
+      if (option.type == SlideTransitionType.none) {
+        _storeBaseMemoryFramesFromWorking();
+      }
       _previewCacheKey = key;
       _previewBaseCacheKey = baseKey;
       final forSelected =
