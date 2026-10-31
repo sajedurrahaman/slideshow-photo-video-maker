@@ -2,7 +2,7 @@ class AppConstants {
   static const appName = 'Slideshows';
   static const packageId = 'app.graphics_cycle.clipCraft';
   static const creationsFolder = 'SlideShow';
-  static const minPhotos = 2;
+  static const minPhotos = 4;
   static const maxPhotos = 30;
   static const framesPerTransition = 22;
   static const holdFrames = 8;

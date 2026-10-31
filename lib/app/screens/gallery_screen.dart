@@ -332,7 +332,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
             padding: const EdgeInsets.only(right: 12),
             child: TealPillButton(
               label: count > 0 ? 'Next($count)' : 'Next',
-              enabled: count >= _minSelectable && !_continuing,
+              enabled: !_continuing,
               onPressed: _continue,
             ),
           ),
