@@ -23,13 +23,13 @@ class TealPillButton extends StatelessWidget {
         backgroundColor: enabled
             ? AppColors.primary
             : AppColors.primary.withValues(alpha: 0.35),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         minimumSize: const Size(0, 34),
       ),
       child: Text(
         label,
-        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
       ),
     );
   }
@@ -168,7 +168,7 @@ class SectionSheet extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         border: showTopDivider
-            ? const Border(top: BorderSide(color: AppColors.border),)
+            ? const Border(top: BorderSide(color: AppColors.border))
             : null,
       ),
       child: Column(

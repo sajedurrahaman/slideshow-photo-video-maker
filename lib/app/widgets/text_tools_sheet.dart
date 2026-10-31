@@ -1555,7 +1555,10 @@ class _LiveTextOverlaysLayerState extends State<LiveTextOverlaysLayer> {
       },
       onPanEnd: (_) => _clearHandleGesture(),
       onPanCancel: _clearHandleGesture,
-      child: _handleBtn(Icons.open_in_full_rounded),
+      child: Transform.flip(
+        flipX: true,
+        child: _handleBtn(Icons.open_in_full_rounded),
+      ),
     );
   }
 

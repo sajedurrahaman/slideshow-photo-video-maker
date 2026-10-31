@@ -411,13 +411,14 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   void _finishMusicPicker() {
+    final hasMusic = context.read<SlideshowProject>().music != null;
     setState(() {
       _tool = null;
       _musicToolsOpen = true;
       _musicVolumeOpen = false;
       _musicEditOpen = false;
-      // Unselected until user taps the music timeline.
-      _musicTrackSelected = false;
+      // Music added → timeline selected by default (same as Effects).
+      _musicTrackSelected = hasMusic;
     });
   }
 
@@ -556,7 +557,10 @@ class _EditorScreenState extends State<EditorScreen>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              if (project.selectedPhotoIndex != null)
+              if (project.selectedPhotoIndex != null &&
+                  _photoTool != _PhotoTool.duration &&
+                  _photoTool != _PhotoTool.animation &&
+                  _photoTool != _PhotoTool.background)
                 IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: () {
@@ -567,24 +571,23 @@ class _EditorScreenState extends State<EditorScreen>
                     });
                     project.clearTimelinePhotoSelection();
                   },
-                  icon: const Icon(
-                    Icons.check,
-                    color: AppColors.primary,
-                  ),
+                  icon: const Icon(Icons.check, color: AppColors.primary),
                 )
-              else if (_effectsToolsOpen || _musicToolsOpen)
+              else if (_tool != EditorTool.music &&
+                  (_effectsToolsOpen || _musicToolsOpen))
                 IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: _effectsToolsOpen
                       ? _closeEffectsTools
                       : _closeMusicTools,
-                  icon: const Icon(
-                    Icons.check,
-                    color: AppColors.primary,
-                  ),
+                  icon: const Icon(Icons.check, color: AppColors.primary),
                 )
-              else if (_tool != EditorTool.slide &&
-                  _tool != EditorTool.effects) ...[
+              else if (_photoTool != _PhotoTool.duration &&
+                  _photoTool != _PhotoTool.animation &&
+                  _photoTool != _PhotoTool.background &&
+                  _tool != EditorTool.slide &&
+                  _tool != EditorTool.effects &&
+                  _tool != EditorTool.music) ...[
                 IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: project.canUndo ? () => project.undo() : null,
@@ -1165,13 +1168,13 @@ class _EditorScreenState extends State<EditorScreen>
                     final p = context.read<SlideshowProject>();
                     p.stopPreviewPlayback();
                     if (p.music != null) {
-                      // Reopen music tools + interactive timeline.
+                      // Reopen music tools; timeline selected by default.
                       setState(() {
                         _tool = null;
                         _musicToolsOpen = true;
                         _musicVolumeOpen = false;
                         _musicEditOpen = false;
-                        _musicTrackSelected = false;
+                        _musicTrackSelected = true;
                         _effectsToolsOpen = false;
                         _textToolsOpen = false;
                       });
@@ -1379,6 +1382,13 @@ class _EditorScreenState extends State<EditorScreen>
 
   Widget _effectsEditorToolbar(SlideshowProject project) {
     final active = _effectsTrackSelected;
+    final videoEnd = project.estimatedDurationSec;
+    final effectStart = project.overlayTimelineStartSec;
+    final effectEnd = project.overlayTimelineEndSec ?? videoEnd;
+    // At video 0.00 → can't extend start further left.
+    final canClipStart = active && effectStart > 0.001;
+    // At video last → can't extend end further right.
+    final canClipEnd = active && effectEnd < videoEnd - 0.001;
     final actions = <({String id, String label, IconData icon})>[
       (id: 'add', label: 'Add', icon: Icons.auto_awesome),
       (id: 'delete', label: 'Delete', icon: Icons.delete_outline_rounded),
@@ -1393,7 +1403,6 @@ class _EditorScreenState extends State<EditorScreen>
         icon: Icons.keyboard_double_arrow_right_rounded,
       ),
     ];
-    final color = active ? AppColors.textDark : AppColors.textMuted;
     return Container(
       height: _photoToolbarHeight,
       decoration: const BoxDecoration(
@@ -1419,29 +1428,44 @@ class _EditorScreenState extends State<EditorScreen>
                         ),
                       ),
                     ),
-                  SizedBox(
-                    width: 76,
-                    child: InkWell(
-                      onTap: () =>
-                          _handleEffectsToolTap(project, actions[i].id),
-                      borderRadius: BorderRadius.circular(8),
-                      child: Opacity(
-                        opacity: active || actions[i].id == 'add' ? 1 : 0.45,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(actions[i].icon, size: 26, color: color),
-                            const SizedBox(height: 4),
-                            Text(
-                              actions[i].label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 10, color: color),
+                  Builder(
+                    builder: (context) {
+                      final id = actions[i].id;
+                      final enabled = switch (id) {
+                        'add' => true,
+                        'clip_start' => canClipStart,
+                        'clip_end' => canClipEnd,
+                        _ => active,
+                      };
+                      final color = enabled
+                          ? AppColors.textDark
+                          : AppColors.textMuted;
+                      return SizedBox(
+                        width: 76,
+                        child: InkWell(
+                          onTap: enabled
+                              ? () => _handleEffectsToolTap(project, id)
+                              : null,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Opacity(
+                            opacity: enabled ? 1 : 0.45,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(actions[i].icon, size: 26, color: color),
+                                const SizedBox(height: 4),
+                                Text(
+                                  actions[i].label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 10, color: color),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 ],
               ],
@@ -1492,9 +1516,11 @@ class _EditorScreenState extends State<EditorScreen>
       case 'clip_start':
         {
           // Nudge start earlier (left) a little — not full fill.
+          // Disabled when effect already starts at 0.00.
           const step = 0.5;
           final end =
               project.overlayTimelineEndSec ?? project.estimatedDurationSec;
+          if (project.overlayTimelineStartSec <= 0.001) return;
           final start = (project.overlayTimelineStartSec - step).clamp(
             0.0,
             end - 0.5,
@@ -1507,10 +1533,12 @@ class _EditorScreenState extends State<EditorScreen>
       case 'clip_end':
         {
           // Nudge end later (right) a little — not full fill.
+          // Disabled when effect already ends at video last.
           const step = 0.5;
           final videoEnd = project.estimatedDurationSec;
           final start = project.overlayTimelineStartSec;
           final curEnd = project.overlayTimelineEndSec ?? videoEnd;
+          if (curEnd >= videoEnd - 0.001) return;
           final end = (curEnd + step).clamp(start + 0.5, videoEnd);
           if (end > curEnd + 0.001) {
             project.commitOverlayTimelineRange(start, end);
@@ -1529,6 +1557,7 @@ class _EditorScreenState extends State<EditorScreen>
         setState(() {
           _musicVolumeOpen = false;
           _musicEditOpen = false;
+          _musicToolsOpen = false;
           _tool = EditorTool.music;
         });
         return;
@@ -3536,11 +3565,9 @@ class _MusicEditSheetState extends State<_MusicEditSheet> {
                   icon: const Icon(Icons.close, size: 20),
                 ),
                 Expanded(child: SheetTitle(music.title)),
-                IconButton(
-                  onPressed: _commit,
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.check, size: 20),
+                Padding(
+                  padding: const EdgeInsets.only(right: 16, top: 4, bottom: 4),
+                  child: TealPillButton(label: 'Save', onPressed: _commit),
                 ),
               ],
             ),
