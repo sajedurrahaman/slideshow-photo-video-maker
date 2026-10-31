@@ -171,6 +171,7 @@ class _CropScreenState extends State<CropScreen> {
     if (index != null) {
       final project = context.read<SlideshowProject>();
       if (index < project.photos.length) {
+        // Bake in background on Crop Done — final timeline Done stays fast.
         project.updatePhoto(
           index,
           project.photos[index].copyWith(
@@ -181,6 +182,7 @@ class _CropScreenState extends State<CropScreen> {
             cropDegrees: _degrees,
             clearCropAspectRatio: true,
           ),
+          bakePreview: true,
         );
       }
     }

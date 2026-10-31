@@ -100,6 +100,9 @@ class _EditorScreenState extends State<EditorScreen>
   bool _effectsToolsOpen = false;
   bool _effectsTrackSelected = false;
 
+  /// Photo Done: bake in flight — play stays off until ready.
+  bool _finishingPhotoEdits = false;
+
   /// Text tools (CapCut-style Template / Font / Color).
   bool _textToolsOpen = false;
   String? _selectedTextOverlayId;
@@ -522,12 +525,39 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
+  /// Warm preview after Duration / Animation / Background / Crop check.
+  /// Runs without blocking UI so final timeline Done is usually instant.
+  void _warmPreviewAfterTool(SlideshowProject project) {
+    if (project.photos.length < AppConstants.minPhotos) return;
+    unawaited(project.preparePreviewFrames(showLoading: false));
+  }
+
+  /// Photo toolbar Done — save edits; loading only if bake still needed.
+  Future<void> _finishPhotoEdits() async {
+    if (_finishingPhotoEdits) return;
+    setState(() {
+      _finishingPhotoEdits = true;
+      _photoTool = null;
+      _tool = null;
+      _liveMode = _LiveMode.idle;
+    });
+    final project = context.read<SlideshowProject>();
+    // Skip lone refresh — full bake below owns loading + ready state.
+    project.clearTimelinePhotoSelection(refreshIfEmpty: false);
+    try {
+      // Join tool-check warm if still running — don't restart a long bake.
+      await project.ensurePreviewReady(showLoading: true);
+    } finally {
+      if (mounted) setState(() => _finishingPhotoEdits = false);
+    }
+  }
+
   /// Idle editor chrome: time + play + undo/redo (same slot as slide headerRow).
   Widget _idlePreviewRow(SlideshowProject project) {
     final disabled =
         project.isProcessing ||
-        (project.isPreparingPreview &&
-            project.selectedSlideTransition.type != SlideTransitionType.none);
+        project.isPreparingPreview ||
+        _finishingPhotoEdits;
     return Row(
       children: [
         SizedBox(
@@ -548,7 +578,7 @@ class _EditorScreenState extends State<EditorScreen>
                     : Icons.play_arrow_rounded,
               ),
               iconSize: 32,
-              color: Colors.black87,
+              color: disabled ? Colors.black26 : Colors.black87,
             ),
           ),
         ),
@@ -563,14 +593,7 @@ class _EditorScreenState extends State<EditorScreen>
                   _photoTool != _PhotoTool.background)
                 IconButton(
                   padding: EdgeInsets.zero,
-                  onPressed: () {
-                    setState(() {
-                      _photoTool = null;
-                      _tool = null;
-                      _liveMode = _LiveMode.idle;
-                    });
-                    project.clearTimelinePhotoSelection();
-                  },
+                  onPressed: _finishingPhotoEdits ? null : _finishPhotoEdits,
                   icon: const Icon(Icons.check, color: AppColors.primary),
                 )
               else if (_tool != EditorTool.music &&
@@ -1700,11 +1723,20 @@ class _EditorScreenState extends State<EditorScreen>
       return;
     }
     if (tool == _PhotoTool.mirror) {
-      project.updatePhoto(index, photo.copyWith(mirrored: !photo.mirrored));
+      // Silent bake while user keeps editing — final Done stays light.
+      project.updatePhoto(
+        index,
+        photo.copyWith(mirrored: !photo.mirrored),
+        bakePreview: true,
+      );
       return;
     }
     if (tool == _PhotoTool.flip) {
-      project.updatePhoto(index, photo.copyWith(flipped: !photo.flipped));
+      project.updatePhoto(
+        index,
+        photo.copyWith(flipped: !photo.flipped),
+        bakePreview: true,
+      );
       return;
     }
     if (tool == _PhotoTool.rotate) {
@@ -1713,6 +1745,7 @@ class _EditorScreenState extends State<EditorScreen>
         photo.copyWith(
           rotationQuarterTurns: (photo.rotationQuarterTurns + 1) % 4,
         ),
+        bakePreview: true,
       );
       return;
     }
@@ -1762,7 +1795,11 @@ class _EditorScreenState extends State<EditorScreen>
     } else {
       return;
     }
-    project.updatePhoto(index, photo.copyWith(path: output.path));
+    project.updatePhoto(
+      index,
+      photo.copyWith(path: output.path),
+      bakePreview: true,
+    );
   }
 
   Widget _photoEditSheet(
@@ -1790,7 +1827,8 @@ class _EditorScreenState extends State<EditorScreen>
               _canvasSheetTab == _CanvasSheetTab.background
           ? IconButton(
               onPressed: () {
-                project.applyBackgroundToAll(index);
+                // Live GPU preview only — bake once on sheet confirm (avoids ANR).
+                project.applyBackgroundToAll(index, bakePreview: false);
                 ScaffoldMessenger.of(context)
                   ..hideCurrentSnackBar()
                   ..showSnackBar(
@@ -1815,6 +1853,12 @@ class _EditorScreenState extends State<EditorScreen>
           project.setAspect(project.aspectRatio);
         }
         setState(() => _photoTool = null);
+        // Start bake now (Duration / Animation / Background) so final Done is fast.
+        if (tool == _PhotoTool.duration ||
+            tool == _PhotoTool.animation ||
+            tool == _PhotoTool.background) {
+          _warmPreviewAfterTool(project);
+        }
       },
       child: switch (tool) {
         _PhotoTool.duration => _photoDurationPanel(
@@ -1856,7 +1900,7 @@ class _EditorScreenState extends State<EditorScreen>
           _canvasSheetTab == _CanvasSheetTab.background && photo != null
           ? IconButton(
               onPressed: () {
-                project.applyBackgroundToAll(0);
+                project.applyBackgroundToAll(0, bakePreview: false);
                 ScaffoldMessenger.of(context)
                   ..hideCurrentSnackBar()
                   ..showSnackBar(
@@ -1874,10 +1918,15 @@ class _EditorScreenState extends State<EditorScreen>
           : null,
       onClose: _dismissTool,
       onConfirm: () {
-        if (_canvasSheetTab == _CanvasSheetTab.ratio) {
+        final tab = _canvasSheetTab;
+        if (tab == _CanvasSheetTab.ratio) {
           project.setAspect(project.aspectRatio);
         }
         _dismissTool();
+        // Global BG sheet: bake with loading so play waits until ready.
+        if (tab == _CanvasSheetTab.background) {
+          unawaited(project.preparePreviewFrames(showLoading: true));
+        }
       },
       child: _canvasSheetTab == _CanvasSheetTab.ratio
           ? _canvasRatioRow(project)
@@ -2430,12 +2479,17 @@ class _EditorScreenState extends State<EditorScreen>
                   sigma: _blurSigmas[level],
                   selected: photo?.backgroundBlurLevel == level,
                   onTap: () {
+                    // GPU live preview only while sheet open — bake on confirm.
                     if (applyToAll) {
-                      project.setAllPhotoBackgrounds(blurLevel: level);
+                      project.setAllPhotoBackgrounds(
+                        blurLevel: level,
+                        bakePreview: false,
+                      );
                     } else if (photo != null) {
                       project.updatePhoto(
                         index,
                         photo.copyWith(backgroundBlurLevel: level),
+                        bakePreview: false,
                       );
                     }
                   },
@@ -2469,6 +2523,7 @@ class _EditorScreenState extends State<EditorScreen>
                     project.setAllPhotoBackgrounds(
                       color: color,
                       clearBlur: true,
+                      bakePreview: false,
                     );
                   } else if (photo != null) {
                     project.updatePhoto(
@@ -2477,6 +2532,7 @@ class _EditorScreenState extends State<EditorScreen>
                         backgroundArgb: color,
                         clearBackgroundBlur: true,
                       ),
+                      bakePreview: false,
                     );
                   }
                 },
@@ -6365,10 +6421,12 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
   }
 
   Widget _photoImage({BoxFit fit = BoxFit.contain}) {
+    // Cap decode for live blur layers — full-res + ImageFiltered was ANR/OOM.
     Widget image = CroppedPhotoView(
       photo: widget.photo,
       fit: fit,
-      filterQuality: FilterQuality.high,
+      filterQuality: FilterQuality.medium,
+      cacheWidth: 720,
     );
     final turns = widget.photo.rotationQuarterTurns % 4;
     if (turns != 0) {

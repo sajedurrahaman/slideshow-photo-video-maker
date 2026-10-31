@@ -39,8 +39,24 @@ Map<String, Object> _preparePhotoInWorker(Map<String, Object> args) {
   final decoded = img.decodeImage(args['bytes'] as Uint8List);
   if (decoded == null) throw const FormatException('Unsupported image file');
 
+  final outW = args['width'] as int;
+  final outH = args['height'] as int;
+  // Cap source before filter/crop — full 12MP + blur was OOM/ANR on check.
+  final maxSide = math.max(outW, outH) * 2;
+  var source = decoded;
+  final longest = math.max(source.width, source.height);
+  if (longest > maxSide && maxSide > 0) {
+    final scale = maxSide / longest;
+    source = img.copyResize(
+      source,
+      width: math.max(1, (source.width * scale).round()),
+      height: math.max(1, (source.height * scale).round()),
+      interpolation: img.Interpolation.average,
+    );
+  }
+
   final filter = PhotoFilterPreset.values[args['filter'] as int];
-  var filtered = FrameCompositor.applyFilter(decoded, filter);
+  var filtered = FrameCompositor.applyFilter(source, filter);
   final cropLeft = (args['cropLeft'] as num?)?.toDouble() ?? 0;
   final cropTop = (args['cropTop'] as num?)?.toDouble() ?? 0;
   final cropWidthN = (args['cropWidth'] as num?)?.toDouble() ?? 1;
@@ -131,17 +147,15 @@ Map<String, Object> _preparePhotoInWorker(Map<String, Object> args) {
   }
 
   final blurLevel = args['backgroundBlurLevel'] as int?;
-  final w = args['width'] as int;
-  final h = args['height'] as int;
   // Match live _blurFill (BoxFit.cover) — stretch-to-fit left black bars
   // when the plate aspect differs from the canvas.
   final blurPlate = blurLevel != null
-      ? TransitionEngine.coverCrop(filtered, w, h)
+      ? TransitionEngine.coverCrop(filtered, outW, outH)
       : null;
   final layers = FrameCompositor.placeOnCanvasLayers(
     src: filtered,
-    w: w,
-    h: h,
+    w: outW,
+    h: outH,
     bgArgb: args['photoBackground'] as int,
     blurPlate: blurPlate,
     blurLevel: blurLevel ?? 0,
@@ -285,6 +299,9 @@ class SlideshowProject extends ChangeNotifier {
   bool _isWarmingPreviewCache = false;
   Completer<void>? _defaultWarmCompleter;
   int _previewGeneration = 0;
+
+  /// In-flight [preparePreviewFrames] — final Done joins this instead of restarting.
+  Future<void>? _previewPrepareFuture;
   Timer? _previewTimer;
   Timer? _transitionPreviewDebounce;
   Timer? _transitionDemoTimer;
@@ -562,7 +579,10 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
-  void clearTimelinePhotoSelection({bool preservePlayback = false}) {
+  void clearTimelinePhotoSelection({
+    bool preservePlayback = false,
+    bool refreshIfEmpty = true,
+  }) {
     if (selectedPhotoIndex == null && preservePlayback) {
       notifyListeners();
       return;
@@ -578,13 +598,13 @@ class SlideshowProject extends ChangeNotifier {
         _setPreviewPosition(0);
         _setPreviewFrame(_previewMemoryFrames.first);
       }
-    } else if (photos.isNotEmpty && !preservePlayback) {
+    } else if (photos.isNotEmpty && !preservePlayback && refreshIfEmpty) {
       unawaited(_refreshPhotoPreview(0));
     }
     notifyListeners();
   }
 
-  void applyBackgroundToAll(int sourceIndex) {
+  void applyBackgroundToAll(int sourceIndex, {bool bakePreview = true}) {
     if (sourceIndex < 0 || sourceIndex >= photos.length) return;
     final source = photos[sourceIndex];
     _recordHistory();
@@ -600,12 +620,16 @@ class SlideshowProject extends ChangeNotifier {
     stopPreviewPlayback();
     _invalidatePreviewCache();
     notifyListeners();
-    if (photos.length >= AppConstants.minPhotos) {
+    if (bakePreview && photos.length >= AppConstants.minPhotos) {
       unawaited(preparePreviewFrames(showLoading: false));
     }
   }
 
-  void updatePhoto(int index, SlideshowPhoto photo) {
+  void updatePhoto(
+    int index,
+    SlideshowPhoto photo, {
+    bool bakePreview = true,
+  }) {
     if (index < 0 || index >= photos.length) return;
     final previous = photos[index];
     _recordHistory();
@@ -613,15 +637,26 @@ class SlideshowProject extends ChangeNotifier {
     generatedFrames = [];
     stopPreviewPlayback();
     if (_samePreviewPixels(previous, photo)) {
-      // Animation and duration stay on the GPU. Export bakes frames later.
-      _invalidatePreviewCache();
-      notifyListeners();
+      // Animation stays GPU-live — keep ready frames. Duration changes
+      // timeline length → silent rebake so final Done is not a long wait.
+      final durationChanged =
+          (previous.durationSec - photo.durationSec).abs() > 0.001;
+      if (durationChanged) {
+        _invalidatePreviewCache();
+        notifyListeners();
+        if (bakePreview && photos.length >= AppConstants.minPhotos) {
+          unawaited(preparePreviewFrames(showLoading: false));
+        }
+      } else {
+        notifyListeners();
+      }
       return;
     }
     // Pixel change (blur/BG/crop/filter): drop stale frames so Play cannot
     // keep using the old black letterbox while the rebake is in flight.
     _invalidatePreviewCache();
     notifyListeners();
+    if (!bakePreview) return;
     if (photos.length >= AppConstants.minPhotos) {
       unawaited(preparePreviewFrames(showLoading: false));
     } else {
@@ -1420,19 +1455,49 @@ class SlideshowProject extends ChangeNotifier {
     int w,
     int h,
   ) async {
-    final key = _previewPixelKey(photos[index]);
-    while (_decodedPreview.length <= index) {
-      _decodedPreview.add(null);
-      _decodedPreviewLayers.add(null);
-      _decodedPreviewKeys.add('');
+    if (index < 0 || index >= photos.length) {
+      throw RangeError.index(index, photos, 'photos');
     }
+    final key = _previewPixelKey(photos[index]);
+    void ensureSlot() {
+      while (_decodedPreview.length <= index) {
+        _decodedPreview.add(null);
+        _decodedPreviewLayers.add(null);
+        _decodedPreviewKeys.add('');
+      }
+    }
+
+    ensureSlot();
     final cached = _decodedPreviewLayers[index];
     if (cached != null && _decodedPreviewKeys[index] == key) return cached;
     final layers = await _preparePhotoLayers(photos[index], w, h);
+    // Blur/BG invalidate clears these lists during await — re-pad before write.
+    if (index >= photos.length) return layers;
+    if (_previewPixelKey(photos[index]) != key) return layers;
+    ensureSlot();
     _decodedPreview[index] = layers.composed;
     _decodedPreviewLayers[index] = layers;
     _decodedPreviewKeys[index] = key;
     return layers;
+  }
+
+  /// Join an in-flight warm (from tool check) or bake with optional loading UI.
+  Future<void> ensurePreviewReady({bool showLoading = true}) async {
+    if (isPreviewReady && _previewMemoryFrames.isNotEmpty) return;
+    final inFlight = _previewPrepareFuture;
+    if (inFlight != null) {
+      if (showLoading && !isPreparingPreview) {
+        isPreparingPreview = true;
+        notifyListeners();
+      }
+      await inFlight;
+      if (showLoading) {
+        isPreparingPreview = false;
+        notifyListeners();
+      }
+      if (isPreviewReady && _previewMemoryFrames.isNotEmpty) return;
+    }
+    await preparePreviewFrames(showLoading: showLoading);
   }
 
   /// Build frames in background after transition select (shows loading UI).
@@ -1440,6 +1505,24 @@ class SlideshowProject extends ChangeNotifier {
   /// frame stays on screen while only the changed work runs.
   Future<void> preparePreviewFrames({
     bool showLoading = true,
+    SlideTransitionOption? transitionOption,
+  }) async {
+    final run = _preparePreviewFramesBody(
+      showLoading: showLoading,
+      transitionOption: transitionOption,
+    );
+    _previewPrepareFuture = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_previewPrepareFuture, run)) {
+        _previewPrepareFuture = null;
+      }
+    }
+  }
+
+  Future<void> _preparePreviewFramesBody({
+    required bool showLoading,
     SlideTransitionOption? transitionOption,
   }) async {
     _transitionPreviewDebounce?.cancel();
@@ -2272,6 +2355,7 @@ class SlideshowProject extends ChangeNotifier {
     int? color,
     int? blurLevel,
     bool clearBlur = false,
+    bool bakePreview = true,
   }) {
     if (photos.isEmpty) {
       if (color != null) {
@@ -2293,7 +2377,7 @@ class SlideshowProject extends ChangeNotifier {
     stopPreviewPlayback();
     _invalidatePreviewCache();
     notifyListeners();
-    if (photos.length >= AppConstants.minPhotos) {
+    if (bakePreview && photos.length >= AppConstants.minPhotos) {
       // Must rebake — showLoading false keeps UI calm, but cache was cleared
       // so Play waits for the blur/color frames instead of stale letterbox.
       unawaited(preparePreviewFrames(showLoading: false));
