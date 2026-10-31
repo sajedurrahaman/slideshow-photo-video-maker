@@ -611,7 +611,9 @@ class _EditorScreenState extends State<EditorScreen>
                   _photoTool != _PhotoTool.background &&
                   _tool != EditorTool.slide &&
                   _tool != EditorTool.effects &&
-                  _tool != EditorTool.music) ...[
+                  _tool != EditorTool.music &&
+                  _tool != EditorTool.ratio &&
+                  _tool != EditorTool.bg) ...[
                 IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: project.canUndo ? () => project.undo() : null,
@@ -2107,7 +2109,8 @@ class _EditorScreenState extends State<EditorScreen>
                       animationOut: animation,
                     ),
                   };
-                  project.updatePhoto(index, updated);
+                  // Live GPU demo now; silent bake for full Play after check.
+                  project.updatePhoto(index, updated, bakePreview: true);
                   final clearing = animation == PhotoAnimationType.none;
                   if (!clearing) project.startLiveClip();
                   setState(() {

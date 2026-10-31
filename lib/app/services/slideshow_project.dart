@@ -652,11 +652,24 @@ class SlideshowProject extends ChangeNotifier {
     generatedFrames = [];
     stopPreviewPlayback();
     if (_samePreviewPixels(previous, photo)) {
-      // Animation stays GPU-live — keep ready frames. Duration changes
-      // timeline length → silent rebake so final Done is not a long wait.
+      // Duration / animation are baked into JPEG preview frames — must rebake
+      // or full Play keeps the old static holds (GPU live only while sheet open).
       final durationChanged =
           (previous.durationSec - photo.durationSec).abs() > 0.001;
-      if (durationChanged) {
+      final animationChanged =
+          previous.animationIn != photo.animationIn ||
+          previous.animationOut != photo.animationOut ||
+          previous.animationLoop != photo.animationLoop ||
+          (previous.animationInDurationSec - photo.animationInDurationSec)
+                  .abs() >
+              0.001 ||
+          (previous.animationOutDurationSec - photo.animationOutDurationSec)
+                  .abs() >
+              0.001 ||
+          (previous.animationLoopDurationSec - photo.animationLoopDurationSec)
+                  .abs() >
+              0.001;
+      if (durationChanged || animationChanged) {
         _invalidatePreviewCache();
         notifyListeners();
         if (bakePreview && photos.length >= AppConstants.minPhotos) {
@@ -1854,9 +1867,13 @@ class SlideshowProject extends ChangeNotifier {
         selectedSlideTransition.type == SlideTransitionType.none;
 
     if (isDefaultNone) {
-      // First open: frames bake ~7–9s (thumb→sharp). Wait + show loading;
-      // never silent-return on empty — that made Play feel "broken".
-      if (_previewMemoryFrames.isEmpty || !isPreviewReady) {
+      // Stale holds after animation/duration edit — cache key must match.
+      final needsBake =
+          _previewMemoryFrames.isEmpty ||
+          !isPreviewReady ||
+          _previewBaseCacheKey != _buildPreviewBaseCacheKey() ||
+          _previewCacheKey != _buildPreviewCacheKey(selectedSlideTransition);
+      if (needsBake) {
         final pendingWarm = _defaultWarmCompleter;
         if (_isWarmingPreviewCache && pendingWarm != null) {
           if (!isPreparingPreview) {
@@ -1867,10 +1884,11 @@ class SlideshowProject extends ChangeNotifier {
           isPreparingPreview = false;
           notifyListeners();
         }
-        if (_previewMemoryFrames.isEmpty || !isPreviewReady) {
+        if (_previewMemoryFrames.isEmpty ||
+            !isPreviewReady ||
+            _previewBaseCacheKey != _buildPreviewBaseCacheKey()) {
           await ensurePreviewReady(showLoading: true);
         }
-        // Sharpen may have swapped paths and cancelled the first bake.
         if (_previewMemoryFrames.isEmpty) {
           await ensurePreviewReady(showLoading: true);
         }
