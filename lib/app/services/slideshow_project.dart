@@ -303,6 +303,10 @@ class SlideshowProject extends ChangeNotifier {
 
   /// In-flight [preparePreviewFrames] — final Done joins this instead of restarting.
   Future<void>? _previewPrepareFuture;
+
+  /// Bumped by [cancelExport] so in-flight frame bake stops and clears UI.
+  int _exportGeneration = 0;
+
   Timer? _previewTimer;
   Timer? _transitionPreviewDebounce;
   Timer? _transitionDemoTimer;
@@ -526,6 +530,7 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   void setPhotos(List<SlideshowPhoto> list) {
+    cancelExport();
     photos
       ..clear()
       ..addAll(list);
@@ -534,6 +539,15 @@ class SlideshowProject extends ChangeNotifier {
     _clearDecodedPreview();
     _invalidatePreviewCache();
     selectedPhotoIndex = null;
+    notifyListeners();
+  }
+
+  /// Stop export / frame bake (Export screen X). Clears "Exporting %" overlay.
+  void cancelExport() {
+    _exportGeneration++;
+    if (!isProcessing && processProgress == 0) return;
+    isProcessing = false;
+    processProgress = 0;
     notifyListeners();
   }
 
@@ -2508,10 +2522,13 @@ class SlideshowProject extends ChangeNotifier {
     );
   }
 
-  Future<void> generatePreviewFrames({
+  /// Returns `false` if [cancelExport] aborted the bake.
+  Future<bool> generatePreviewFrames({
     void Function(double)? onProgress,
   }) async {
-    if (photos.length < AppConstants.minPhotos) return;
+    if (photos.length < AppConstants.minPhotos) return false;
+    final gen = ++_exportGeneration;
+    bool cancelled() => gen != _exportGeneration;
     isProcessing = true;
     processProgress = 0;
     notifyListeners();
@@ -2523,10 +2540,12 @@ class SlideshowProject extends ChangeNotifier {
         await outDir.delete(recursive: true);
       }
       await outDir.create(recursive: true);
+      if (cancelled()) return false;
 
       final (w, h) = outputSize;
       final photoLayers = <_PreparedPhotoLayers>[];
       for (final photo in photos) {
+        if (cancelled()) return false;
         photoLayers.add(await _preparePhotoLayers(photo, w, h));
       }
       if (photoLayers.length < 2) {
@@ -2621,6 +2640,7 @@ class SlideshowProject extends ChangeNotifier {
       }
 
       Future<void> writeFrame(img.Image image) async {
+        if (cancelled()) return;
         // Live stack: photo → decorative frame → FX → text.
         // Text/frame are prebaked — only composite (no Flutter canvas per frame).
         var out = img.Image.from(image);
@@ -2631,6 +2651,7 @@ class SlideshowProject extends ChangeNotifier {
         if (overlayPlate != null) {
           img.compositeImage(out, overlayPlate);
         }
+        if (cancelled()) return;
         final file = File(
           p.join(
             outDir.path,
@@ -2694,6 +2715,7 @@ class SlideshowProject extends ChangeNotifier {
         final soloFrames = totalFrames - transitionFrames;
 
         for (var hold = 0; hold < soloFrames; hold++) {
+          if (cancelled()) return false;
           await writeFrame(
             _animatePhotoFrame(
               source: decoded[i],
@@ -2711,6 +2733,7 @@ class SlideshowProject extends ChangeNotifier {
 
         if (transitionFrames > 0) {
           for (var t = 0; t < transitionFrames; t++) {
+            if (cancelled()) return false;
             final progress = (t + 1) / transitionFrames;
             final fromFrame = _animatePhotoFrame(
               source: decoded[i],
@@ -2741,6 +2764,8 @@ class SlideshowProject extends ChangeNotifier {
         }
       }
 
+      if (cancelled()) return false;
+
       if (endingCard != null) {
         final cardImg = await FrameCompositor.makeTitleCard(
           card: endingCard!,
@@ -2749,9 +2774,13 @@ class SlideshowProject extends ChangeNotifier {
         );
         final n = endingFrames;
         for (var i = 0; i < n; i++) {
+          if (cancelled()) return false;
           await writeFrame(cardImg);
+          reportProgress();
         }
       }
+
+      if (cancelled()) return false;
 
       generatedFrames = frames;
       if (frames.isNotEmpty) {
@@ -2762,9 +2791,12 @@ class SlideshowProject extends ChangeNotifier {
         previewFrameBytes = await frames[previewFrameIndex].readAsBytes();
       }
       processProgress = 1;
+      return true;
     } finally {
-      isProcessing = false;
-      notifyListeners();
+      if (gen == _exportGeneration) {
+        isProcessing = false;
+        notifyListeners();
+      }
     }
   }
 

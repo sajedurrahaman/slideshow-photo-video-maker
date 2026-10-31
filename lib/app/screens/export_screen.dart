@@ -34,6 +34,11 @@ class _ExportScreenState extends State<ExportScreen> {
     super.dispose();
   }
 
+  void _cancelAndLeave() {
+    context.read<SlideshowProject>().cancelExport();
+    context.go('/home');
+  }
+
   Future<void> _startExport() async {
     final project = context.read<SlideshowProject>();
     setState(() {
@@ -47,7 +52,7 @@ class _ExportScreenState extends State<ExportScreen> {
 
     try {
       // Always regenerate so quality/ratio/overlays are baked in.
-      await project.generatePreviewFrames(
+      final baked = await project.generatePreviewFrames(
         onProgress: (p) {
           if (!mounted) return;
           setState(() {
@@ -58,6 +63,15 @@ class _ExportScreenState extends State<ExportScreen> {
       );
 
       if (!mounted) return;
+      // Close/X cancelled bake — stop here (no encode, no sticky Exporting UI).
+      if (!baked) {
+        setState(() {
+          _exporting = false;
+          _status = null;
+        });
+        return;
+      }
+
       setState(() {
         _progress = 0.75;
         _status = 'Encoding video…';
@@ -93,13 +107,19 @@ class _ExportScreenState extends State<ExportScreen> {
   Widget build(BuildContext context) {
     final project = context.watch<SlideshowProject>();
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _cancelAndLeave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text('Export'),
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: () => context.go('/home'),
+          onPressed: _cancelAndLeave,
         ),
       ),
       body: Padding(
@@ -249,6 +269,7 @@ class _ExportScreenState extends State<ExportScreen> {
             ],
           ],
         ),
+      ),
       ),
     );
   }
