@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
@@ -1839,14 +1840,25 @@ class SlideshowProject extends ChangeNotifier {
         selectedSlideTransition.type == SlideTransitionType.none;
 
     if (isDefaultNone) {
-      // Prefer existing frames even if isPreviewReady was cleared by a race.
-      if (_previewMemoryFrames.isEmpty) {
+      // First open: frames bake ~7–9s (thumb→sharp). Wait + show loading;
+      // never silent-return on empty — that made Play feel "broken".
+      if (_previewMemoryFrames.isEmpty || !isPreviewReady) {
         final pendingWarm = _defaultWarmCompleter;
         if (_isWarmingPreviewCache && pendingWarm != null) {
+          if (!isPreparingPreview) {
+            isPreparingPreview = true;
+            notifyListeners();
+          }
           await pendingWarm.future;
+          isPreparingPreview = false;
+          notifyListeners();
         }
+        if (_previewMemoryFrames.isEmpty || !isPreviewReady) {
+          await ensurePreviewReady(showLoading: true);
+        }
+        // Sharpen may have swapped paths and cancelled the first bake.
         if (_previewMemoryFrames.isEmpty) {
-          await _ensureDefaultNonePreviewReady();
+          await ensurePreviewReady(showLoading: true);
         }
       }
       if (_previewMemoryFrames.isEmpty) return;
@@ -1857,9 +1869,11 @@ class SlideshowProject extends ChangeNotifier {
       return;
     }
 
-    if (isPreparingPreview) return;
-    if (_previewMemoryFrames.isEmpty) {
-      await _applySlideTransitionFast(selectedSlideTransition);
+    if (_previewMemoryFrames.isEmpty || isPreparingPreview) {
+      await ensurePreviewReady(showLoading: true);
+      if (_previewMemoryFrames.isEmpty) {
+        await _applySlideTransitionFast(selectedSlideTransition);
+      }
       if (_previewMemoryFrames.isEmpty) return;
     }
     selectedPhotoIndex = null;
@@ -2541,9 +2555,39 @@ class SlideshowProject extends ChangeNotifier {
         }
       }
 
+      // ---- Export speed: bake static layers once (was redone every frame) ----
+      img.Image? decorativeFrame;
+      final frameAsset = selectedFrameAsset;
+      if (frameAsset != null) {
+        final data = await rootBundle.load(frameAsset);
+        final decodedFrame = img.decodeImage(data.buffer.asUint8List());
+        if (decodedFrame != null) {
+          decorativeFrame = img.copyResize(
+            decodedFrame,
+            width: w,
+            height: h,
+            interpolation: img.Interpolation.linear,
+          );
+        }
+      }
+
+      img.Image? overlayPlate;
+      if (overlays.isNotEmpty) {
+        final blank = img.Image(width: w, height: h, numChannels: 4);
+        overlayPlate = await FrameCompositor.bakeOverlays(
+          base: blank,
+          frameAsset: null,
+          overlays: List.of(overlays),
+        );
+      }
+
+      // Decode+resize each FX jpeg once; reuse across timeline frames.
+      final fxCache = List<img.Image?>.filled(effectFrameFiles.length, null);
+
       final frames = <File>[];
       var frameIndex = 0;
       final pairs = decoded.length - 1;
+      var lastProgressReport = -1;
 
       Future<img.Image> applyExportEffect(img.Image image) async {
         if (exportEffect == null || effectFrameFiles.isEmpty) return image;
@@ -2553,9 +2597,21 @@ class SlideshowProject extends ChangeNotifier {
         final idx =
             (local * EffectOverlayService.previewFps).floor() %
             effectFrameFiles.length;
-        final fx = TransitionEngine.decode(
-          await effectFrameFiles[idx].readAsBytes(),
-        );
+        var fx = fxCache[idx];
+        if (fx == null) {
+          fx = TransitionEngine.decode(
+            await effectFrameFiles[idx].readAsBytes(),
+          );
+          if (fx != null && (fx.width != w || fx.height != h)) {
+            fx = img.copyResize(
+              fx,
+              width: w,
+              height: h,
+              interpolation: img.Interpolation.linear,
+            );
+          }
+          fxCache[idx] = fx;
+        }
         if (fx == null) return image;
         return EffectOverlayService.compose(
           image,
@@ -2566,14 +2622,14 @@ class SlideshowProject extends ChangeNotifier {
 
       Future<void> writeFrame(img.Image image) async {
         // Live stack: photo → decorative frame → FX → text.
-        var out = await _finalize(image, includeTextOverlays: false);
+        // Text/frame are prebaked — only composite (no Flutter canvas per frame).
+        var out = img.Image.from(image);
+        if (decorativeFrame != null) {
+          img.compositeImage(out, decorativeFrame);
+        }
         out = await applyExportEffect(out);
-        if (overlays.isNotEmpty) {
-          out = await FrameCompositor.bakeOverlays(
-            base: out,
-            frameAsset: null,
-            overlays: List.of(overlays),
-          );
+        if (overlayPlate != null) {
+          img.compositeImage(out, overlayPlate);
         }
         final file = File(
           p.join(
@@ -2581,7 +2637,7 @@ class SlideshowProject extends ChangeNotifier {
             'img${frameIndex.toString().padLeft(5, '0')}.jpg',
           ),
         );
-        await file.writeAsBytes(TransitionEngine.encodeJpeg(out, quality: 82));
+        await file.writeAsBytes(TransitionEngine.encodeJpeg(out, quality: 78));
         frames.add(file);
         frameIndex++;
       }
@@ -2589,15 +2645,7 @@ class SlideshowProject extends ChangeNotifier {
       // Starting title card
       var introFrames = 0;
       if (startingCard != null) {
-        final cardImg = await FrameCompositor.makeTitleCard(
-          card: startingCard!,
-          w: w,
-          h: h,
-        );
         introFrames = frameCountForDuration(startingCard!.durationSec);
-        for (var i = 0; i < introFrames; i++) {
-          await writeFrame(cardImg);
-        }
       }
 
       final endingFrames = endingCard == null
@@ -2610,6 +2658,28 @@ class SlideshowProject extends ChangeNotifier {
             (total, photo) => total + frameCountForDuration(photo.durationSec),
           ) +
           endingFrames;
+
+      void reportProgress() {
+        if (totalFramesEstimate <= 0) return;
+        final pct = ((frameIndex / totalFramesEstimate) * 100).floor();
+        if (pct == lastProgressReport) return;
+        lastProgressReport = pct;
+        processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
+        onProgress?.call(processProgress);
+      }
+
+      if (startingCard != null) {
+        final cardImg = await FrameCompositor.makeTitleCard(
+          card: startingCard!,
+          w: w,
+          h: h,
+        );
+        for (var i = 0; i < introFrames; i++) {
+          await writeFrame(cardImg);
+          reportProgress();
+        }
+      }
+
       final effect = selectedSlideTransition.type;
       final option = selectedSlideTransition;
 
@@ -2636,8 +2706,7 @@ class SlideshowProject extends ChangeNotifier {
               layers: photoLayers[i],
             ),
           );
-          processProgress = (frameIndex / totalFramesEstimate).clamp(0.0, 1.0);
-          onProgress?.call(processProgress);
+          reportProgress();
         }
 
         if (transitionFrames > 0) {
@@ -2667,16 +2736,7 @@ class SlideshowProject extends ChangeNotifier {
               pivotNy: option.pivotNy,
             );
             await writeFrame(blended);
-            processProgress = (frameIndex / totalFramesEstimate).clamp(
-              0.0,
-              1.0,
-            );
-            onProgress?.call(processProgress);
-            if (t % 3 == 0) {
-              previewFrameBytes = await frames.last.readAsBytes();
-              previewFrameIndex = frameIndex - 1;
-              notifyListeners();
-            }
+            reportProgress();
           }
         }
       }

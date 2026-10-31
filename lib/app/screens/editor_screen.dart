@@ -152,7 +152,9 @@ class _EditorScreenState extends State<EditorScreen>
       final project = context.read<SlideshowProject>();
       await project.refreshLivePreview();
       if (!mounted) return;
-      // Default slide warms when Slide sheet opens (with loading UI).
+      // Start preview bake immediately so first Play is not a silent no-op.
+      unawaited(project.warmPreviewCache());
+      // Gallery only copied thumbs — upgrade to sharp, then quiet re-warm.
       unawaited(project.sharpenPhotoSources());
     });
   }
@@ -554,10 +556,9 @@ class _EditorScreenState extends State<EditorScreen>
 
   /// Idle editor chrome: time + play + undo/redo (same slot as slide headerRow).
   Widget _idlePreviewRow(SlideshowProject project) {
-    final disabled =
-        project.isProcessing ||
-        project.isPreparingPreview ||
-        _finishingPhotoEdits;
+    // Keep Play tappable while baking — tap waits for frames (shows Lottie).
+    final disabled = project.isProcessing || _finishingPhotoEdits;
+    final waiting = project.isPreparingPreview;
     return Row(
       children: [
         SizedBox(
@@ -578,7 +579,7 @@ class _EditorScreenState extends State<EditorScreen>
                     : Icons.play_arrow_rounded,
               ),
               iconSize: 32,
-              color: disabled ? Colors.black26 : Colors.black87,
+              color: (disabled || waiting) ? Colors.black26 : Colors.black87,
             ),
           ),
         ),

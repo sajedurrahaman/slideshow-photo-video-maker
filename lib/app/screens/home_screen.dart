@@ -133,288 +133,300 @@ class _HomeScreenState extends State<HomeScreen> {
     final visibleDrafts = _drafts.take(3).toList();
     final heroCacheW = _imageCacheWidth(context);
 
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: Colors.white,
-        body: RefreshIndicator(
-          onRefresh: _loadDrafts,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: SizedBox(
-                  height: 280 + topInset,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned.fill(
-                        child: PageView.builder(
-                          controller: _heroPageController,
-                          itemCount: _heroSlides.length,
-                          onPageChanged: (i) => setState(() => _heroIndex = i),
-                          itemBuilder: (context, index) {
-                            return Image.asset(
-                              _heroSlides[index],
-                              fit: BoxFit.cover,
-                              cacheWidth: heroCacheW,
-                              filterQuality: FilterQuality.medium,
-                              errorBuilder: (_, _, _) => Container(
-                                decoration: const BoxDecoration(
+        body: Column(
+          children: [
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _loadDrafts,
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: SizedBox(
+                        height: 280 + topInset,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Positioned.fill(
+                              child: PageView.builder(
+                                controller: _heroPageController,
+                                itemCount: _heroSlides.length,
+                                onPageChanged: (i) =>
+                                    setState(() => _heroIndex = i),
+                                itemBuilder: (context, index) {
+                                  return Image.asset(
+                                    _heroSlides[index],
+                                    fit: BoxFit.cover,
+                                    cacheWidth: heroCacheW,
+                                    filterQuality: FilterQuality.medium,
+                                    errorBuilder: (_, _, _) => Container(
+                                      decoration: const BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                          colors: [
+                                            Color(0xFF1A1035),
+                                            Color(0xFF4A148C),
+                                            Color(0xFF00BCD4),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 88,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: List.generate(_heroSlides.length, (i) {
+                                  final active = i == _heroIndex;
+                                  return AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    margin: const EdgeInsets.symmetric(
+                                      horizontal: 3,
+                                    ),
+                                    width: active ? 16 : 6,
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                      color: active
+                                          ? Colors.white
+                                          : Colors.white.withValues(alpha: 0.45),
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                  );
+                                }),
+                              ),
+                            ),
+                            // Soft fade into white content
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              height: 72,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
                                   gradient: LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
                                     colors: [
-                                      Color(0xFF1A1035),
-                                      Color(0xFF4A148C),
-                                      Color(0xFF00BCD4),
+                                      Colors.white.withValues(alpha: 0),
+                                      Colors.white,
                                     ],
                                   ),
                                 ),
                               ),
-                            );
-                          },
-                        ),
-                      ),
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 88,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: List.generate(_heroSlides.length, (i) {
-                            final active = i == _heroIndex;
-                            return AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              margin: const EdgeInsets.symmetric(horizontal: 3),
-                              width: active ? 16 : 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                color: active
-                                    ? Colors.white
-                                    : Colors.white.withValues(alpha: 0.45),
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                      // Soft fade into white content
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: 72,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.white.withValues(alpha: 0),
-                                Colors.white,
-                              ],
                             ),
-                          ),
-                        ),
-                      ),
-                      // Slideshow + Studio (Figma image buttons)
-                      Positioned(
-                        left: 14,
-                        right: 14,
-                        bottom: 4,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Expanded(
-                              child: _HomeHeroImageButton(
-                                backgroundAsset:
-                                    'assets/images/slideshowbutton.png',
-                                iconAsset: 'assets/images/slideshow.png',
-                                cacheWidth: heroCacheW ~/ 2,
-                                onTap: () => context.push('/gallery'),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: _HomeHeroImageButton(
-                                backgroundAsset:
-                                    'assets/images/studiobutton.png',
-                                iconAsset: 'assets/images/studio.png',
-                                iconWidth: 72,
-                                iconTop: -28,
-                                cacheWidth: heroCacheW ~/ 2,
-                                onTap: () => context.push('/creations'),
+                            // Slideshow + Studio (Figma image buttons)
+                            Positioned(
+                              left: 14,
+                              right: 14,
+                              bottom: 4,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Expanded(
+                                    child: _HomeHeroImageButton(
+                                      backgroundAsset:
+                                          'assets/images/slideshowbutton.png',
+                                      iconAsset: 'assets/images/slideshow.png',
+                                      cacheWidth: heroCacheW ~/ 2,
+                                      onTap: () => context.push('/gallery'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: _HomeHeroImageButton(
+                                      backgroundAsset:
+                                          'assets/images/studiobutton.png',
+                                      iconAsset: 'assets/images/studio.png',
+                                      iconWidth: 72,
+                                      iconTop: -28,
+                                      cacheWidth: heroCacheW ~/ 2,
+                                      onTap: () => context.push('/creations'),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 4,
-                        height: 18,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1A237E),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Drafts',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF1A237E),
-                        ),
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => context.push('/creations'),
-                        style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF1A237E),
-                          padding: EdgeInsets.zero,
-                          minimumSize: const Size(0, 32),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text(
-                          'View All >',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (_loading)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                )
-              else if (visibleDrafts.isEmpty)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
-                    child: Text(
-                      'No drafts yet. Create a slideshow to see it here.',
-                      style: TextStyle(color: Color(0xFF9E9E9E), fontSize: 13),
                     ),
-                  ),
-                )
-              else
-                SliverList(
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    final file = visibleDrafts[index];
-                    return _DraftTile(
-                      file: file,
-                      onTap: () => _playDraft(file),
-                      onDelete: () => _deleteDraft(file),
-                      onShare: () {
-                        SharePlus.instance.share(
-                          ShareParams(files: [XFile(file.path)]),
-                        );
-                      },
-                    );
-                  }, childCount: visibleDrafts.length),
-                ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _OutlineActionButton(
-                          label: 'Rate Us',
-                          icon: Icons.star_rounded,
-                          color: const Color(0xFFFF9800),
-                          onTap: _rateUs,
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1A237E),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Drafts',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF1A237E),
+                              ),
+                            ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: () => context.push('/creations'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: const Color(0xFF1A237E),
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 32),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text(
+                                'View All >',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _OutlineActionButton(
-                          label: 'Share Now',
-                          icon: Icons.share_rounded,
-                          color: const Color(0xFF4CAF50),
-                          onTap: _shareApp,
+                    ),
+                    if (_loading)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Center(child: CircularProgressIndicator()),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    24,
-                    4,
-                    24,
-                    20 + MediaQuery.paddingOf(context).bottom,
-                  ),
-                  child: Wrap(
-                    alignment: WrapAlignment.center,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      const Text(
-                        'By Continuing you agree to the ',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF616161),
-                          height: 1.4,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () => _openUrl(
-                          'https://sites.google.com/view/graphicscycle/home',
-                        ),
-                        child: const Text(
-                          'Terms and service',
-                          style: TextStyle(
-                            color: Color(0xFFE53935),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                      )
+                    else if (visibleDrafts.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+                          child: Text(
+                            'No drafts yet. Create a slideshow to see it here.',
+                            style: TextStyle(
+                              color: Color(0xFF9E9E9E),
+                              fontSize: 13,
+                            ),
                           ),
                         ),
+                      )
+                    else
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate((context, index) {
+                          final file = visibleDrafts[index];
+                          return _DraftTile(
+                            file: file,
+                            onTap: () => _playDraft(file),
+                            onDelete: () => _deleteDraft(file),
+                            onShare: () {
+                              SharePlus.instance.share(
+                                ShareParams(files: [XFile(file.path)]),
+                              );
+                            },
+                          );
+                        }, childCount: visibleDrafts.length),
                       ),
-                      const Text(
-                        ' & ',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF616161),
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () => _openUrl(
-                          'https://sites.google.com/view/graphicscycle/home',
-                        ),
-                        child: const Text(
-                          'privacy policy',
-                          style: TextStyle(
-                            color: Color(0xFFE53935),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+            // Always pinned to device bottom (above system nav inset).
+            ColoredBox(
+              color: Colors.white,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + bottomInset),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _OutlineActionButton(
+                            label: 'Rate Us',
+                            icon: Icons.star_rounded,
+                            color: const Color(0xFFFF9800),
+                            onTap: _rateUs,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _OutlineActionButton(
+                            label: 'Share Now',
+                            icon: Icons.share_rounded,
+                            color: const Color(0xFF4CAF50),
+                            onTap: _shareApp,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        const Text(
+                          'By Continuing you agree to the ',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF616161),
+                            height: 1.4,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => _openUrl(
+                            'https://sites.google.com/view/graphicscycle/home',
+                          ),
+                          child: const Text(
+                            'Terms and service',
+                            style: TextStyle(
+                              color: Color(0xFFE53935),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const Text(
+                          ' & ',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF616161),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => _openUrl(
+                            'https://sites.google.com/view/graphicscycle/home',
+                          ),
+                          child: const Text(
+                            'privacy policy',
+                            style: TextStyle(
+                              color: Color(0xFFE53935),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
