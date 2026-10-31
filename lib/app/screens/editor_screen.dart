@@ -149,9 +149,7 @@ class _EditorScreenState extends State<EditorScreen>
       final project = context.read<SlideshowProject>();
       await project.refreshLivePreview();
       if (!mounted) return;
-      // Default None timeline must be ready before sharpen races the cache.
-      await project.warmPreviewCache();
-      if (!mounted) return;
+      // Default slide warms when Slide sheet opens (with loading UI).
       unawaited(project.sharpenPhotoSources());
     });
   }
@@ -555,33 +553,57 @@ class _EditorScreenState extends State<EditorScreen>
         ),
         SizedBox(
           width: 96,
-          child: project.selectedPhotoIndex == null
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      onPressed: project.canUndo ? () => project.undo() : null,
-                      icon: Icon(
-                        Icons.undo_rounded,
-                        color: project.canUndo
-                            ? Colors.black87
-                            : Colors.black26,
-                      ),
-                    ),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      onPressed: project.canRedo ? () => project.redo() : null,
-                      icon: Icon(
-                        Icons.redo_rounded,
-                        color: project.canRedo
-                            ? Colors.black87
-                            : Colors.black26,
-                      ),
-                    ),
-                  ],
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (project.selectedPhotoIndex != null)
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  onPressed: () {
+                    setState(() {
+                      _photoTool = null;
+                      _tool = null;
+                      _liveMode = _LiveMode.idle;
+                    });
+                    project.clearTimelinePhotoSelection();
+                  },
+                  icon: const Icon(
+                    Icons.check,
+                    color: AppColors.primary,
+                  ),
                 )
-              : null,
+              else if (_effectsToolsOpen || _musicToolsOpen)
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  onPressed: _effectsToolsOpen
+                      ? _closeEffectsTools
+                      : _closeMusicTools,
+                  icon: const Icon(
+                    Icons.check,
+                    color: AppColors.primary,
+                  ),
+                )
+              else if (_tool != EditorTool.slide &&
+                  _tool != EditorTool.effects) ...[
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  onPressed: project.canUndo ? () => project.undo() : null,
+                  icon: Icon(
+                    Icons.undo_rounded,
+                    color: project.canUndo ? Colors.black87 : Colors.black26,
+                  ),
+                ),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  onPressed: project.canRedo ? () => project.redo() : null,
+                  icon: Icon(
+                    Icons.redo_rounded,
+                    color: project.canRedo ? Colors.black87 : Colors.black26,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ],
     );
@@ -813,10 +835,9 @@ class _EditorScreenState extends State<EditorScreen>
                                           _tool = EditorTool.slide;
                                           _photoTool = null;
                                         });
-                                        if (!project.isPreviewReady &&
-                                            !project.isPreparingPreview) {
-                                          unawaited(project.warmPreviewCache());
-                                        }
+                                        unawaited(
+                                          project.prepareDefaultSlideForSheet(),
+                                        );
                                       },
                                       child: Container(
                                         width: _transitionMarkerSize,
@@ -1195,10 +1216,8 @@ class _EditorScreenState extends State<EditorScreen>
                   if (t == EditorTool.slide) {
                     final p = context.read<SlideshowProject>();
                     p.clearTimelinePhotoSelection();
-                    // Quiet warm only — never full rebake (OOM after text add).
-                    if (!p.isPreviewReady && !p.isPreparingPreview) {
-                      unawaited(p.warmPreviewCache());
-                    }
+                    // First open: Lottie until default None is ready.
+                    unawaited(p.prepareDefaultSlideForSheet());
                   }
                 },
               ),
@@ -2630,40 +2649,13 @@ class _EditorScreenState extends State<EditorScreen>
       appBar: AppBar(
         title: const Text('Editor'),
         actions: [
-          if (_textToolsOpen)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: TealPillButton(label: 'Done', onPressed: _closeTextTools),
-            )
-          else if (project.selectedPhotoIndex != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: TealPillButton(
-                label: 'Done',
-                onPressed: () {
-                  setState(() {
-                    _photoTool = null;
-                    _tool = null;
-                    _liveMode = _LiveMode.idle;
-                  });
-                  project.clearTimelinePhotoSelection();
-                },
-              ),
-            )
-          else if (_musicToolsOpen)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: TealPillButton(label: 'Done', onPressed: _closeMusicTools),
-            )
-          else if (_effectsToolsOpen)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: TealPillButton(
-                label: 'Done',
-                onPressed: _closeEffectsTools,
-              ),
-            )
-          else if (_tool != EditorTool.frame &&
+          // Photo/Music/Effects: Done check sits in timeline header — not AppBar.
+          if (!_textToolsOpen &&
+              project.selectedPhotoIndex == null &&
+              !_musicToolsOpen &&
+              !_effectsToolsOpen &&
+              _tool != EditorTool.slide &&
+              _tool != EditorTool.frame &&
               _tool != EditorTool.music &&
               _tool != EditorTool.effects &&
               !_musicEditOpen)
@@ -5306,6 +5298,19 @@ class _SlideTransitions extends StatelessWidget {
         final selected = option.id == selectedId;
         return GestureDetector(
           onTap: () {
+            if (project.isSlideEffectBusy) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'A slide effect is already rendering. Please wait.',
+                    ),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              return;
+            }
             project.selectSlideTransition(option);
             onChanged();
           },

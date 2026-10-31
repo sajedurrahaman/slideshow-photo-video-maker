@@ -899,7 +899,14 @@ class SlideshowProject extends ChangeNotifier {
     return local;
   }
 
+  /// True while default warm / effect strip bake is running (block other taps).
+  bool get isSlideEffectBusy =>
+      isPreparingPreview || _isWarmingPreviewCache;
+
   void selectSlideTransition(SlideTransitionOption option) {
+    // Caller should toast when busy — do not switch mid-render.
+    if (isSlideEffectBusy) return;
+
     if (selectedSlideTransition.id == option.id) {
       if (isPreviewReady && _previewMemoryFrames.isNotEmpty) {
         unawaited(_playFirstTransitionDemo());
@@ -1032,26 +1039,40 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
-  /// Editor open: quietly ready **default (None)** slide so Play works with
-  /// no Lottie. Other effects cache all strips only after the user taps them.
-  Future<void> warmPreviewCache() async {
+  /// Editor open / background: quietly ready default (None) — no Lottie.
+  Future<void> warmPreviewCache({bool showLoading = false}) async {
     if (_isWarmingPreviewCache ||
         isProcessing ||
         photos.length < AppConstants.minPhotos) {
       return _defaultWarmCompleter?.future ?? Future<void>.value();
     }
 
+    // Already have default base — nothing to show.
+    if (!showLoading &&
+        _previewBaseMemoryFrames.isNotEmpty &&
+        _previewBaseCacheKey == _buildPreviewBaseCacheKey() &&
+        isPreviewReady) {
+      return;
+    }
+
     _isWarmingPreviewCache = true;
     _defaultWarmCompleter = Completer<void>();
+    if (showLoading) {
+      isPreparingPreview = true;
+      notifyListeners();
+    }
     try {
       await _ensureDefaultNonePreviewReady();
-      // If user already picked a non-default effect, finish its strip cache.
       final def = selectedSlideTransition;
       if (def.type != SlideTransitionType.none && photos.length >= 2) {
         await _cacheAllStripsForEffect(def);
       }
     } finally {
       _isWarmingPreviewCache = false;
+      if (showLoading) {
+        isPreparingPreview = false;
+        notifyListeners();
+      }
       final c = _defaultWarmCompleter;
       _defaultWarmCompleter = null;
       if (c != null && !c.isCompleted) c.complete();
@@ -1060,6 +1081,21 @@ class SlideshowProject extends ChangeNotifier {
         unawaited(warmPreviewCache());
       }
     }
+  }
+
+  /// First open of Slide sheet: show Lottie until default None is ready.
+  Future<void> prepareDefaultSlideForSheet() async {
+    if (photos.length < AppConstants.minPhotos || isProcessing) return;
+    if (_previewBaseMemoryFrames.isNotEmpty &&
+        _previewBaseCacheKey == _buildPreviewBaseCacheKey() &&
+        (_previewMemoryFrames.isNotEmpty || isPreviewReady)) {
+      // Ensure working frames are the clean default if None is selected.
+      if (selectedSlideTransition.type == SlideTransitionType.none) {
+        _restoreDefaultNoneFrames();
+      }
+      return;
+    }
+    await warmPreviewCache(showLoading: true);
   }
 
   /// Default red-mark "None" timeline (hold frames for A→B→C→…).
