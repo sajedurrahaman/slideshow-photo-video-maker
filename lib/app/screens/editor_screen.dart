@@ -613,7 +613,8 @@ class _EditorScreenState extends State<EditorScreen>
                   _tool != EditorTool.effects &&
                   _tool != EditorTool.music &&
                   _tool != EditorTool.ratio &&
-                  _tool != EditorTool.bg) ...[
+                  _tool != EditorTool.bg &&
+                  _tool != EditorTool.frame) ...[
                 IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: project.canUndo ? () => project.undo() : null,
