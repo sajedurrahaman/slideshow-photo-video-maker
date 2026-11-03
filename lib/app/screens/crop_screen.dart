@@ -628,33 +628,38 @@ class _CropScreenState extends State<CropScreen> {
                     final choice = _ratios[index];
                     final selected = choice.id == _presetId;
                     final color = selected
-                        ? AppColors.primary
+                        ? Colors.white
                         : const Color(0xFF8E8E8E);
+                    final mark = SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: CustomPaint(
+                        painter: _RatioMarkPainter(choice.mark, color),
+                      ),
+                    );
+                    final label = Text(
+                      choice.label,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    );
                     return GestureDetector(
                       onTap: () => setState(() => _select(choice)),
                       child: SizedBox(
                         width: 44,
                         child: Column(
                           children: [
-                            SizedBox(
-                              width: 32,
-                              height: 32,
-                              child: CustomPaint(
-                                painter: _RatioMarkPainter(choice.mark, color),
-                              ),
-                            ),
+                            selected
+                                ? PrimaryGradientMask(child: mark)
+                                : mark,
                             const SizedBox(height: 6),
-                            Text(
-                              choice.label,
-                              maxLines: 1,
-                              style: TextStyle(
-                                color: color,
-                                fontSize: 11,
-                                fontWeight: selected
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                              ),
-                            ),
+                            selected
+                                ? PrimaryGradientMask(child: label)
+                                : label,
                           ],
                         ),
                       ),

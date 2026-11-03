@@ -70,7 +70,43 @@ class EditorToolIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? AppColors.primary : AppColors.iconNormal;
+    final muted = AppColors.iconNormal;
+    Widget iconWidget;
+    if (assetPath != null) {
+      iconWidget = Image.asset(
+        assetPath!,
+        width: 24,
+        height: 24,
+        fit: BoxFit.contain,
+        color: selected ? Colors.white : muted,
+        errorBuilder: (_, _, _) => Icon(
+          icon ?? Icons.extension_outlined,
+          color: selected ? Colors.white : muted,
+          size: 24,
+        ),
+      );
+    } else {
+      iconWidget = Icon(
+        icon!,
+        color: selected ? Colors.white : muted,
+        size: 24,
+      );
+    }
+    if (selected) {
+      iconWidget = PrimaryGradientMask(child: iconWidget);
+    }
+
+    final labelWidget = Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        color: selected ? Colors.white : muted,
+      ),
+    );
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(10),
@@ -79,34 +115,12 @@ class EditorToolIcon extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (assetPath != null)
-              ColorFiltered(
-                colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-                child: Image.asset(
-                  assetPath!,
-                  width: 24,
-                  height: 24,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => Icon(
-                    icon ?? Icons.extension_outlined,
-                    color: color,
-                    size: 24,
-                  ),
-                ),
-              )
-            else
-              Icon(icon!, color: color, size: 24),
+            iconWidget,
             const SizedBox(height: 4),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: color,
-              ),
-            ),
+            if (selected)
+              PrimaryGradientMask(child: labelWidget)
+            else
+              labelWidget,
           ],
         ),
       ),

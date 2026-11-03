@@ -2175,33 +2175,31 @@ class _EditorScreenState extends State<EditorScreen>
                   width: 78,
                   child: Column(
                     children: [
-                      Container(
+                      SizedBox(
                         width: thumb,
                         height: thumb,
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: isSelected
-                                ? AppColors.primary
-                                : Colors.transparent,
-                            width: 2,
-                          ),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: animation == PhotoAnimationType.none
-                            ? const ColoredBox(
-                                color: Color(0xFFF2F2F2),
-                                child: Center(
-                                  child: Icon(
-                                    Icons.block,
-                                    color: Color(0xFF9E9E9E),
-                                    size: 28,
+                        child: PrimarySelectedBorder(
+                          selected: isSelected,
+                          borderRadius: 4,
+                          width: 2,
+                          unselectedColor: Colors.transparent,
+                          unselectedWidth: 0,
+                          child: animation == PhotoAnimationType.none
+                              ? const ColoredBox(
+                                  color: Color(0xFFF2F2F2),
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.block,
+                                      color: Color(0xFF9E9E9E),
+                                      size: 28,
+                                    ),
                                   ),
+                                )
+                              : _MotionThumb(
+                                  type: animation,
+                                  phase: _animationPhase,
                                 ),
-                              )
-                            : _MotionThumb(
-                                type: animation,
-                                phase: _animationPhase,
-                              ),
+                        ),
                       ),
                       const SizedBox(height: 1),
                       Text(
@@ -2451,33 +2449,38 @@ class _EditorScreenState extends State<EditorScreen>
             width: 64,
             child: Column(
               children: [
-                Container(
+                SizedBox(
                   width: 58,
                   height: 58,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF3F3F3),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: selected
-                          ? AppColors.primary
-                          : const Color(0xFFE0E0E0),
-                      width: selected ? 2 : 1,
-                    ),
+                  child: PrimarySelectedBorder(
+                    selected: selected,
+                    borderRadius: 10,
+                    width: 2,
+                    unselectedColor: const Color(0xFFE0E0E0),
+                    backgroundColor: const Color(0xFFF3F3F3),
+                    child: Center(child: _ratioGlyph(preset.ratio)),
                   ),
-                  child: _ratioGlyph(preset.ratio),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  preset.label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: selected
-                        ? AppColors.primaryDark
-                        : AppColors.textDark,
-                  ),
-                ),
+                selected
+                    ? PrimaryGradientMask(
+                        child: Text(
+                          preset.label,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      )
+                    : Text(
+                        preset.label,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textDark,
+                        ),
+                      ),
               ],
             ),
           ),
@@ -2589,18 +2592,17 @@ class _EditorScreenState extends State<EditorScreen>
                     );
                   }
                 },
-                child: Container(
+                child: SizedBox(
                   width: compact ? 34 : 32,
                   height: compact ? 28 : 32,
-                  decoration: BoxDecoration(
-                    color: Color(color),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: selected
-                          ? AppColors.primary
-                          : const Color(0xFFBDBDBD),
-                      width: selected ? 2 : 0.6,
-                    ),
+                  child: PrimarySelectedBorder(
+                    selected: selected,
+                    borderRadius: 4,
+                    width: 2,
+                    unselectedColor: const Color(0xFFBDBDBD),
+                    unselectedWidth: 0.6,
+                    backgroundColor: Color(color),
+                    child: const SizedBox.expand(),
                   ),
                 ),
               );
@@ -2629,17 +2631,16 @@ class _EditorScreenState extends State<EditorScreen>
     }
     return GestureDetector(
       onTap: onTap,
-      child: Container(
+      child: SizedBox(
         width: 48,
         height: 48,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? AppColors.primary : const Color(0xFFBDBDBD),
-            width: selected ? 2 : 1,
-          ),
+        child: PrimarySelectedBorder(
+          selected: selected,
+          borderRadius: 8,
+          width: 2,
+          unselectedColor: const Color(0xFFBDBDBD),
+          child: image,
         ),
-        child: ClipRRect(borderRadius: BorderRadius.circular(7), child: image),
       ),
     );
   }
@@ -2671,18 +2672,22 @@ class _EditorScreenState extends State<EditorScreen>
                 ? photo.copyWith(clearCropAspectRatio: true)
                 : photo.copyWith(cropAspectRatio: option.ratio),
           ),
-          child: Container(
-            width: 68,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: selected ? AppColors.primarySoft : Colors.white,
-              border: Border.all(
-                color: selected ? AppColors.primary : AppColors.border,
-                width: selected ? 2 : 1,
+          child: PrimarySelectedFill(
+            selected: selected,
+            borderRadius: 8,
+            child: SizedBox(
+              width: 68,
+              child: Center(
+                child: Text(
+                  option.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? Colors.white : AppColors.textDark,
+                  ),
+                ),
               ),
-              borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(option.label, style: const TextStyle(fontSize: 12)),
           ),
         );
       },
@@ -5320,12 +5325,6 @@ class _MusicSourceButton extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  static const _selectedGradient = LinearGradient(
-    colors: [Color(0xFF4DD0E1), Color(0xFF42A5F5)],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
-
   @override
   Widget build(BuildContext context) {
     final fg = selected ? Colors.white : AppColors.textDark;
@@ -5336,7 +5335,7 @@ class _MusicSourceButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         child: Ink(
           decoration: BoxDecoration(
-            gradient: selected ? _selectedGradient : null,
+            gradient: selected ? AppColors.primaryGradient : null,
             color: selected ? null : const Color(0xFFEDEFFB),
             borderRadius: BorderRadius.circular(999),
           ),
@@ -5387,9 +5386,8 @@ class _MusicThumbTile extends StatelessWidget {
         child: Column(
           children: [
             Expanded(
-              child: Container(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: Colors.white,
                   borderRadius: BorderRadius.circular(10),
                   boxShadow: [
                     BoxShadow(
@@ -5399,28 +5397,40 @@ class _MusicThumbTile extends StatelessWidget {
                       spreadRadius: 0,
                     ),
                   ],
-                  border: Border.all(
-                    color: selected ? AppColors.primary : AppColors.border,
-                    width: selected ? 2 : 1,
-                  ),
                 ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(9),
+                child: PrimarySelectedBorder(
+                  selected: selected,
+                  borderRadius: 10,
+                  width: 2,
+                  backgroundColor: Colors.white,
                   child: child,
                 ),
               ),
             ),
             const SizedBox(height: 6),
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: selected ? AppColors.primary : AppColors.textMuted,
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
+            selected
+                ? PrimaryGradientMask(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                : Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
           ],
         ),
       ),
@@ -5439,7 +5449,6 @@ class _SlideTransitions extends StatelessWidget {
   Widget build(BuildContext context) {
     final options = SlideTransitionOption.all;
     final selectedId = project.selectedSlideTransition.id;
-    const accent = Color(0xFF4FC3F7);
 
     return ListView.separated(
       scrollDirection: Axis.horizontal,
@@ -5449,6 +5458,15 @@ class _SlideTransitions extends StatelessWidget {
       itemBuilder: (context, i) {
         final option = options[i];
         final selected = option.id == selectedId;
+        final thumb = Image.asset(
+          option.isNone
+              ? 'assets/images/editor/transitions/default.png'
+              : option.assetPath!,
+          fit: BoxFit.contain,
+          color: selected ? Colors.white : null,
+          colorBlendMode: selected ? BlendMode.srcIn : null,
+          filterQuality: FilterQuality.medium,
+        );
         return GestureDetector(
           onTap: () {
             if (project.isSlideEffectBusy) {
@@ -5471,15 +5489,7 @@ class _SlideTransitions extends StatelessWidget {
             duration: const Duration(milliseconds: 160),
             width: 68,
             height: 68,
-            child: Image.asset(
-              option.isNone
-                  ? 'assets/images/editor/transitions/default.png'
-                  : option.assetPath!,
-              fit: BoxFit.contain,
-              color: selected ? accent : null,
-              colorBlendMode: selected ? BlendMode.srcIn : null,
-              filterQuality: FilterQuality.medium,
-            ),
+            child: selected ? PrimaryGradientMask(child: thumb) : thumb,
           ),
         );
       },
@@ -5591,36 +5601,47 @@ class _EffectOverlayTile extends StatelessWidget {
         width: 88,
         child: Column(
           children: [
-            Container(
+            SizedBox(
               width: 88,
               height: 72,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(2),
-                border: Border.all(
-                  color: selected ? AppColors.primary : AppColors.border,
-                  width: selected ? 2 : 1,
+              child: PrimarySelectedBorder(
+                selected: selected,
+                borderRadius: 2,
+                width: 2,
+                backgroundColor: Colors.black,
+                child: _EffectLoopPreview(
+                  assetPath: effect.assetPath,
+                  thumbPath: effect.thumbPath,
+                  playing: playing,
                 ),
-                color: Colors.black,
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: _EffectLoopPreview(
-                assetPath: effect.assetPath,
-                thumbPath: effect.thumbPath,
-                playing: playing,
               ),
             ),
             const SizedBox(height: 6),
-            Text(
-              effect.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-                color: selected ? AppColors.primaryDark : AppColors.textDark,
-              ),
-            ),
+            selected
+                ? PrimaryGradientMask(
+                    child: Text(
+                      effect.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        color: Colors.white,
+                      ),
+                    ),
+                  )
+                : Text(
+                    effect.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                      color: AppColors.textDark,
+                    ),
+                  ),
           ],
         ),
       ),
@@ -5745,7 +5766,6 @@ class _FramePanel extends StatelessWidget {
   final SlideshowProject project;
   final VoidCallback onChanged;
 
-  static const _accent = Color(0xFF00C6D7);
   static const _muted = Color(0xFF9E9E9E);
   static const _tile = 72.0;
 
@@ -5800,8 +5820,6 @@ class _FramePanel extends StatelessWidget {
     required VoidCallback onTap,
     required Widget child,
   }) {
-    final borderColor = selected ? _accent : const Color(0xFFD0D0D0);
-    final labelColor = selected ? _accent : _muted;
     return GestureDetector(
       onTap: onTap,
       child: SizedBox(
@@ -5813,15 +5831,12 @@ class _FramePanel extends StatelessWidget {
                 clipBehavior: Clip.none,
                 children: [
                   Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: borderColor,
-                          width: selected ? 2 : 1,
-                        ),
-                      ),
+                    child: PrimarySelectedBorder(
+                      selected: selected,
+                      borderRadius: 10,
+                      width: 2,
+                      unselectedColor: const Color(0xFFD0D0D0),
+                      backgroundColor: Colors.white,
                       child: child,
                     ),
                   ),
@@ -5833,7 +5848,7 @@ class _FramePanel extends StatelessWidget {
                         width: 20,
                         height: 20,
                         decoration: const BoxDecoration(
-                          color: _accent,
+                          gradient: AppColors.primaryGradient,
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(
@@ -5847,16 +5862,29 @@ class _FramePanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 2),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: labelColor,
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
+            selected
+                ? PrimaryGradientMask(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                : Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _muted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
           ],
         ),
       ),
@@ -5886,32 +5914,49 @@ class _FilterPanel extends StatelessWidget {
           },
           child: Column(
             children: [
-              Container(
+              SizedBox(
                 width: 64,
                 height: 64,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  color: AppColors.surfaceAlt,
-                  border: Border.all(
-                    color: selected ? AppColors.primary : AppColors.border,
-                    width: selected ? 2 : 1,
+                child: PrimarySelectedBorder(
+                  selected: selected,
+                  borderRadius: 10,
+                  width: 2,
+                  backgroundColor: AppColors.surfaceAlt,
+                  child: Center(
+                    child: selected
+                        ? const PrimaryGradientMask(
+                            child: Icon(
+                              Icons.filter,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.filter,
+                            color: AppColors.iconNormal,
+                          ),
                   ),
-                ),
-                child: Icon(
-                  Icons.filter,
-                  color: selected ? AppColors.primary : AppColors.iconNormal,
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                f.label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected ? AppColors.primary : AppColors.textDark,
-                ),
-              ),
+              selected
+                  ? PrimaryGradientMask(
+                      child: Text(
+                        f.label,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    )
+                  : Text(
+                      f.label,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textDark,
+                      ),
+                    ),
             ],
           ),
         );
@@ -5999,22 +6044,19 @@ class _RatioPanel extends StatelessWidget {
             project.setAspect(a);
             onChanged();
           },
-          child: Container(
-            width: 72,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: selected ? AppColors.primary : AppColors.border,
-                width: selected ? 2 : 1,
-              ),
-              color: selected ? AppColors.primarySoft : Colors.white,
-            ),
-            child: Text(
-              a.label,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: selected ? AppColors.primaryDark : AppColors.textDark,
+          child: PrimarySelectedFill(
+            selected: selected,
+            borderRadius: 10,
+            child: SizedBox(
+              width: 72,
+              child: Center(
+                child: Text(
+                  a.label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: selected ? Colors.white : AppColors.textDark,
+                  ),
+                ),
               ),
             ),
           ),
@@ -6046,16 +6088,15 @@ class _BgPanel extends StatelessWidget {
           },
           child: Column(
             children: [
-              Container(
+              SizedBox(
                 width: 48,
                 height: 48,
-                decoration: BoxDecoration(
-                  color: Color(bg.argb),
+                child: PrimarySelectedBorder(
+                  selected: selected,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: selected ? AppColors.primary : AppColors.border,
-                    width: selected ? 3 : 1,
-                  ),
+                  width: 3,
+                  backgroundColor: Color(bg.argb),
+                  child: const SizedBox.expand(),
                 ),
               ),
               const SizedBox(height: 6),

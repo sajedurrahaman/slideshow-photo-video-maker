@@ -103,6 +103,179 @@ class AppTheme {
   }
 }
 
+/// Gradient ring around a selected option tile / swatch.
+class PrimarySelectedBorder extends StatelessWidget {
+  const PrimarySelectedBorder({
+    super.key,
+    required this.selected,
+    required this.child,
+    this.borderRadius = 10,
+    this.width = 2.5,
+    this.unselectedColor = AppColors.border,
+    this.unselectedWidth = 1,
+    this.shape = BoxShape.rectangle,
+    this.backgroundColor,
+  });
+
+  final bool selected;
+  final Widget child;
+  final double borderRadius;
+  final double width;
+  final Color unselectedColor;
+  final double unselectedWidth;
+  final BoxShape shape;
+  final Color? backgroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    if (shape == BoxShape.circle) {
+      return Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: selected ? AppColors.primaryGradient : null,
+          border: selected
+              ? null
+              : Border.all(color: unselectedColor, width: unselectedWidth),
+        ),
+        padding: EdgeInsets.all(selected ? width : 0),
+        child: Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: backgroundColor,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: child,
+        ),
+      );
+    }
+
+    final outer = BorderRadius.circular(borderRadius);
+    final inner = BorderRadius.circular(
+      (borderRadius - (selected ? width : unselectedWidth)).clamp(0, borderRadius),
+    );
+
+    if (selected) {
+      return Container(
+        decoration: BoxDecoration(
+          gradient: AppColors.primaryGradient,
+          borderRadius: outer,
+        ),
+        padding: EdgeInsets.all(width),
+        child: Container(
+          decoration: BoxDecoration(
+            color: backgroundColor ?? Colors.white,
+            borderRadius: inner,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: child,
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: outer,
+        border: Border.all(color: unselectedColor, width: unselectedWidth),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    );
+  }
+}
+
+/// Fills with [AppColors.primaryGradient] when selected (chips / pills).
+class PrimarySelectedFill extends StatelessWidget {
+  const PrimarySelectedFill({
+    super.key,
+    required this.selected,
+    required this.child,
+    this.borderRadius = 10,
+    this.padding = EdgeInsets.zero,
+    this.unselectedColor = Colors.white,
+    this.alignment = Alignment.center,
+  });
+
+  final bool selected;
+  final Widget child;
+  final double borderRadius;
+  final EdgeInsetsGeometry padding;
+  final Color unselectedColor;
+  final AlignmentGeometry alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: padding,
+      alignment: alignment,
+      decoration: BoxDecoration(
+        gradient: selected ? AppColors.primaryGradient : null,
+        color: selected ? null : unselectedColor,
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: selected
+            ? null
+            : Border.all(color: AppColors.border),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Tints [child] with the primary linear gradient (icons / glyphs).
+class PrimaryGradientMask extends StatelessWidget {
+  const PrimaryGradientMask({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ShaderMask(
+      blendMode: BlendMode.srcIn,
+      shaderCallback: (bounds) =>
+          AppColors.primaryGradient.createShader(bounds),
+      child: child,
+    );
+  }
+}
+
+/// TabBar underline painted with [AppColors.primaryGradient].
+class PrimaryGradientTabIndicator extends Decoration {
+  const PrimaryGradientTabIndicator({this.height = 3, this.inset = 0});
+
+  final double height;
+  final double inset;
+
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) {
+    return _PrimaryGradientTabPainter(height: height, inset: inset);
+  }
+}
+
+class _PrimaryGradientTabPainter extends BoxPainter {
+  _PrimaryGradientTabPainter({required this.height, required this.inset});
+
+  final double height;
+  final double inset;
+
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    final size = configuration.size;
+    if (size == null) return;
+    final rect = Rect.fromLTWH(
+      offset.dx + inset,
+      offset.dy + size.height - height,
+      size.width - inset * 2,
+      height,
+    );
+    final paint = Paint()
+      ..shader = AppColors.primaryGradient.createShader(rect);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+      paint,
+    );
+  }
+}
+
 /// Primary filled CTA with brand linear gradient.
 class PrimaryGradientButton extends StatelessWidget {
   const PrimaryGradientButton({

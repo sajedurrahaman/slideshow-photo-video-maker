@@ -111,9 +111,10 @@ class _MusicScreenState extends State<MusicScreen>
         ],
         bottom: TabBar(
           controller: _tabs,
-          labelColor: AppColors.primary,
+          labelColor: AppColors.primaryEnd,
           unselectedLabelColor: AppColors.textMuted,
-          indicatorColor: AppColors.primary,
+          indicator: const PrimaryGradientTabIndicator(),
+          indicatorSize: TabBarIndicatorSize.label,
           tabs: const [
             Tab(text: 'Popular'),
             Tab(text: 'My Music'),
@@ -236,30 +237,41 @@ class _MusicTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? AppColors.primarySoft : AppColors.surfaceAlt,
-      borderRadius: BorderRadius.circular(12),
-      child: ListTile(
+      color: Colors.transparent,
+      child: InkWell(
         onTap: onTap,
-        leading: Icon(
-          icon,
-          color: selected ? AppColors.primary : AppColors.iconNormal,
-        ),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            color: selected ? AppColors.primaryDark : AppColors.textDark,
+        borderRadius: BorderRadius.circular(12),
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: selected ? AppColors.primaryGradient : null,
+            color: selected ? null : AppColors.surfaceAlt,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: ListTile(
+            leading: Icon(
+              icon,
+              color: selected ? Colors.white : AppColors.iconNormal,
+            ),
+            title: Text(
+              title,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : AppColors.textDark,
+              ),
+            ),
+            trailing: onPlay == null
+                ? null
+                : IconButton(
+                    onPressed: onPlay,
+                    icon: Icon(
+                      playing
+                          ? Icons.stop_circle_outlined
+                          : Icons.play_circle_outline,
+                      color: selected ? Colors.white : AppColors.primary,
+                    ),
+                  ),
           ),
         ),
-        trailing: onPlay == null
-            ? null
-            : IconButton(
-                onPressed: onPlay,
-                icon: Icon(
-                  playing ? Icons.stop_circle_outlined : Icons.play_circle_outline,
-                  color: AppColors.primary,
-                ),
-              ),
       ),
     );
   }

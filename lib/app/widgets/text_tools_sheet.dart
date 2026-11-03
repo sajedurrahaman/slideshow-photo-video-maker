@@ -265,6 +265,15 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
   Widget _mainTabs() {
     Widget tab(TextToolsMainTab t, String label) {
       final on = _mainTab == t;
+      final title = Text(
+        label,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+          color: on ? Colors.white : AppColors.textMuted,
+        ),
+      );
       return Expanded(
         child: InkWell(
           onTap: () => setState(() => _mainTab = t),
@@ -272,19 +281,14 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
             children: [
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: on ? textToolAccent : AppColors.textMuted,
-                  ),
-                ),
+                child: on ? PrimaryGradientMask(child: title) : title,
               ),
               Container(
                 height: 2.5,
-                color: on ? textToolAccent : Colors.transparent,
+                decoration: BoxDecoration(
+                  gradient: on ? AppColors.primaryGradient : null,
+                  color: on ? null : Colors.transparent,
+                ),
               ),
             ],
           ),
@@ -340,29 +344,22 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
               (o) => o.copyWith(fontFamily: f.family, fontWeight: f.weight),
             );
           },
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              // color: const Color(0xFFF7F8FA),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: on ? textToolAccent : AppColors.border,
-                width: on ? 2 : 1,
-              ),
-            ),
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: Text(
-                  f.label,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: previewFamily,
-                    fontWeight: TextOverlayPaint.weightOf(f.weight),
-                    fontSize: 13,
-                    color: on ? textToolAccent : AppColors.textDark,
-                  ),
+          child: PrimarySelectedFill(
+            selected: on,
+            borderRadius: 10,
+            unselectedColor: Colors.white,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                f.label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: previewFamily,
+                  fontWeight: TextOverlayPaint.weightOf(f.weight),
+                  fontSize: 13,
+                  color: on ? Colors.white : AppColors.textDark,
                 ),
               ),
             ),
@@ -384,23 +381,27 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
               for (final s in TextColorSubTab.values)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(_subLabel(s)),
-                    selected: _colorSub == s,
-                    onSelected: (_) => setState(() => _colorSub = s),
-                    selectedColor: textToolAccent,
-                    labelStyle: TextStyle(
-                      color: _colorSub == s ? Colors.white : AppColors.textDark,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _colorSub = s),
+                    child: PrimarySelectedFill(
+                      selected: _colorSub == s,
+                      borderRadius: 20,
+                      unselectedColor: const Color(0xFFEEF1F5),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        _subLabel(s),
+                        style: TextStyle(
+                          color: _colorSub == s
+                              ? Colors.white
+                              : AppColors.textDark,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
-                    backgroundColor: const Color(0xFFEEF1F5),
-                    side: BorderSide.none,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    showCheckmark: false,
-                    visualDensity: VisualDensity.compact,
                   ),
                 ),
             ],
@@ -799,43 +800,36 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
         _ensureOverlay();
         onTap();
       },
-      child: Container(
+      child: SizedBox(
         width: 28,
         height: 28,
-        decoration: BoxDecoration(
+        child: PrimarySelectedBorder(
+          selected: selected,
           shape: BoxShape.circle,
-          color: gradient ? null : (color ?? Colors.white),
-          gradient: gradient
-              ? const SweepGradient(
-                  colors: [
-                    Colors.red,
-                    Colors.yellow,
-                    Colors.green,
-                    Colors.cyan,
-                    Colors.blue,
-                    Colors.purple,
-                    Colors.red,
-                  ],
+          width: 2.5,
+          unselectedColor: color == const Color(0xFFFFFFFF)
+              ? AppColors.border
+              : Colors.black12,
+          backgroundColor: gradient ? null : (color ?? Colors.white),
+          child: gradient
+              ? const DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: SweepGradient(
+                      colors: [
+                        Colors.red,
+                        Colors.yellow,
+                        Colors.green,
+                        Colors.cyan,
+                        Colors.blue,
+                        Colors.purple,
+                        Colors.red,
+                      ],
+                    ),
+                  ),
                 )
-              : null,
-          border: Border.all(
-            color: selected
-                ? const Color(0xFFFF5CA8)
-                : (color == const Color(0xFFFFFFFF)
-                      ? AppColors.border
-                      : Colors.black12),
-            width: selected ? 2.5 : 1,
-          ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x14000000),
-              blurRadius: 3,
-              offset: Offset(0, 1),
-            ),
-          ],
+              : (child ?? const SizedBox.expand()),
         ),
-        alignment: Alignment.center,
-        child: child,
       ),
     );
   }
@@ -952,9 +946,12 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
                         TextCaseMode.upper => 'AA',
                         TextCaseMode.lower => 'aa',
                       },
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 13,
+                        color: (o?.textCase ?? TextCaseMode.none) == c
+                            ? Colors.white
+                            : AppColors.textDark,
                       ),
                     ),
                   ),
@@ -1186,22 +1183,23 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
                 _ensureOverlay();
                 onPick(c);
               },
-              child: Container(
+              child: SizedBox(
                 width: 28,
                 height: 28,
-                decoration: BoxDecoration(
+                child: PrimarySelectedBorder(
+                  selected: selected == c,
                   shape: BoxShape.circle,
-                  color: c == null ? Colors.transparent : Color(c),
-                  border: Border.all(
-                    color: selected == c
-                        ? const Color(0xFFFF5CA8)
-                        : AppColors.border,
-                    width: selected == c ? 2.5 : 1,
-                  ),
+                  width: 2.5,
+                  backgroundColor:
+                      c == null ? Colors.transparent : Color(c),
+                  child: c == null
+                      ? const Icon(
+                          Icons.block,
+                          size: 18,
+                          color: Colors.black45,
+                        )
+                      : const SizedBox.expand(),
                 ),
-                child: c == null
-                    ? const Icon(Icons.block, size: 18, color: Colors.black45)
-                    : null,
               ),
             ),
             const SizedBox(width: 8),
@@ -1248,21 +1246,15 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
         _ensureOverlay();
         onTap();
       },
-      child: Container(
+      child: SizedBox(
         width: 40,
         height: 40,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected
-              ? textToolAccent.withValues(alpha: 0.15)
-              : const Color(0xFFEEF1F5),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: selected ? textToolAccent : Colors.transparent,
-            width: 1.5,
-          ),
+        child: PrimarySelectedFill(
+          selected: selected,
+          borderRadius: 8,
+          unselectedColor: const Color(0xFFEEF1F5),
+          child: child,
         ),
-        child: child,
       ),
     );
   }

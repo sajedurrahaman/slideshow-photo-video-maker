@@ -523,16 +523,29 @@ class _AlbumFolderList extends StatelessWidget {
                 _AlbumCoverThumb(path: album.path),
                 const SizedBox(width: 14),
                 Expanded(
-                  child: Text(
-                    album.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: selected ? AppColors.primary : AppColors.textDark,
-                    ),
-                  ),
+                  child: selected
+                      ? PrimaryGradientMask(
+                          child: Text(
+                            album.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        )
+                      : Text(
+                          album.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textDark,
+                          ),
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Text(
@@ -660,36 +673,39 @@ class _ThumbTileState extends State<_ThumbTile> {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: widget.onTap,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (_bytes != null)
-            Image.memory(_bytes!, fit: BoxFit.cover)
-          else
-            Container(color: AppColors.surfaceAlt),
-          if (widget.selected)
-            Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: AppColors.accent, width: 3),
+      child: PrimarySelectedBorder(
+        selected: widget.selected,
+        borderRadius: 0,
+        width: 3,
+        unselectedColor: Colors.transparent,
+        unselectedWidth: 0,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (_bytes != null)
+              Image.memory(_bytes!, fit: BoxFit.cover)
+            else
+              Container(color: AppColors.surfaceAlt),
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  gradient:
+                      widget.selected ? AppColors.primaryGradient : null,
+                  color: widget.selected ? null : Colors.black38,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+                child: widget.selected
+                    ? const Icon(Icons.check, size: 14, color: Colors.white)
+                    : null,
               ),
             ),
-          Positioned(
-            top: 6,
-            right: 6,
-            child: Container(
-              width: 22,
-              height: 22,
-              decoration: BoxDecoration(
-                color: widget.selected ? AppColors.accent : Colors.black38,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 1.5),
-              ),
-              child: widget.selected
-                  ? const Icon(Icons.check, size: 14, color: Colors.white)
-                  : null,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -144,27 +144,18 @@ class _ExportScreenState extends State<ExportScreen> {
                     Expanded(
                       child: GestureDetector(
                         onTap: () => project.setExportQuality(q),
-                        child: Container(
+                        child: PrimarySelectedFill(
+                          selected: project.exportQuality == q,
+                          borderRadius: 12,
+                          unselectedColor: AppColors.surfaceAlt,
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            color: project.exportQuality == q
-                                ? AppColors.primarySoft
-                                : AppColors.surfaceAlt,
-                            border: Border.all(
-                              color: project.exportQuality == q
-                                  ? AppColors.primary
-                                  : AppColors.border,
-                              width: project.exportQuality == q ? 2 : 1,
-                            ),
-                          ),
-                          alignment: Alignment.center,
                           child: Text(
                             q.label,
+                            textAlign: TextAlign.center,
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
                               color: project.exportQuality == q
-                                  ? AppColors.primaryDark
+                                  ? Colors.white
                                   : AppColors.textDark,
                             ),
                           ),
