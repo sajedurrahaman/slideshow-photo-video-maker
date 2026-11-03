@@ -19,6 +19,7 @@ import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/effect_overlay_service.dart';
+import '../services/draft_service.dart';
 import '../services/slideshow_project.dart';
 import 'crop_screen.dart';
 import '../widgets/editTool_sheet.dart';
@@ -102,6 +103,9 @@ class _EditorScreenState extends State<EditorScreen>
 
   /// Photo Done: bake in flight — play stays off until ready.
   bool _finishingPhotoEdits = false;
+
+  /// AppBar / system back: draft export in progress.
+  bool _savingDraft = false;
 
   /// Text tools (CapCut-style Template / Font / Color).
   bool _textToolsOpen = false;
@@ -532,6 +536,50 @@ class _EditorScreenState extends State<EditorScreen>
   void _warmPreviewAfterTool(SlideshowProject project) {
     if (project.photos.length < AppConstants.minPhotos) return;
     unawaited(project.preparePreviewFrames(showLoading: false));
+  }
+
+  /// AppBar / system back → toast "Draft saving..." then persist project state
+  /// (picked photos + edits) for home Drafts — not an MP4 export.
+  Future<void> _saveDraftAndLeave() async {
+    if (_savingDraft) return;
+    final project = context.read<SlideshowProject>();
+    project.stopPreviewPlayback();
+
+    if (project.photos.isEmpty) {
+      if (!mounted) return;
+      context.go('/home');
+      return;
+    }
+
+    setState(() => _savingDraft = true);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Draft saving...'),
+        duration: Duration(seconds: 30),
+      ),
+    );
+
+    try {
+      await DraftService.saveDraft(project);
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Draft saved'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      context.go('/home');
+    } catch (e) {
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not save draft: $e')),
+      );
+      setState(() => _savingDraft = false);
+    }
   }
 
   /// Photo toolbar Done — save edits; loading only if bake still needed.
@@ -2732,12 +2780,22 @@ class _EditorScreenState extends State<EditorScreen>
         ? _photoToolbarHeight
         : 0.0;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || _savingDraft) return;
+        unawaited(_saveDraftAndLeave());
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       // Keep preview fixed; text sheet / keyboard overlay instead of resizing body.
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: const Text('Editor'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _savingDraft ? null : _saveDraftAndLeave,
+        ),
         actions: [
           // Photo/Music/Effects: Done check sits in timeline header — not AppBar.
           if (!_textToolsOpen &&
@@ -2755,7 +2813,8 @@ class _EditorScreenState extends State<EditorScreen>
                 label: 'Export',
                 enabled:
                     project.photos.length >= AppConstants.minPhotos &&
-                    !project.isProcessing,
+                    !project.isProcessing &&
+                    !_savingDraft,
                 onPressed: () => context.push('/export'),
               ),
             ),
@@ -3174,8 +3233,16 @@ class _EditorScreenState extends State<EditorScreen>
                 },
               ),
             ),
+          if (_savingDraft)
+            const Positioned.fill(
+              child: ModalBarrier(
+                dismissible: false,
+                color: Color(0x33000000),
+              ),
+            ),
         ],
       ),
+    ),
     );
   }
 

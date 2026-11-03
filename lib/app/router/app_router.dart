@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 
 import '../screens/crop_screen.dart';
+import '../screens/drafts_screen.dart';
 import '../screens/editor_screen.dart';
 import '../screens/export_screen.dart';
 import '../screens/gallery_screen.dart';
@@ -50,6 +51,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/creations',
       builder: (context, state) => const MyCreationScreen(),
+    ),
+    GoRoute(
+      path: '/drafts',
+      builder: (context, state) => const DraftsScreen(),
     ),
     GoRoute(
       path: '/settings',

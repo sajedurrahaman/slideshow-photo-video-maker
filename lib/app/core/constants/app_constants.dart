@@ -2,6 +2,8 @@ class AppConstants {
   static const appName = 'Slideshows';
   static const packageId = 'app.graphics_cycle.clipCraft';
   static const creationsFolder = 'SlideShow';
+  /// Editor project drafts (JSON + copied photos) — not exported MP4s.
+  static const draftsFolder = 'SlideShowDrafts';
   static const minPhotos = 4;
   static const maxPhotos = 30;
   static const framesPerTransition = 22;

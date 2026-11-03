@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../core/theme/app_theme.dart';
 import '../services/export_service.dart';
@@ -55,6 +57,8 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
     );
     if (ok != true) return;
     if (await file.exists()) await file.delete();
+    final thumb = ExportService.thumbnailFileFor(file);
+    if (await thumb.exists()) await thumb.delete();
     await _load();
   }
 
@@ -120,19 +124,25 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Expanded(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.black87,
-                                  borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(14),
-                                  ),
+                              child: ClipRRect(
+                                borderRadius: const BorderRadius.vertical(
+                                  top: Radius.circular(14),
                                 ),
-                                child: const Center(
-                                  child: Icon(
-                                    Icons.play_circle_filled,
-                                    color: Colors.white,
-                                    size: 42,
-                                  ),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ColoredBox(
+                                      color: Colors.black87,
+                                      child: _VideoThumb(video: file),
+                                    ),
+                                    const Center(
+                                      child: Icon(
+                                        Icons.play_circle_filled,
+                                        color: Colors.white70,
+                                        size: 42,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),
@@ -196,6 +206,100 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
                     );
                   },
                 ),
+    );
+  }
+}
+
+/// Shows a cached first-frame thumb for an exported Studio video.
+class _VideoThumb extends StatefulWidget {
+  const _VideoThumb({required this.video});
+
+  final File video;
+
+  @override
+  State<_VideoThumb> createState() => _VideoThumbState();
+}
+
+class _VideoThumbState extends State<_VideoThumb> {
+  File? _thumb;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_resolve());
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoThumb oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.video.path != widget.video.path) {
+      _thumb = null;
+      _failed = false;
+      unawaited(_resolve());
+    }
+  }
+
+  Future<void> _resolve() async {
+    final cached = ExportService.thumbnailFileFor(widget.video);
+    if (await cached.exists() && await cached.length() > 0) {
+      if (!mounted) return;
+      setState(() => _thumb = cached);
+      return;
+    }
+
+    // Prefer FFmpeg cache beside the mp4 (works offline / consistent).
+    final viaFfmpeg = await ExportService.ensureCreationThumbnail(widget.video);
+    if (viaFfmpeg != null && await viaFfmpeg.exists()) {
+      if (!mounted) return;
+      setState(() => _thumb = viaFfmpeg);
+      return;
+    }
+
+    // Fallback: video_thumbnail plugin.
+    try {
+      final path = await VideoThumbnail.thumbnailFile(
+        video: widget.video.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 480,
+        quality: 75,
+        timeMs: 50,
+      );
+      if (path != null && path.isNotEmpty) {
+        final generated = File(path);
+        if (await generated.exists()) {
+          try {
+            await generated.copy(cached.path);
+          } catch (_) {}
+          final show = await cached.exists() ? cached : generated;
+          if (!mounted) return;
+          setState(() => _thumb = show);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    setState(() => _failed = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final thumb = _thumb;
+    if (thumb != null) {
+      return Image.file(
+        thumb,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      );
+    }
+    if (_failed) return const SizedBox.shrink();
+    return const Center(
+      child: SizedBox(
+        width: 22,
+        height: 22,
+        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+      ),
     );
   }
 }

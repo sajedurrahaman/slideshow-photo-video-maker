@@ -260,6 +260,9 @@ class SlideshowProject extends ChangeNotifier {
   TitleCard? endingCard;
   final List<SlideOverlay> overlays = [];
 
+  /// When set, back-save updates this draft instead of creating a new one.
+  String? activeDraftId;
+
   bool isPlaying = false;
   bool isPreviewPlaying = false;
 
@@ -531,15 +534,274 @@ class SlideshowProject extends ChangeNotifier {
 
   void setPhotos(List<SlideshowPhoto> list) {
     cancelExport();
+    stopPreviewPlayback();
     photos
       ..clear()
       ..addAll(list);
+    // Fresh pick from gallery — clear previous draft/session edits so only
+    // opening a draft item restores that draft's music/effects/text/etc.
+    _resetSessionEdits();
     generatedFrames = [];
     _setPreviewFrame(null);
     _clearDecodedPreview();
     _invalidatePreviewCache();
     selectedPhotoIndex = null;
+    activeDraftId = null;
+    _undoStack.clear();
+    _redoStack.clear();
+    _setPreviewPosition(0);
     notifyListeners();
+  }
+
+  /// Clears music / effects / overlays / transition / frame / cards, etc.
+  /// Photos list is left as-is (caller sets them).
+  void _resetSessionEdits() {
+    selectedTheme = AppThemes.all.first;
+    isEffectOverlayEnabled = false;
+    selectedOverlayEffect = null;
+    overlayClipStartSec = 0;
+    overlayClipEndSec = null;
+    overlaySourceDurationSec = null;
+    overlayTimelineStartSec = 0;
+    overlayTimelineEndSec = null;
+    selectedSlideTransition = SlideTransitionOption.all.first;
+    selectedFrameAsset = null;
+    slideDurationSec = AppConstants.defaultDurationSec;
+    music = null;
+    localMusicTracks.clear();
+    aspectRatio = AspectPreset.square;
+    exportQuality = ExportQuality.p720;
+    backgroundArgb = 0xFF000000;
+    globalFilter = PhotoFilterPreset.original;
+    startingCard = null;
+    endingCard = null;
+    overlays.clear();
+  }
+
+  /// Restore a saved editor draft (photos + edits). Does not export video.
+  void restoreFromDraftJson(Map<String, dynamic> map) {
+    cancelExport();
+    stopPreviewPlayback();
+
+    T enumByName<T extends Enum>(List<T> values, String? name, T fallback) {
+      if (name == null) return fallback;
+      for (final v in values) {
+        if (v.name == name) return v;
+      }
+      return fallback;
+    }
+
+    final photoMaps = (map['photos'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    final restoredPhotos = photoMaps.map((m) {
+      return SlideshowPhoto(
+        id: m['id'] as String? ??
+            'photo_${DateTime.now().microsecondsSinceEpoch}',
+        path: m['path'] as String,
+        filter: enumByName(
+          PhotoFilterPreset.values,
+          m['filter'] as String?,
+          PhotoFilterPreset.original,
+        ),
+        durationSec: (m['durationSec'] as num?)?.toDouble() ??
+            AppConstants.defaultDurationSec,
+        backgroundArgb: m['backgroundArgb'] as int?,
+        backgroundBlurLevel: m['backgroundBlurLevel'] as int?,
+        cropAspectRatio: (m['cropAspectRatio'] as num?)?.toDouble(),
+        cropLeft: (m['cropLeft'] as num?)?.toDouble() ?? 0,
+        cropTop: (m['cropTop'] as num?)?.toDouble() ?? 0,
+        cropWidth: (m['cropWidth'] as num?)?.toDouble() ?? 1,
+        cropHeight: (m['cropHeight'] as num?)?.toDouble() ?? 1,
+        cropDegrees: (m['cropDegrees'] as num?)?.toDouble() ?? 0,
+        mirrored: m['mirrored'] as bool? ?? false,
+        flipped: m['flipped'] as bool? ?? false,
+        rotationQuarterTurns: m['rotationQuarterTurns'] as int? ?? 0,
+        animationIn: enumByName(
+          PhotoAnimationType.values,
+          m['animationIn'] as String?,
+          PhotoAnimationType.none,
+        ),
+        animationOut: enumByName(
+          PhotoAnimationType.values,
+          m['animationOut'] as String?,
+          PhotoAnimationType.none,
+        ),
+        animationLoop: enumByName(
+          PhotoAnimationType.values,
+          m['animationLoop'] as String?,
+          PhotoAnimationType.none,
+        ),
+        animationInDurationSec:
+            (m['animationInDurationSec'] as num?)?.toDouble() ?? 1,
+        animationOutDurationSec:
+            (m['animationOutDurationSec'] as num?)?.toDouble() ?? 1,
+        animationLoopDurationSec:
+            (m['animationLoopDurationSec'] as num?)?.toDouble() ?? 1,
+      );
+    }).toList();
+
+    photos
+      ..clear()
+      ..addAll(restoredPhotos);
+
+    final transitionId = map['transitionId'] as String?;
+    selectedSlideTransition = SlideTransitionOption.all.firstWhere(
+      (e) => e.id == transitionId,
+      orElse: () => SlideTransitionOption.all.first,
+    );
+
+    final themeId = map['themeId'] as String?;
+    selectedTheme = AppThemes.all.firstWhere(
+      (e) => e.id == themeId,
+      orElse: () => AppThemes.all.first,
+    );
+
+    selectedFrameAsset = map['selectedFrameAsset'] as String?;
+    slideDurationSec = (map['slideDurationSec'] as num?)?.toDouble() ??
+        AppConstants.defaultDurationSec;
+    aspectRatio = enumByName(
+      AspectPreset.values,
+      map['aspectRatio'] as String?,
+      AspectPreset.square,
+    );
+    exportQuality = enumByName(
+      ExportQuality.values,
+      map['exportQuality'] as String?,
+      ExportQuality.p720,
+    );
+    backgroundArgb = map['backgroundArgb'] as int? ?? 0xFF000000;
+    globalFilter = enumByName(
+      PhotoFilterPreset.values,
+      map['globalFilter'] as String?,
+      PhotoFilterPreset.original,
+    );
+
+    final musicMap = map['music'] as Map<String, dynamic>?;
+    if (musicMap == null) {
+      music = null;
+    } else {
+      final durationMs = musicMap['durationMs'] as int?;
+      music = MusicTrack(
+        path: musicMap['path'] as String,
+        title: musicMap['title'] as String? ?? 'Music',
+        duration: durationMs == null ? null : Duration(milliseconds: durationMs),
+        isAsset: musicMap['isAsset'] as bool? ?? false,
+        volume: musicMap['volume'] as int? ?? 100,
+        timelineStartSec:
+            (musicMap['timelineStartSec'] as num?)?.toDouble() ?? 0,
+        timelineEndSec: (musicMap['timelineEndSec'] as num?)?.toDouble(),
+        clipStartSec: (musicMap['clipStartSec'] as num?)?.toDouble() ?? 0,
+        clipEndSec: (musicMap['clipEndSec'] as num?)?.toDouble(),
+        fadeIn: musicMap['fadeIn'] as bool? ?? false,
+        fadeOut: musicMap['fadeOut'] as bool? ?? false,
+      );
+    }
+
+    final effectId = map['overlayEffectId'] as String?;
+    OverlayEffect? effect;
+    if (effectId != null) {
+      for (final e in OverlayEffect.all) {
+        if (e.id == effectId) {
+          effect = e;
+          break;
+        }
+      }
+    }
+    selectedOverlayEffect = effect;
+    isEffectOverlayEnabled =
+        map['isEffectOverlayEnabled'] as bool? ?? selectedOverlayEffect != null;
+    overlayClipStartSec =
+        (map['overlayClipStartSec'] as num?)?.toDouble() ?? 0;
+    overlayClipEndSec = (map['overlayClipEndSec'] as num?)?.toDouble();
+    overlaySourceDurationSec =
+        (map['overlaySourceDurationSec'] as num?)?.toDouble();
+    overlayTimelineStartSec =
+        (map['overlayTimelineStartSec'] as num?)?.toDouble() ?? 0;
+    overlayTimelineEndSec =
+        (map['overlayTimelineEndSec'] as num?)?.toDouble();
+
+    TitleCard? cardFrom(Map<String, dynamic>? m) {
+      if (m == null) return null;
+      return TitleCard(
+        title: m['title'] as String? ?? 'My Slideshow',
+        subtitle: m['subtitle'] as String? ?? '',
+        backgroundArgb: m['backgroundArgb'] as int? ?? 0xFF00BFA5,
+        durationSec: (m['durationSec'] as num?)?.toDouble() ?? 2,
+      );
+    }
+
+    startingCard = cardFrom(map['startingCard'] as Map<String, dynamic>?);
+    endingCard = cardFrom(map['endingCard'] as Map<String, dynamic>?);
+
+    overlays
+      ..clear()
+      ..addAll(
+        ((map['overlays'] as List?) ?? const []).cast<Map<String, dynamic>>().map(
+          (m) {
+            return SlideOverlay(
+              id: m['id'] as String? ??
+                  'overlay_${DateTime.now().microsecondsSinceEpoch}',
+              kind: enumByName(
+                OverlayKind.values,
+                m['kind'] as String?,
+                OverlayKind.text,
+              ),
+              nx: (m['nx'] as num?)?.toDouble() ?? 0.5,
+              ny: (m['ny'] as num?)?.toDouble() ?? 0.5,
+              scale: (m['scale'] as num?)?.toDouble() ?? 1,
+              rotation: (m['rotation'] as num?)?.toDouble() ?? 0,
+              text: m['text'] as String?,
+              colorArgb: m['colorArgb'] as int? ?? 0xFFFFFFFF,
+              opacity: (m['opacity'] as num?)?.toDouble() ?? 1,
+              fontFamily: m['fontFamily'] as String? ?? '',
+              fontWeight: m['fontWeight'] as int? ?? 700,
+              fontSize: (m['fontSize'] as num?)?.toDouble() ?? 20,
+              align: enumByName(
+                TextAlignMode.values,
+                m['align'] as String?,
+                TextAlignMode.center,
+              ),
+              textCase: enumByName(
+                TextCaseMode.values,
+                m['textCase'] as String?,
+                TextCaseMode.none,
+              ),
+              letterSpacing: (m['letterSpacing'] as num?)?.toDouble() ?? 0,
+              lineHeight: (m['lineHeight'] as num?)?.toDouble() ?? 1.2,
+              curve: (m['curve'] as num?)?.toDouble() ?? 0,
+              strokeColorArgb: m['strokeColorArgb'] as int?,
+              strokeWidth: (m['strokeWidth'] as num?)?.toDouble() ?? 0,
+              strokeDoubleColorArgb: m['strokeDoubleColorArgb'] as int?,
+              bgColorArgb: m['bgColorArgb'] as int?,
+              bgOpacity: (m['bgOpacity'] as num?)?.toDouble() ?? 0.15,
+              bgCorner: (m['bgCorner'] as num?)?.toDouble() ?? 10,
+              shadowColorArgb: m['shadowColorArgb'] as int?,
+              shadowDistance: (m['shadowDistance'] as num?)?.toDouble() ?? 4,
+              shadowAngle: (m['shadowAngle'] as num?)?.toDouble() ?? 45,
+              shadowOpacity: (m['shadowOpacity'] as num?)?.toDouble() ?? 0.6,
+              shadowBlur: (m['shadowBlur'] as num?)?.toDouble() ?? 6,
+              gradientEndArgb: m['gradientEndArgb'] as int?,
+              templateId: m['templateId'] as String?,
+              stickerEmoji: m['stickerEmoji'] as String?,
+            );
+          },
+        ),
+      );
+
+    activeDraftId = map['id'] as String?;
+    selectedPhotoIndex = null;
+    generatedFrames = [];
+    _setPreviewFrame(null);
+    _clearDecodedPreview();
+    _invalidatePreviewCache();
+    _setPreviewPosition(0);
+    notifyListeners();
+
+    if (photos.length >= AppConstants.minPhotos) {
+      unawaited(preparePreviewFrames(showLoading: false));
+    } else if (photos.isNotEmpty) {
+      unawaited(_refreshPhotoPreview(0));
+    }
   }
 
   /// Stop export / frame bake (Export screen X). Clears "Exporting %" overlay.

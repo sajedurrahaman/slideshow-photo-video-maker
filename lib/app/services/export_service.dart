@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -13,8 +14,7 @@ import '../core/constants/app_constants.dart';
 import 'slideshow_project.dart';
 
 class ExportService {
-  /// Exports generated frames + optional music into MP4.
-  /// Saves into app creations folder (My Creation) and gallery.
+  /// Full export → creations folder + gallery.
   static Future<File> export(SlideshowProject project) async {
     if (project.generatedFrames.isEmpty) {
       await project.generatePreviewFrames();
@@ -132,7 +132,32 @@ class ExportService {
       // Gallery save is best-effort; local My Creation still keeps the file.
     }
 
+    // Studio grid thumbnail (first frame).
+    unawaited(ensureCreationThumbnail(output));
+
     return output;
+  }
+
+  /// JPG beside the mp4: `video_….mp4` → `video_….jpg`
+  static File thumbnailFileFor(File video) {
+    final dir = video.parent.path;
+    final base = p.basenameWithoutExtension(video.path);
+    return File(p.join(dir, '$base.jpg'));
+  }
+
+  /// Creates a cached first-frame thumb if missing. Returns the thumb file.
+  static Future<File?> ensureCreationThumbnail(File video) async {
+    final thumb = thumbnailFileFor(video);
+    if (await thumb.exists() && await thumb.length() > 0) return thumb;
+    if (!await video.exists()) return null;
+    try {
+      final session = await FFmpegKit.execute(
+        '-y -ss 0.05 -i "${video.path}" -frames:v 1 -q:v 3 "${thumb.path}"',
+      );
+      final code = await session.getReturnCode();
+      if (ReturnCode.isSuccess(code) && await thumb.exists()) return thumb;
+    } catch (_) {}
+    return null;
   }
 
   static Future<List<File>> listCreations() async {

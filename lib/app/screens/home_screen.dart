@@ -1,18 +1,19 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clip_craft_slideshow/app/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:path/path.dart' as p;
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:video_player/video_player.dart';
 
 import '../core/constants/app_constants.dart';
-import '../services/export_service.dart';
+import '../services/draft_service.dart';
 import '../services/firebase_bootstrap.dart';
+import '../services/slideshow_project.dart';
 
 /// Figma `home-Screen` — hero + Slideshow/Studio + Drafts + Rate/Share.
 class HomeScreen extends StatefulWidget {
@@ -30,7 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
     'assets/images/home/slider/slide_4.png',
   ];
 
-  List<File> _drafts = [];
+  List<DraftMeta> _drafts = [];
   bool _loading = true;
   late final PageController _heroPageController;
   int _heroIndex = 0;
@@ -41,7 +42,14 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _heroPageController = PageController();
     _startHeroAutoPlay();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadDrafts());
+    DraftService.changes.addListener(_onDraftsChanged);
+    unawaited(_loadDrafts());
+  }
+
+  void _onDraftsChanged() {
+    if (!mounted) return;
+    // Quiet refresh — no full-screen loading flicker when returning from editor.
+    unawaited(_loadDrafts(showLoading: false));
   }
 
   void _startHeroAutoPlay() {
@@ -59,9 +67,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    DraftService.changes.removeListener(_onDraftsChanged);
     _heroTimer?.cancel();
     _heroPageController.dispose();
     super.dispose();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    // Home may stay under the nav stack; refresh when it becomes visible again.
+    unawaited(_loadDrafts(showLoading: false));
   }
 
   int _imageCacheWidth(BuildContext context) {
@@ -70,12 +86,12 @@ class _HomeScreenState extends State<HomeScreen> {
     return (width * dpr).round().clamp(360, 960);
   }
 
-  Future<void> _loadDrafts() async {
-    setState(() => _loading = true);
-    final files = await ExportService.listCreations();
+  Future<void> _loadDrafts({bool showLoading = true}) async {
+    if (showLoading && mounted) setState(() => _loading = true);
+    final drafts = await DraftService.listDrafts();
     if (!mounted) return;
     setState(() {
-      _drafts = files;
+      _drafts = drafts;
       _loading = false;
     });
   }
@@ -121,17 +137,26 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _playDraft(File file) async {
-    await Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => _HomePlayerPage(file: file)));
+  Future<void> _openDraft(DraftMeta draft) async {
+    final project = context.read<SlideshowProject>();
+    try {
+      await DraftService.loadDraft(draft.id, project);
+      if (!mounted) return;
+      context.push('/editor');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open draft: $e')),
+      );
+    }
   }
 
-  Future<void> _deleteDraft(File file) async {
+  Future<void> _deleteDraft(DraftMeta draft) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete?'),
-        content: Text(p.basename(file.path)),
+        content: Text(draft.displayTitle),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -145,7 +170,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (ok != true) return;
-    if (await file.exists()) await file.delete();
+    await DraftService.deleteDraft(draft.id);
     await _loadDrafts();
   }
 
@@ -171,7 +196,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   slivers: [
                     SliverToBoxAdapter(
                       child: SizedBox(
-                        height: 280 + topInset,
+                        height: 390 + topInset,
                         child: Stack(
                           clipBehavior: Clip.none,
                           children: [
@@ -210,7 +235,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               bottom: 88,
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
-                                children: List.generate(_heroSlides.length, (i) {
+                                children: List.generate(_heroSlides.length, (
+                                  i,
+                                ) {
                                   final active = i == _heroIndex;
                                   return AnimatedContainer(
                                     duration: const Duration(milliseconds: 200),
@@ -222,7 +249,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                     decoration: BoxDecoration(
                                       color: active
                                           ? Colors.white
-                                          : Colors.white.withValues(alpha: 0.45),
+                                          : Colors.white.withValues(
+                                              alpha: 0.45,
+                                            ),
                                       borderRadius: BorderRadius.circular(3),
                                     ),
                                   );
@@ -308,7 +337,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             const Spacer(),
                             TextButton(
-                              onPressed: () => context.push('/creations'),
+                              onPressed: () => context.push('/drafts'),
                               style: TextButton.styleFrom(
                                 foregroundColor: const Color(0xFF1A237E),
                                 padding: EdgeInsets.zero,
@@ -337,29 +366,37 @@ class _HomeScreenState extends State<HomeScreen> {
                     else if (visibleDrafts.isEmpty)
                       const SliverToBoxAdapter(
                         child: Padding(
-                          padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
-                          child: Text(
-                            'No drafts yet. Create a slideshow to see it here.',
-                            style: TextStyle(
-                              color: Color(0xFF9E9E9E),
-                              fontSize: 13,
-                            ),
+                          padding: EdgeInsets.fromLTRB(16, 44, 16, 0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(
+                                'No drafts yet',
+                                style: TextStyle(
+                                  color: AppColors.textDark,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                'Your saved projects will appear here',
+                                style: TextStyle(
+                                  color: AppColors.textMuted,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       )
                     else
                       SliverList(
                         delegate: SliverChildBuilderDelegate((context, index) {
-                          final file = visibleDrafts[index];
+                          final draft = visibleDrafts[index];
                           return _DraftTile(
-                            file: file,
-                            onTap: () => _playDraft(file),
-                            onDelete: () => _deleteDraft(file),
-                            onShare: () {
-                              SharePlus.instance.share(
-                                ShareParams(files: [XFile(file.path)]),
-                              );
-                            },
+                            draft: draft,
+                            onTap: () => _openDraft(draft),
+                            onDelete: () => _deleteDraft(draft),
                           );
                         }, childCount: visibleDrafts.length),
                       ),
@@ -371,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ColoredBox(
               color: Colors.white,
               child: Padding(
-                padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + bottomInset),
+                padding: EdgeInsets.fromLTRB(16, 12, 16, 2 + bottomInset),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -397,7 +434,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 6),
                     Wrap(
                       alignment: WrapAlignment.center,
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -517,34 +554,31 @@ class _HomeHeroImageButton extends StatelessWidget {
   }
 }
 
-class _DraftTile extends StatefulWidget {
+class _DraftTile extends StatelessWidget {
   const _DraftTile({
-    required this.file,
+    required this.draft,
     required this.onTap,
     required this.onDelete,
-    required this.onShare,
   });
 
-  final File file;
+  final DraftMeta draft;
   final VoidCallback onTap;
   final VoidCallback onDelete;
-  final VoidCallback onShare;
 
-  @override
-  State<_DraftTile> createState() => _DraftTileState();
-}
-
-class _DraftTileState extends State<_DraftTile> {
-  late final Future<DateTime> _modifiedFuture = widget.file.lastModified();
+  String _fmtDuration(double sec) {
+    final total = sec.round().clamp(0, 99999);
+    final m = (total ~/ 60).toString().padLeft(2, '0');
+    final s = (total % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final name = p.basenameWithoutExtension(widget.file.path);
-    final id = name.replaceAll(RegExp(r'[^0-9]'), '');
-    final displayId = id.isNotEmpty ? id : name;
+    final stamp = DateFormat('yyyy-MM-dd HH:mm').format(draft.updatedAt);
+    final thumb = draft.thumbPath;
 
     return InkWell(
-      onTap: widget.onTap,
+      onTap: onTap,
       child: Container(
         padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
         decoration: const BoxDecoration(
@@ -558,17 +592,19 @@ class _DraftTileState extends State<_DraftTile> {
                 width: 64,
                 height: 64,
                 color: const Color(0xFF263238),
-                child: const Center(
-                  child: CircleAvatar(
-                    radius: 14,
-                    backgroundColor: Color(0xFF00BCD4),
-                    child: Icon(
-                      Icons.play_arrow,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-                  ),
-                ),
+                child: thumb != null && File(thumb).existsSync()
+                    ? Image.file(
+                        File(thumb),
+                        fit: BoxFit.cover,
+                        width: 64,
+                        height: 64,
+                      )
+                    : const Center(
+                        child: Icon(
+                          Icons.photo_library_outlined,
+                          color: Colors.white70,
+                        ),
+                      ),
               ),
             ),
             const SizedBox(width: 12),
@@ -577,7 +613,7 @@ class _DraftTileState extends State<_DraftTile> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    displayId,
+                    draft.displayTitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -587,24 +623,16 @@ class _DraftTileState extends State<_DraftTile> {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  FutureBuilder<DateTime>(
-                    future: _modifiedFuture,
-                    builder: (context, snap) {
-                      final stamp = snap.hasData
-                          ? DateFormat('yyyy-MM-dd HH:mm').format(snap.data!)
-                          : '…';
-                      return Text(
-                        'Last update $stamp',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9E9E9E),
-                        ),
-                      );
-                    },
+                  Text(
+                    'Last update $stamp',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9E9E9E),
+                    ),
                   ),
-                  const Text(
-                    '00:14',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
+                  Text(
+                    '${draft.photoCount} photos · ${_fmtDuration(draft.durationSec)}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
                   ),
                 ],
               ),
@@ -612,11 +640,9 @@ class _DraftTileState extends State<_DraftTile> {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_horiz, color: Color(0xFF757575)),
               onSelected: (v) {
-                if (v == 'share') widget.onShare();
-                if (v == 'delete') widget.onDelete();
+                if (v == 'delete') onDelete();
               },
               itemBuilder: (_) => const [
-                PopupMenuItem(value: 'share', child: Text('Share')),
                 PopupMenuItem(value: 'delete', child: Text('Delete')),
               ],
             ),
@@ -654,61 +680,10 @@ class _OutlineActionButton extends StatelessWidget {
       ),
       style: OutlinedButton.styleFrom(
         side: BorderSide(color: color, width: 1.4),
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
 }
 
-class _HomePlayerPage extends StatefulWidget {
-  const _HomePlayerPage({required this.file});
-  final File file;
-
-  @override
-  State<_HomePlayerPage> createState() => _HomePlayerPageState();
-}
-
-class _HomePlayerPageState extends State<_HomePlayerPage> {
-  late final VideoPlayerController _controller;
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = VideoPlayerController.file(widget.file)
-      ..initialize().then((_) {
-        if (!mounted) return;
-        setState(() => _ready = true);
-        _controller
-          ..setLooping(true)
-          ..play();
-      });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: Text(p.basename(widget.file.path)),
-      ),
-      body: Center(
-        child: !_ready
-            ? const CircularProgressIndicator(color: Colors.white)
-            : AspectRatio(
-                aspectRatio: _controller.value.aspectRatio,
-                child: VideoPlayer(_controller),
-              ),
-      ),
-    );
-  }
-}
