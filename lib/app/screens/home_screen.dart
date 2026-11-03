@@ -12,6 +12,7 @@ import 'package:video_player/video_player.dart';
 
 import '../core/constants/app_constants.dart';
 import '../services/export_service.dart';
+import '../services/firebase_bootstrap.dart';
 
 /// Figma `home-Screen` — hero + Slideshow/Studio + Drafts + Rate/Share.
 class HomeScreen extends StatefulWidget {
@@ -87,6 +88,27 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _rateUs() {
     return _openUrl(
       'https://play.google.com/store/apps/details?id=${AppConstants.packageId}',
+    );
+  }
+
+  /// Long-press Rate Us → copy FCM token for Firebase Console push test.
+  Future<void> _copyFcmToken() async {
+    final token =
+        FirebaseBootstrap.fcmToken ?? await FirebaseBootstrap.refreshFcmToken();
+    if (!mounted) return;
+    if (token == null || token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('FCM token not ready yet. Try again.')),
+      );
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: token));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('FCM token copied (${token.length} chars)'),
+        duration: const Duration(seconds: 3),
+      ),
     );
   }
 
@@ -361,6 +383,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             icon: Icons.star_rounded,
                             color: const Color(0xFFFF9800),
                             onTap: _rateUs,
+                            onLongPress: _copyFcmToken,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -610,17 +633,20 @@ class _OutlineActionButton extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.onLongPress,
   });
 
   final String label;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     return OutlinedButton.icon(
       onPressed: onTap,
+      onLongPress: onLongPress,
       icon: Icon(icon, color: color, size: 20),
       label: Text(
         label,

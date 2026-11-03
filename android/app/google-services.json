@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "167487194042",
+    "project_id": "clipcraft-image-slider-maker",
+    "storage_bucket": "clipcraft-image-slider-maker.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:167487194042:android:60ed2e2dbaac2ece8f5383",
+        "android_client_info": {
+          "package_name": "app.graphics_cycle.clipCraft"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCucxz5CQG9fHglSAQPLCH9SojfonA2XHI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

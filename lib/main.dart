@@ -3,10 +3,12 @@ import 'package:provider/provider.dart';
 
 import 'app/core/theme/app_theme.dart';
 import 'app/router/app_router.dart';
+import 'app/services/firebase_bootstrap.dart';
 import 'app/services/slideshow_project.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await FirebaseBootstrap.init();
   runApp(const ClipCraftApp());
 }
 
