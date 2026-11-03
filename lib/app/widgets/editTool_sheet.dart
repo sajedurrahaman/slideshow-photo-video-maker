@@ -16,20 +16,37 @@ class TealPillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: enabled ? onPressed : null,
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.white,
-        backgroundColor: enabled
-            ? AppColors.primary
-            : AppColors.primary.withValues(alpha: 0.35),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        minimumSize: const Size(0, 34),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+    final radius = BorderRadius.circular(8);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onPressed : null,
+        borderRadius: radius,
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: enabled ? AppColors.primaryGradient : null,
+            color: enabled
+                ? null
+                : AppColors.primaryStart.withValues(alpha: 0.35),
+            borderRadius: radius,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 34),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+              child: Center(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -122,7 +139,7 @@ class SheetTitle extends StatelessWidget {
           height: 2.5,
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: AppColors.primary,
+              gradient: AppColors.primaryGradient,
               borderRadius: BorderRadius.circular(2),
             ),
           ),

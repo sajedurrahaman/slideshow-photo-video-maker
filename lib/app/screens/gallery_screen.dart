@@ -33,6 +33,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   final List<_PickedAsset> _assets = [];
   final Set<String> _selectedIds = {};
   final List<String> _orderedIds = [];
+
   /// Keeps selected entities when switching albums (grid only holds current folder).
   final Map<String, _PickedAsset> _selectedAssets = {};
 
@@ -67,9 +68,14 @@ class _GalleryScreenState extends State<GalleryScreen> {
       return;
     }
 
+    // Newest photos first in Recent / albums.
+    final filter = FilterOptionGroup(
+      orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)],
+    );
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.image,
       onlyAll: false,
+      filterOption: filter,
     );
     if (paths.isEmpty) {
       setState(() {
@@ -129,6 +135,8 @@ class _GalleryScreenState extends State<GalleryScreen> {
       start: 0,
       end: album.count.clamp(0, 500),
     );
+    // Ensure newest-first even if the platform path order differs.
+    list.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
 
     if (!mounted) return;
     setState(() {
@@ -145,8 +153,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
     return (AppConstants.maxPhotos - existing).clamp(0, AppConstants.maxPhotos);
   }
 
-  int get _minSelectable =>
-      widget.insertMode ? 1 : AppConstants.minPhotos;
+  int get _minSelectable => widget.insertMode ? 1 : AppConstants.minPhotos;
 
   void _toggle(String id) {
     setState(() {
@@ -245,9 +252,8 @@ class _GalleryScreenState extends State<GalleryScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open editor: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not open editor: $e')));
     } finally {
       if (mounted) setState(() => _continuing = false);
     }
@@ -314,10 +320,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Flexible(
-                child: Text(
-                  _albumTitle,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                child: Text(_albumTitle, overflow: TextOverflow.ellipsis),
               ),
               AnimatedRotation(
                 turns: _showAlbumPicker ? 0.5 : 0,
@@ -329,7 +332,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
         ),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.only(right: 12, top: 10, bottom: 9),
             child: TealPillButton(
               label: count > 0 ? 'Next($count)' : 'Next',
               enabled: !_continuing,

@@ -228,18 +228,23 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
             Padding(
               padding: const EdgeInsets.only(left: 4),
               child: Material(
-                color: const Color(0xFF1A73E8),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.transparent,
                 child: InkWell(
                   onTap: _onKeyboardDone,
                   borderRadius: BorderRadius.circular(8),
-                  child: const SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: Icon(
-                      Icons.keyboard_alt_outlined,
-                      size: 26,
-                      color: Colors.white,
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      gradient: AppColors.primaryGradient,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Icon(
+                        Icons.keyboard_alt_outlined,
+                        size: 26,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),

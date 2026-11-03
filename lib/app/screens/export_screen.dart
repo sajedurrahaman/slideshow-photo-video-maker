@@ -179,9 +179,9 @@ class _ExportScreenState extends State<ExportScreen> {
               SizedBox(
                 width: double.infinity,
                 height: 48,
-                child: FilledButton(
+                child: PrimaryGradientButton(
+                  label: 'Start Export',
                   onPressed: _startExport,
-                  child: const Text('Start Export'),
                 ),
               ),
             ] else ...[
@@ -224,9 +224,12 @@ class _ExportScreenState extends State<ExportScreen> {
                               const SizedBox(height: 12),
                               Text(_error!, textAlign: TextAlign.center),
                               const SizedBox(height: 16),
-                              FilledButton(
+                              PrimaryGradientButton(
+                                label: 'Retry',
                                 onPressed: _startExport,
-                                child: const Text('Retry'),
+                                height: 40,
+                                borderRadius: 8,
+                                fontSize: 14,
                               ),
                             ],
                           ],

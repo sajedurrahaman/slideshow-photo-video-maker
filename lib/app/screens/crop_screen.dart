@@ -468,7 +468,7 @@ class _CropScreenState extends State<CropScreen> {
               width: 14,
               height: 14,
               decoration: BoxDecoration(
-                color: AppColors.primary,
+                gradient: AppColors.primaryGradient,
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 1.5),
               ),
@@ -507,7 +507,7 @@ class _CropScreenState extends State<CropScreen> {
                         height: 2.5,
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            color: AppColors.primary,
+                            gradient: AppColors.primaryGradient,
                             borderRadius: BorderRadius.circular(2),
                           ),
                         ),

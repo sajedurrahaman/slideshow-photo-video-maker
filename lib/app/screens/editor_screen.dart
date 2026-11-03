@@ -1082,7 +1082,7 @@ class _EditorScreenState extends State<EditorScreen>
                       height: _thumbH,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: AppColors.primary,
+                        gradient: AppColors.primaryGradient,
                         borderRadius: BorderRadius.circular(4),
                         boxShadow: const [
                           BoxShadow(
@@ -2787,462 +2787,465 @@ class _EditorScreenState extends State<EditorScreen>
         unawaited(_saveDraftAndLeave());
       },
       child: Scaffold(
-      backgroundColor: Colors.white,
-      // Keep preview fixed; text sheet / keyboard overlay instead of resizing body.
-      resizeToAvoidBottomInset: false,
-      appBar: AppBar(
-        title: const Text('Editor'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _savingDraft ? null : _saveDraftAndLeave,
-        ),
-        actions: [
-          // Photo/Music/Effects: Done check sits in timeline header — not AppBar.
-          if (!_textToolsOpen &&
-              project.selectedPhotoIndex == null &&
-              !_musicToolsOpen &&
-              !_effectsToolsOpen &&
-              _tool != EditorTool.slide &&
-              _tool != EditorTool.frame &&
-              _tool != EditorTool.music &&
-              _tool != EditorTool.effects &&
-              !_musicEditOpen)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: TealPillButton(
-                label: 'Export',
-                enabled:
-                    project.photos.length >= AppConstants.minPhotos &&
-                    !project.isProcessing &&
-                    !_savingDraft,
-                onPressed: () => context.push('/export'),
+        backgroundColor: Colors.white,
+        // Keep preview fixed; text sheet / keyboard overlay instead of resizing body.
+        resizeToAvoidBottomInset: false,
+        appBar: AppBar(
+          title: const Text('Editor'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _savingDraft ? null : _saveDraftAndLeave,
+          ),
+          actions: [
+            // Photo/Music/Effects: Done check sits in timeline header — not AppBar.
+            if (!_textToolsOpen &&
+                project.selectedPhotoIndex == null &&
+                !_musicToolsOpen &&
+                !_effectsToolsOpen &&
+                _tool != EditorTool.slide &&
+                _tool != EditorTool.frame &&
+                _tool != EditorTool.music &&
+                _tool != EditorTool.effects &&
+                !_musicEditOpen)
+              Padding(
+                padding: const EdgeInsets.only(right: 12, top: 10, bottom: 9),
+                child: TealPillButton(
+                  label: 'Export',
+                  enabled:
+                      project.photos.length >= AppConstants.minPhotos &&
+                      !project.isProcessing &&
+                      !_savingDraft,
+                  onPressed: () => context.push('/export'),
+                ),
               ),
-            ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          Column(
-            children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-                  child: Center(
-                    child: AspectRatio(
-                      aspectRatio: aspect,
-                      child: DecoratedBox(
-                        decoration: const BoxDecoration(color: Colors.black),
-                        child: ClipRRect(
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              if (project.selectedPhotoIndex case final sel?
-                                  when sel >= 0 && sel < project.photos.length)
-                                _LiveClipPreview(
-                                  key: ValueKey(sel),
-                                  photoIndex: sel,
-                                  photo: project.photos[sel],
-                                  backgroundArgb:
-                                      project.photos[sel].backgroundArgb ??
-                                      project.backgroundArgb,
-                                  backgroundBlurLevel:
-                                      project.photos[sel].backgroundBlurLevel,
-                                  replayToken: _liveToken,
-                                  mode: _liveMode,
-                                  inSecOverride: _inDurationDrag,
-                                  outSecOverride: _outDurationDrag,
-                                  // Capture [sel] — selection can clear before
-                                  // the animation ticker fires onFraction again.
-                                  onFraction: (fraction) => project
-                                      .setLivePreviewClock(sel, fraction),
-                                  onFinished: () {
-                                    project.finishLiveClip();
-                                    if (mounted) {
-                                      setState(
-                                        () => _liveMode = _LiveMode.idle,
-                                      );
-                                    }
-                                  },
-                                )
-                              else
-                                RepaintBoundary(
-                                  child:
-                                      ValueListenableBuilder<
-                                        ({int index, double fraction})?
-                                      >(
-                                        valueListenable: project.scrubLive,
-                                        builder: (context, scrub, _) {
-                                          if (scrub != null &&
-                                              !project.isPreviewReady &&
-                                              scrub.index <
-                                                  project.photos.length) {
-                                            final photo =
-                                                project.photos[scrub.index];
-                                            return _LiveClipPreview(
-                                              key: ValueKey(
-                                                'scrub-${scrub.index}',
-                                              ),
-                                              photoIndex: scrub.index,
-                                              photo: photo,
-                                              backgroundArgb:
-                                                  photo.backgroundArgb ??
-                                                  project.backgroundArgb,
-                                              backgroundBlurLevel:
-                                                  photo.backgroundBlurLevel,
-                                              replayToken: 0,
-                                              mode: _LiveMode.idle,
-                                              holdFraction: scrub.fraction,
-                                              onFraction: (_) {},
-                                              onFinished: () {},
-                                            );
-                                          }
-                                          return ValueListenableBuilder<
-                                            Uint8List?
-                                          >(
-                                            valueListenable:
-                                                project.previewFrameListenable,
-                                            builder: (context, bytes, _) {
-                                              if (bytes != null) {
-                                                return Image.memory(
-                                                  bytes,
-                                                  fit: BoxFit.contain,
-                                                  gaplessPlayback: true,
-                                                  filterQuality:
-                                                      FilterQuality.low,
-                                                );
-                                              }
-                                              if (project.photos.isNotEmpty) {
-                                                return Image.file(
-                                                  File(
-                                                    project.photos.first.path,
-                                                  ),
-                                                  fit: BoxFit.contain,
-                                                  gaplessPlayback: true,
-                                                  filterQuality:
-                                                      FilterQuality.high,
-                                                );
-                                              }
-                                              return const Center(
-                                                child: Text(
-                                                  'No preview',
-                                                  style: TextStyle(
-                                                    color: Colors.white54,
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                          );
-                                        },
-                                      ),
-                                ),
-                              if (project.selectedFrameAsset != null)
-                                IgnorePointer(
-                                  child: Image.asset(
-                                    project.selectedFrameAsset!,
-                                    key: ValueKey(project.selectedFrameAsset),
-                                    fit: BoxFit.fill,
-                                    gaplessPlayback: false,
-                                    filterQuality: FilterQuality.medium,
-                                  ),
-                                ),
-                              // Live effect layer (CapCut-style) — no frame bake / no loading.
-                              if (project.isEffectOverlayEnabled &&
-                                  project.selectedOverlayEffect != null)
-                                _LiveEffectOverlayLayer(
-                                  key: ValueKey(
-                                    project.selectedOverlayEffect!.id,
-                                  ),
-                                  project: project,
-                                  effect: project.selectedOverlayEffect!,
-                                ),
-                              // Live text: tap to select/move; Edit opens sheet.
-                              LiveTextOverlaysLayer(
-                                project: project,
-                                selectedOverlayId: _selectedTextOverlayId,
-                                onSelectedOverlayId: (id) {
-                                  setState(() {
-                                    _selectedTextOverlayId = id;
-                                    if (id != null) {
-                                      final o = project.overlays
-                                          .where((e) => e.id == id)
-                                          .firstOrNull;
-                                      if (o?.text != null) {
-                                        _textController.text = o!.text!;
+          ],
+        ),
+        body: Stack(
+          children: [
+            Column(
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: aspect,
+                        child: DecoratedBox(
+                          decoration: const BoxDecoration(color: Colors.black),
+                          child: ClipRRect(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                if (project.selectedPhotoIndex case final sel?
+                                    when sel >= 0 &&
+                                        sel < project.photos.length)
+                                  _LiveClipPreview(
+                                    key: ValueKey(sel),
+                                    photoIndex: sel,
+                                    photo: project.photos[sel],
+                                    backgroundArgb:
+                                        project.photos[sel].backgroundArgb ??
+                                        project.backgroundArgb,
+                                    backgroundBlurLevel:
+                                        project.photos[sel].backgroundBlurLevel,
+                                    replayToken: _liveToken,
+                                    mode: _liveMode,
+                                    inSecOverride: _inDurationDrag,
+                                    outSecOverride: _outDurationDrag,
+                                    // Capture [sel] — selection can clear before
+                                    // the animation ticker fires onFraction again.
+                                    onFraction: (fraction) => project
+                                        .setLivePreviewClock(sel, fraction),
+                                    onFinished: () {
+                                      project.finishLiveClip();
+                                      if (mounted) {
+                                        setState(
+                                          () => _liveMode = _LiveMode.idle,
+                                        );
                                       }
-                                    }
-                                  });
-                                },
-                                onEditOverlay: (id) {
-                                  final o = project.overlays
-                                      .where((e) => e.id == id)
-                                      .firstOrNull;
-                                  setState(() {
-                                    _selectedTextOverlayId = id;
-                                    _textController.text = o?.text ?? '';
-                                    _tool = null;
-                                    _musicToolsOpen = false;
-                                    _effectsToolsOpen = false;
-                                    _photoTool = null;
-                                    _textToolsOpen = true;
-                                  });
-                                  project.clearTimelinePhotoSelection();
-                                  project.stopPreviewPlayback();
-                                },
-                                editing: _textToolsOpen,
-                              ),
-                              // Loading while transition preview frames are prepared.
-                              if (project.isPreparingPreview)
-                                const PreparingPreviewOverlay(),
-                              // Export-only progress.
-                              if (project.isProcessing)
-                                Container(
-                                  color: Colors.black54,
-                                  child: Center(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        CircularProgressIndicator(
-                                          color: AppColors.primary,
-                                          value: project.processProgress > 0
-                                              ? project.processProgress
-                                              : null,
+                                    },
+                                  )
+                                else
+                                  RepaintBoundary(
+                                    child:
+                                        ValueListenableBuilder<
+                                          ({int index, double fraction})?
+                                        >(
+                                          valueListenable: project.scrubLive,
+                                          builder: (context, scrub, _) {
+                                            if (scrub != null &&
+                                                !project.isPreviewReady &&
+                                                scrub.index <
+                                                    project.photos.length) {
+                                              final photo =
+                                                  project.photos[scrub.index];
+                                              return _LiveClipPreview(
+                                                key: ValueKey(
+                                                  'scrub-${scrub.index}',
+                                                ),
+                                                photoIndex: scrub.index,
+                                                photo: photo,
+                                                backgroundArgb:
+                                                    photo.backgroundArgb ??
+                                                    project.backgroundArgb,
+                                                backgroundBlurLevel:
+                                                    photo.backgroundBlurLevel,
+                                                replayToken: 0,
+                                                mode: _LiveMode.idle,
+                                                holdFraction: scrub.fraction,
+                                                onFraction: (_) {},
+                                                onFinished: () {},
+                                              );
+                                            }
+                                            return ValueListenableBuilder<
+                                              Uint8List?
+                                            >(
+                                              valueListenable: project
+                                                  .previewFrameListenable,
+                                              builder: (context, bytes, _) {
+                                                if (bytes != null) {
+                                                  return Image.memory(
+                                                    bytes,
+                                                    fit: BoxFit.contain,
+                                                    gaplessPlayback: true,
+                                                    filterQuality:
+                                                        FilterQuality.low,
+                                                  );
+                                                }
+                                                if (project.photos.isNotEmpty) {
+                                                  return Image.file(
+                                                    File(
+                                                      project.photos.first.path,
+                                                    ),
+                                                    fit: BoxFit.contain,
+                                                    gaplessPlayback: true,
+                                                    filterQuality:
+                                                        FilterQuality.high,
+                                                  );
+                                                }
+                                                return const Center(
+                                                  child: Text(
+                                                    'No preview',
+                                                    style: TextStyle(
+                                                      color: Colors.white54,
+                                                    ),
+                                                  ),
+                                                );
+                                              },
+                                            );
+                                          },
                                         ),
-                                        const SizedBox(height: 12),
-                                        Text(
-                                          'Exporting ${(project.processProgress * 100).toInt()}%',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ],
+                                  ),
+                                if (project.selectedFrameAsset != null)
+                                  IgnorePointer(
+                                    child: Image.asset(
+                                      project.selectedFrameAsset!,
+                                      key: ValueKey(project.selectedFrameAsset),
+                                      fit: BoxFit.fill,
+                                      gaplessPlayback: false,
+                                      filterQuality: FilterQuality.medium,
                                     ),
                                   ),
+                                // Live effect layer (CapCut-style) — no frame bake / no loading.
+                                if (project.isEffectOverlayEnabled &&
+                                    project.selectedOverlayEffect != null)
+                                  _LiveEffectOverlayLayer(
+                                    key: ValueKey(
+                                      project.selectedOverlayEffect!.id,
+                                    ),
+                                    project: project,
+                                    effect: project.selectedOverlayEffect!,
+                                  ),
+                                // Live text: tap to select/move; Edit opens sheet.
+                                LiveTextOverlaysLayer(
+                                  project: project,
+                                  selectedOverlayId: _selectedTextOverlayId,
+                                  onSelectedOverlayId: (id) {
+                                    setState(() {
+                                      _selectedTextOverlayId = id;
+                                      if (id != null) {
+                                        final o = project.overlays
+                                            .where((e) => e.id == id)
+                                            .firstOrNull;
+                                        if (o?.text != null) {
+                                          _textController.text = o!.text!;
+                                        }
+                                      }
+                                    });
+                                  },
+                                  onEditOverlay: (id) {
+                                    final o = project.overlays
+                                        .where((e) => e.id == id)
+                                        .firstOrNull;
+                                    setState(() {
+                                      _selectedTextOverlayId = id;
+                                      _textController.text = o?.text ?? '';
+                                      _tool = null;
+                                      _musicToolsOpen = false;
+                                      _effectsToolsOpen = false;
+                                      _photoTool = null;
+                                      _textToolsOpen = true;
+                                    });
+                                    project.clearTimelinePhotoSelection();
+                                    project.stopPreviewPlayback();
+                                  },
+                                  editing: _textToolsOpen,
                                 ),
-                            ],
+                                // Loading while transition preview frames are prepared.
+                                if (project.isPreparingPreview)
+                                  const PreparingPreviewOverlay(),
+                                // Export-only progress.
+                                if (project.isProcessing)
+                                  Container(
+                                    color: Colors.black54,
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          CircularProgressIndicator(
+                                            color: AppColors.primary,
+                                            value: project.processProgress > 0
+                                                ? project.processProgress
+                                                : null,
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            'Exporting ${(project.processProgress * 100).toInt()}%',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
 
-              // Text sheet overlays — keep idle chrome underneath so preview size/position stays fixed.
-              if (_textToolsOpen) ...[
-                _idleToolPanel(project),
-                _editorToolbar(),
-              ] else if (photoToolReplacesTimeline) ...[
-                _idleToolPanel(
-                  project,
-                  height:
-                      _timelineHeaderHeight +
-                      inlineSheetHeight +
-                      replacedSheetExtra,
-                  timelineHeaderHeight: _timelineHeaderHeight,
-                  timelineContent: _photoEditSheet(
-                    project,
-                    heightOverride: inlineSheetHeight + replacedSheetExtra,
-                    compactContent: true,
-                  ),
-                ),
-              ] else if (_tool == EditorTool.ratio ||
-                  _tool == EditorTool.bg) ...[
-                _idleToolPanel(
-                  project,
-                  height:
-                      _timelineHeaderHeight +
-                      inlineSheetHeight +
-                      _photoToolbarHeight,
-                  timelineHeaderHeight: _timelineHeaderHeight,
-                  timelineContent: _editorCanvasSheet(
-                    project,
-                    height: inlineSheetHeight + _photoToolbarHeight,
-                  ),
-                ),
-              ] else if (_tool == EditorTool.music) ...[
-                // Fixed height = idle panel + toolbar slot (no extra music bump).
-                Container(
-                  height: _sheetHeight + _photoToolbarHeight,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    border: Border(top: BorderSide(color: AppColors.border)),
-                  ),
-                  child: Column(
-                    children: [
-                      SizedBox(
-                        height: _timelineHeaderHeight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 14, right: 6),
-                          child: _idlePreviewRow(project),
-                        ),
-                      ),
-                      Expanded(
-                        child: _MusicPickerSheet(
-                          project: project,
-                          onClose: _finishMusicPicker,
-                          onConfirm: _finishMusicPicker,
-                          onOpenLibrary: () => context.push('/music'),
-                          onPickLocal: _pickLocalMusic,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ] else if (_tool == EditorTool.effects) ...[
-                Container(
-                  height: _sheetHeight + _photoToolbarHeight,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    border: Border(top: BorderSide(color: AppColors.border)),
-                  ),
-                  child: Column(
-                    children: [
-                      SizedBox(
-                        height: _timelineHeaderHeight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 14, right: 6),
-                          child: _idlePreviewRow(project),
-                        ),
-                      ),
-                      Expanded(
-                        child: _EffectsPickerSheet(
-                          project: project,
-                          onClose: _finishEffectsPicker,
-                          onConfirm: _finishEffectsPicker,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ] else if (_musicToolsOpen && _musicEditOpen) ...[
-                // Timeline strip hidden; same body height as idle (_sheetHeight).
-                Container(
-                  height: _sheetHeight,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    border: Border(top: BorderSide(color: AppColors.border)),
-                  ),
-                  child: Column(
-                    children: [
-                      SizedBox(
-                        height: _timelineHeaderHeight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 14, right: 6),
-                          child: _idlePreviewRow(project),
-                        ),
-                      ),
-                      Expanded(
-                        child: _MusicEditSheet(
-                          project: project,
-                          onClose: () => setState(() => _musicEditOpen = false),
-                          onConfirm: () =>
-                              setState(() => _musicEditOpen = false),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                _musicEditorToolbar(project),
-              ] else ...[
-                // One shared idle strip for normal editing + photo selection so the
-                // ScrollController is not remounted onto a second ListView.
-                if (_tool == null)
-                  _idleToolPanel(project)
-                else
-                  SectionSheet(
-                    title: _toolLabel(_tool!),
-                    height: _sheetHeight,
-                    headerRow: SizedBox(
-                      height: _timelineHeaderHeight,
-                      child: _idlePreviewRow(project),
-                    ),
-                    onClose: _dismissTool,
-                    onConfirm: _dismissTool,
-                    child: _buildPanel(project),
-                  ),
-
-                if (project.selectedPhotoIndex != null) ...[
-                  if (_photoTool == null)
-                    _photoEditorToolbar(project)
-                  else
-                    _photoEditSheet(project),
-                ] else if (_musicToolsOpen)
-                  _musicVolumeOpen
-                      ? _musicVolumeSheet(project)
-                      : _musicEditorToolbar(project)
-                else if (_effectsToolsOpen)
-                  _effectsEditorToolbar(project)
-                else
+                // Text sheet overlays — keep idle chrome underneath so preview size/position stays fixed.
+                if (_textToolsOpen) ...[
+                  _idleToolPanel(project),
                   _editorToolbar(),
-              ],
-              SizedBox(height: MediaQuery.paddingOf(context).bottom),
-            ],
-          ),
-          if (_textToolsOpen)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: ListenableBuilder(
-                listenable: _textFocusNode,
-                builder: (context, _) {
-                  final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-                  final safeBottom = MediaQuery.paddingOf(context).bottom;
-                  final keyboardOpen = keyboard > 0 || _textFocusNode.hasFocus;
-                  final hasOverlay = _selectedTextOverlayId != null;
-                  // Typing: input bar only (tabs hide under keyboard). Idle + overlay: full panel.
-                  final bodyH = (hasOverlay && !keyboardOpen)
-                      ? TextToolsSheet.sheetBodyHeight
-                      : 64.0;
-                  return AnimatedPadding(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    // Lift sheet with keyboard; preview stays put (resizeToAvoidBottomInset: false).
-                    padding: EdgeInsets.only(
-                      bottom: keyboard > 0 ? keyboard : safeBottom,
+                ] else if (photoToolReplacesTimeline) ...[
+                  _idleToolPanel(
+                    project,
+                    height:
+                        _timelineHeaderHeight +
+                        inlineSheetHeight +
+                        replacedSheetExtra,
+                    timelineHeaderHeight: _timelineHeaderHeight,
+                    timelineContent: _photoEditSheet(
+                      project,
+                      heightOverride: inlineSheetHeight + replacedSheetExtra,
+                      compactContent: true,
                     ),
-                    child: Material(
-                      elevation: 12,
+                  ),
+                ] else if (_tool == EditorTool.ratio ||
+                    _tool == EditorTool.bg) ...[
+                  _idleToolPanel(
+                    project,
+                    height:
+                        _timelineHeaderHeight +
+                        inlineSheetHeight +
+                        _photoToolbarHeight,
+                    timelineHeaderHeight: _timelineHeaderHeight,
+                    timelineContent: _editorCanvasSheet(
+                      project,
+                      height: inlineSheetHeight + _photoToolbarHeight,
+                    ),
+                  ),
+                ] else if (_tool == EditorTool.music) ...[
+                  // Fixed height = idle panel + toolbar slot (no extra music bump).
+                  Container(
+                    height: _sheetHeight + _photoToolbarHeight,
+                    decoration: const BoxDecoration(
                       color: Colors.white,
-                      clipBehavior: Clip.hardEdge,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        height: bodyH,
-                        clipBehavior: Clip.hardEdge,
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          border: Border(
-                            top: BorderSide(color: AppColors.border),
+                      border: Border(top: BorderSide(color: AppColors.border)),
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: _timelineHeaderHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 14, right: 6),
+                            child: _idlePreviewRow(project),
                           ),
                         ),
-                        child: TextToolsSheet(
-                          project: project,
-                          controller: _textController,
-                          focusNode: _textFocusNode,
-                          selectedOverlayId: _selectedTextOverlayId,
-                          onSelectedOverlayId: (id) =>
-                              setState(() => _selectedTextOverlayId = id),
-                          onClose: _closeTextTools,
-                          onConfirm: () => setState(() {}),
-                          compactKeyboardPhase: !hasOverlay || keyboardOpen,
+                        Expanded(
+                          child: _MusicPickerSheet(
+                            project: project,
+                            onClose: _finishMusicPicker,
+                            onConfirm: _finishMusicPicker,
+                            onOpenLibrary: () => context.push('/music'),
+                            onPickLocal: _pickLocalMusic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (_tool == EditorTool.effects) ...[
+                  Container(
+                    height: _sheetHeight + _photoToolbarHeight,
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      border: Border(top: BorderSide(color: AppColors.border)),
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: _timelineHeaderHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 14, right: 6),
+                            child: _idlePreviewRow(project),
+                          ),
+                        ),
+                        Expanded(
+                          child: _EffectsPickerSheet(
+                            project: project,
+                            onClose: _finishEffectsPicker,
+                            onConfirm: _finishEffectsPicker,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (_musicToolsOpen && _musicEditOpen) ...[
+                  // Timeline strip hidden; same body height as idle (_sheetHeight).
+                  Container(
+                    height: _sheetHeight,
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      border: Border(top: BorderSide(color: AppColors.border)),
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: _timelineHeaderHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 14, right: 6),
+                            child: _idlePreviewRow(project),
+                          ),
+                        ),
+                        Expanded(
+                          child: _MusicEditSheet(
+                            project: project,
+                            onClose: () =>
+                                setState(() => _musicEditOpen = false),
+                            onConfirm: () =>
+                                setState(() => _musicEditOpen = false),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _musicEditorToolbar(project),
+                ] else ...[
+                  // One shared idle strip for normal editing + photo selection so the
+                  // ScrollController is not remounted onto a second ListView.
+                  if (_tool == null)
+                    _idleToolPanel(project)
+                  else
+                    SectionSheet(
+                      title: _toolLabel(_tool!),
+                      height: _sheetHeight,
+                      headerRow: SizedBox(
+                        height: _timelineHeaderHeight,
+                        child: _idlePreviewRow(project),
+                      ),
+                      onClose: _dismissTool,
+                      onConfirm: _dismissTool,
+                      child: _buildPanel(project),
+                    ),
+
+                  if (project.selectedPhotoIndex != null) ...[
+                    if (_photoTool == null)
+                      _photoEditorToolbar(project)
+                    else
+                      _photoEditSheet(project),
+                  ] else if (_musicToolsOpen)
+                    _musicVolumeOpen
+                        ? _musicVolumeSheet(project)
+                        : _musicEditorToolbar(project)
+                  else if (_effectsToolsOpen)
+                    _effectsEditorToolbar(project)
+                  else
+                    _editorToolbar(),
+                ],
+                SizedBox(height: MediaQuery.paddingOf(context).bottom),
+              ],
+            ),
+            if (_textToolsOpen)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: ListenableBuilder(
+                  listenable: _textFocusNode,
+                  builder: (context, _) {
+                    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+                    final safeBottom = MediaQuery.paddingOf(context).bottom;
+                    final keyboardOpen =
+                        keyboard > 0 || _textFocusNode.hasFocus;
+                    final hasOverlay = _selectedTextOverlayId != null;
+                    // Typing: input bar only (tabs hide under keyboard). Idle + overlay: full panel.
+                    final bodyH = (hasOverlay && !keyboardOpen)
+                        ? TextToolsSheet.sheetBodyHeight
+                        : 64.0;
+                    return AnimatedPadding(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOut,
+                      // Lift sheet with keyboard; preview stays put (resizeToAvoidBottomInset: false).
+                      padding: EdgeInsets.only(
+                        bottom: keyboard > 0 ? keyboard : safeBottom,
+                      ),
+                      child: Material(
+                        elevation: 12,
+                        color: Colors.white,
+                        clipBehavior: Clip.hardEdge,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          height: bodyH,
+                          clipBehavior: Clip.hardEdge,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            border: Border(
+                              top: BorderSide(color: AppColors.border),
+                            ),
+                          ),
+                          child: TextToolsSheet(
+                            project: project,
+                            controller: _textController,
+                            focusNode: _textFocusNode,
+                            selectedOverlayId: _selectedTextOverlayId,
+                            onSelectedOverlayId: (id) =>
+                                setState(() => _selectedTextOverlayId = id),
+                            onClose: _closeTextTools,
+                            onConfirm: () => setState(() {}),
+                            compactKeyboardPhase: !hasOverlay || keyboardOpen,
+                          ),
                         ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
-            ),
-          if (_savingDraft)
-            const Positioned.fill(
-              child: ModalBarrier(
-                dismissible: false,
-                color: Color(0x33000000),
+            if (_savingDraft)
+              const Positioned.fill(
+                child: ModalBarrier(
+                  dismissible: false,
+                  color: Color(0x33000000),
+                ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
-    ),
     );
   }
 
@@ -3509,10 +3512,11 @@ class _MusicEditSheetState extends State<_MusicEditSheet> {
             height: 24,
             padding: const EdgeInsets.all(2),
             decoration: BoxDecoration(
-              color: value ? const Color(0xFFE8F5F3) : const Color(0xFFE8E8E8),
+              gradient: value ? AppColors.primaryGradient : null,
+              color: value ? null : const Color(0xFFE8E8E8),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: value ? AppColors.primary : const Color(0xFFD0D0D0),
+                color: value ? AppColors.primaryEnd : const Color(0xFFD0D0D0),
               ),
             ),
             // ON = knob on the right (matches screenshot).
@@ -3524,7 +3528,7 @@ class _MusicEditSheetState extends State<_MusicEditSheet> {
                 color: Colors.white,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: value ? AppColors.primary : const Color(0xFFBFBFBF),
+                  color: value ? AppColors.primaryEnd : const Color(0xFFBFBFBF),
                   width: 1.5,
                 ),
                 boxShadow: const [
@@ -3563,11 +3567,7 @@ class _MusicEditSheetState extends State<_MusicEditSheet> {
               height: 16,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF7DE8DE), Color(0xFF00BFA5)],
-                ),
+                gradient: AppColors.primaryGradient,
                 border: Border.all(color: Colors.white, width: 2),
                 boxShadow: const [
                   BoxShadow(
@@ -3781,11 +3781,9 @@ class _EditWavePainter extends CustomPainter {
       final active = x >= startX && x <= endX;
       if (active) {
         final paint = Paint()
-          ..shader = const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF5CE1D6), Color(0xFF00BFA5)],
-          ).createShader(Rect.fromLTWH(x - 1, y0, 3, h))
+          ..shader = AppColors.primaryGradient.createShader(
+            Rect.fromLTWH(x - 1, y0, 3, h),
+          )
           ..strokeWidth = 2.2
           ..strokeCap = StrokeCap.round;
         canvas.drawLine(Offset(x, y0), Offset(x, y1), paint);
@@ -4102,7 +4100,7 @@ class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
                               vertical: 2,
                             ),
                             decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.92),
+                              gradient: AppColors.primaryGradient,
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
@@ -6226,7 +6224,11 @@ class _TitleCardPanelState extends State<_TitleCardPanel> {
           const SizedBox(height: 8),
           Row(
             children: [
-              FilledButton(
+              PrimaryGradientButton(
+                label: 'Apply ${widget.label}',
+                height: 40,
+                borderRadius: 8,
+                fontSize: 14,
                 onPressed: () {
                   widget.onChanged(
                     TitleCard(
@@ -6237,7 +6239,6 @@ class _TitleCardPanelState extends State<_TitleCardPanel> {
                     ),
                   );
                 },
-                child: Text('Apply ${widget.label}'),
               ),
               const SizedBox(width: 8),
               TextButton(

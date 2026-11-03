@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../core/theme/app_theme.dart';
 import '../services/export_service.dart';
@@ -248,36 +247,13 @@ class _VideoThumbState extends State<_VideoThumb> {
       return;
     }
 
-    // Prefer FFmpeg cache beside the mp4 (works offline / consistent).
+    // Generate + cache first frame with FFmpeg (already in the project).
     final viaFfmpeg = await ExportService.ensureCreationThumbnail(widget.video);
     if (viaFfmpeg != null && await viaFfmpeg.exists()) {
       if (!mounted) return;
       setState(() => _thumb = viaFfmpeg);
       return;
     }
-
-    // Fallback: video_thumbnail plugin.
-    try {
-      final path = await VideoThumbnail.thumbnailFile(
-        video: widget.video.path,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 480,
-        quality: 75,
-        timeMs: 50,
-      );
-      if (path != null && path.isNotEmpty) {
-        final generated = File(path);
-        if (await generated.exists()) {
-          try {
-            await generated.copy(cached.path);
-          } catch (_) {}
-          final show = await cached.exists() ? cached : generated;
-          if (!mounted) return;
-          setState(() => _thumb = show);
-          return;
-        }
-      }
-    } catch (_) {}
 
     if (!mounted) return;
     setState(() => _failed = true);

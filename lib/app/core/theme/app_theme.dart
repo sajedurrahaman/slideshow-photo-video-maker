@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Figma "Slideshows" white-mode tokens (teal primary).
+/// Brand tokens — primary CTAs use [primaryGradient].
 class AppColors {
-  static const primary = Color(0xFF00BFA5);
-  static const primaryDark = Color(0xFF00897B);
-  static const primarySoft = Color(0xFFE0F7F4);
-  static const accent = Color(0xFF2F80ED);
+  static const primaryStart = Color(0xFF26EBD7);
+  static const primaryEnd = Color(0xFF33B5F1);
+
+  /// Solid fallback for icons / accents (gradient start).
+  static const primary = primaryStart;
+  static const primaryDark = primaryEnd;
+  static const primarySoft = Color(0xFFE6FBFF);
+  static const accent = primaryEnd;
   static const background = Color(0xFFFFFFFF);
   static const surface = Color(0xFFFFFFFF);
   static const surfaceAlt = Color(0xFFF5F6F8);
@@ -16,6 +20,12 @@ class AppColors {
   static const danger = Color(0xFFFF3B30);
   static const iconActive = primary;
   static const iconNormal = Color(0xFF8E8E93);
+
+  static const primaryGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [primaryStart, primaryEnd],
+  );
 }
 
 class AppTheme {
@@ -46,6 +56,7 @@ class AppTheme {
         ),
       ),
       dividerColor: AppColors.border,
+      // Solid fallback; gradient CTAs use [TealPillButton] / [PrimaryGradientButton].
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: AppColors.primary,
@@ -87,6 +98,62 @@ class AppTheme {
         activeTrackColor: AppColors.primary,
         thumbColor: AppColors.primary,
         inactiveTrackColor: AppColors.primary.withValues(alpha: 0.2),
+      ),
+    );
+  }
+}
+
+/// Primary filled CTA with brand linear gradient.
+class PrimaryGradientButton extends StatelessWidget {
+  const PrimaryGradientButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.enabled = true,
+    this.height = 48,
+    this.borderRadius = 10,
+    this.padding = const EdgeInsets.symmetric(horizontal: 20),
+    this.fontSize = 15,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final bool enabled;
+  final double height;
+  final double borderRadius;
+  final EdgeInsetsGeometry padding;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(borderRadius);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onPressed : null,
+        borderRadius: radius,
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: enabled ? AppColors.primaryGradient : null,
+            color: enabled
+                ? null
+                : AppColors.primaryStart.withValues(alpha: 0.35),
+            borderRadius: radius,
+          ),
+          child: Container(
+            height: height,
+            padding: padding,
+            alignment: Alignment.center,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: fontSize,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

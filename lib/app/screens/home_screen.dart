@@ -145,9 +145,8 @@ class _HomeScreenState extends State<HomeScreen> {
       context.push('/editor');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open draft: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not open draft: $e')));
     }
   }
 
@@ -428,7 +427,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: _OutlineActionButton(
                             label: 'Share Now',
                             icon: Icons.share_rounded,
-                            color: const Color(0xFF4CAF50),
+                            color: const Color(0xFF13D23D),
                             onTap: _shareApp,
                           ),
                         ),
@@ -632,7 +631,10 @@ class _DraftTile extends StatelessWidget {
                   ),
                   Text(
                     '${draft.photoCount} photos · ${_fmtDuration(draft.durationSec)}',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9E9E9E),
+                    ),
                   ),
                 ],
               ),
@@ -686,4 +688,3 @@ class _OutlineActionButton extends StatelessWidget {
     );
   }
 }
-
