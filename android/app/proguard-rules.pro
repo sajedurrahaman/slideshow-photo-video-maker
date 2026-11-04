@@ -5,6 +5,7 @@
 -keep class io.flutter.view.** { *; }
 -keep class io.flutter.** { *; }
 -keep class io.flutter.plugins.** { *; }
+-keep class io.flutter.embedding.** { *; }
 
 # FFmpeg Kit
 -keep class com.antonkarpenko.ffmpegkit.** { *; }
@@ -16,6 +17,23 @@
 
 # Firebase
 -keep class com.google.firebase.** { *; }
+
+# WorkManager + Room (used by Firebase / ads / plugins — R8 breaks these)
+-keep class androidx.work.** { *; }
+-keep interface androidx.work.** { *; }
+-keep class * extends androidx.work.Worker
+-keep class * extends androidx.work.ListenableWorker {
+    public <init>(android.content.Context,androidx.work.WorkerParameters);
+}
+-keep class androidx.work.impl.WorkDatabase { *; }
+-keep class androidx.work.impl.WorkDatabase_Impl { *; }
+-keep class * extends androidx.room.RoomDatabase
+-keep class * extends androidx.room.RoomDatabase$* { *; }
+-keep class androidx.room.** { *; }
+-dontwarn androidx.room.paging.**
+
+# AndroidX Startup
+-keep class androidx.startup.** { *; }
 
 # Keep native methods
 -keepclasseswithmembernames class * {
