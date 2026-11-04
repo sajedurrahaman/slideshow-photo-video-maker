@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'app/ads/admob_bootstrap.dart';
 import 'app/core/responsive/app_responsive.dart';
 import 'app/core/theme/app_theme.dart';
 import 'app/router/app_router.dart';
@@ -11,6 +12,7 @@ import 'app/utils/force_update_upgrader.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await FirebaseBootstrap.init();
+  await initializeMobileAds();
   runApp(const ClipCraftApp());
 }
 

@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../ads/bottom_banner_ad.dart';
 import '../core/constants/app_constants.dart';
 import '../core/responsive/app_responsive.dart';
 import '../services/draft_service.dart';
@@ -423,11 +424,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-              // Always pinned to device bottom (above system nav inset).
+              // Rate / Share / Terms — banner sits below this block.
               ColoredBox(
                 color: Colors.white,
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(16, 12, 16, 2 + bottomInset),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -508,6 +509,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+              // Hide entirely when load fails (no empty slot on Home).
+              const BottomBannerAd(reserveSpace: false),
+              SizedBox(height: bottomInset),
             ],
           ),
         ),

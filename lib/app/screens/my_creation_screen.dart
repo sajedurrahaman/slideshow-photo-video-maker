@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
+import '../ads/bottom_banner_ad.dart';
 import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../services/export_service.dart';
@@ -73,154 +75,174 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
     final rs = AppResponsive.of(context);
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(title: const Text('Studio')),
-      body: ResponsiveBody(
-        child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _files.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.video_library_outlined,
-                        size: rs.r(56),
-                        color: AppColors.textMuted,
-                      ),
-                      SizedBox(height: rs.h(12)),
-                      Text(
-                        'No creations yet',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: rs.sp(16),
-                          color: AppColors.textDark,
-                        ),
-                      ),
-                      SizedBox(height: rs.h(4)),
-                      Text(
-                        'Export a slideshow to see it here',
-                        style: TextStyle(
-                          fontSize: rs.sp(13),
-                          color: AppColors.textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : GridView.builder(
-                  padding: EdgeInsets.all(rs.w(14)),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: rs.gridCrossAxisCount(
-                      phone: 2,
-                      tablet: 3,
-                      largeTablet: 4,
-                    ),
-                    mainAxisSpacing: rs.h(12),
-                    crossAxisSpacing: rs.w(12),
-                    childAspectRatio: 0.78,
-                  ),
-                  itemCount: _files.length,
-                  itemBuilder: (context, index) {
-                    final file = _files[index];
-                    final name = p.basename(file.path);
-                    final modified = file.lastModifiedSync();
-                    return Material(
-                      color: AppColors.surfaceAlt,
-                      borderRadius: BorderRadius.circular(rs.r(14)),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(rs.r(14)),
-                        onTap: () => _play(file),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.vertical(
-                                  top: Radius.circular(rs.r(14)),
-                                ),
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    ColoredBox(
-                                      color: Colors.black87,
-                                      child: _VideoThumb(video: file),
-                                    ),
-                                    Center(
-                                      child: Icon(
-                                        Icons.play_circle_filled,
-                                        color: Colors.white70,
-                                        size: rs.r(42),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+      appBar: AppBar(
+        title: const Text('Studio'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/home');
+            }
+          },
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ResponsiveBody(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _files.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.video_library_outlined,
+                            size: rs.r(56),
+                            color: AppColors.textMuted,
+                          ),
+                          SizedBox(height: rs.h(12)),
+                          Text(
+                            'No creations yet',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: rs.sp(16),
+                              color: AppColors.textDark,
                             ),
-                            Padding(
-                              padding: EdgeInsets.fromLTRB(
-                                rs.w(10),
-                                rs.h(8),
-                                rs.w(4),
-                                rs.h(8),
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                          ),
+                          SizedBox(height: rs.h(4)),
+                          Text(
+                            'Export a slideshow to see it here',
+                            style: TextStyle(
+                              fontSize: rs.sp(13),
+                              color: AppColors.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : GridView.builder(
+                      padding: EdgeInsets.all(rs.w(14)),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: rs.gridCrossAxisCount(
+                          phone: 2,
+                          tablet: 3,
+                          largeTablet: 4,
+                        ),
+                        mainAxisSpacing: rs.h(12),
+                        crossAxisSpacing: rs.w(12),
+                        childAspectRatio: 0.78,
+                      ),
+                      itemCount: _files.length,
+                      itemBuilder: (context, index) {
+                        final file = _files[index];
+                        final name = p.basename(file.path);
+                        final modified = file.lastModifiedSync();
+                        return Material(
+                          color: AppColors.surfaceAlt,
+                          borderRadius: BorderRadius.circular(rs.r(14)),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(rs.r(14)),
+                            onTap: () => _play(file),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.vertical(
+                                      top: Radius.circular(rs.r(14)),
+                                    ),
+                                    child: Stack(
+                                      fit: StackFit.expand,
                                       children: [
-                                        Text(
-                                          name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 12,
-                                          ),
+                                        ColoredBox(
+                                          color: Colors.black87,
+                                          child: _VideoThumb(video: file),
                                         ),
-                                        Text(
-                                          '${modified.day}/${modified.month}/${modified.year}',
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: AppColors.textMuted,
+                                        Center(
+                                          child: Icon(
+                                            Icons.play_circle_filled,
+                                            color: Colors.white70,
+                                            size: rs.r(42),
                                           ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  PopupMenuButton<String>(
-                                    onSelected: (v) async {
-                                      if (v == 'share') {
-                                        await SharePlus.instance.share(
-                                          ShareParams(
-                                            files: [XFile(file.path)],
-                                          ),
-                                        );
-                                      } else if (v == 'delete') {
-                                        await _delete(file);
-                                      }
-                                    },
-                                    itemBuilder: (_) => const [
-                                      PopupMenuItem(
-                                        value: 'share',
-                                        child: Text('Share'),
+                                ),
+                                Padding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    rs.w(10),
+                                    rs.h(8),
+                                    rs.w(4),
+                                    rs.h(8),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            Text(
+                                              '${modified.day}/${modified.month}/${modified.year}',
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                color: AppColors.textMuted,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                      PopupMenuItem(
-                                        value: 'delete',
-                                        child: Text('Delete'),
+                                      PopupMenuButton<String>(
+                                        onSelected: (v) async {
+                                          if (v == 'share') {
+                                            await SharePlus.instance.share(
+                                              ShareParams(
+                                                files: [XFile(file.path)],
+                                              ),
+                                            );
+                                          } else if (v == 'delete') {
+                                            await _delete(file);
+                                          }
+                                        },
+                                        itemBuilder: (_) => const [
+                                          PopupMenuItem(
+                                            value: 'share',
+                                            child: Text('Share'),
+                                          ),
+                                          PopupMenuItem(
+                                            value: 'delete',
+                                            child: Text('Delete'),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ),
+          const BottomBannerAd(),
+          SizedBox(height: MediaQuery.paddingOf(context).bottom),
+        ],
       ),
     );
   }
