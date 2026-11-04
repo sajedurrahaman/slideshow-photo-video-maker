@@ -1,7 +1,7 @@
 name: clip_craft_slideshow
 description: Slideshow - Photo Video Maker (Flutter) for Android & iOS
 publish_to: "none"
-version: 1.0.9+20
+version: 1.0.8+19
 
 environment:
   sdk: ^3.13.3
