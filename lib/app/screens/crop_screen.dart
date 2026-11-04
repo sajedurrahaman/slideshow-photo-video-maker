@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
@@ -617,55 +618,66 @@ class _CropScreenState extends State<CropScreen> {
                   ],
                 ),
               ),
-              SizedBox(
-                height: 78,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-                  itemCount: _ratios.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 12),
-                  itemBuilder: (context, index) {
-                    final choice = _ratios[index];
-                    final selected = choice.id == _presetId;
-                    final color = selected
-                        ? Colors.white
-                        : const Color(0xFF8E8E8E);
-                    final mark = SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: CustomPaint(
-                        painter: _RatioMarkPainter(choice.mark, color),
+              Builder(
+                builder: (context) {
+                  final rs = AppResponsive.of(context);
+                  return SizedBox(
+                    height: rs.h(78),
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: EdgeInsets.fromLTRB(
+                        rs.w(16),
+                        rs.h(4),
+                        rs.w(16),
+                        rs.h(10),
                       ),
-                    );
-                    final label = Text(
-                      choice.label,
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: color,
-                        fontSize: 11,
-                        fontWeight:
-                            selected ? FontWeight.w600 : FontWeight.w400,
-                      ),
-                    );
-                    return GestureDetector(
-                      onTap: () => setState(() => _select(choice)),
-                      child: SizedBox(
-                        width: 44,
-                        child: Column(
-                          children: [
-                            selected
-                                ? PrimaryGradientMask(child: mark)
-                                : mark,
-                            const SizedBox(height: 6),
-                            selected
-                                ? PrimaryGradientMask(child: label)
-                                : label,
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                      itemCount: _ratios.length,
+                      separatorBuilder: (_, _) => SizedBox(width: rs.w(12)),
+                      itemBuilder: (context, index) {
+                        final choice = _ratios[index];
+                        final selected = choice.id == _presetId;
+                        final color = selected
+                            ? Colors.white
+                            : const Color(0xFF8E8E8E);
+                        final mark = SizedBox(
+                          width: rs.r(32),
+                          height: rs.r(32),
+                          child: CustomPaint(
+                            painter: _RatioMarkPainter(choice.mark, color),
+                          ),
+                        );
+                        final label = Text(
+                          choice.label,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: color,
+                            fontSize: rs.sp(11),
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                          ),
+                        );
+                        return GestureDetector(
+                          onTap: () => setState(() => _select(choice)),
+                          child: SizedBox(
+                            width: rs.w(44),
+                            child: Column(
+                              children: [
+                                selected
+                                    ? PrimaryGradientMask(child: mark)
+                                    : mark,
+                                SizedBox(height: rs.h(6)),
+                                selected
+                                    ? PrimaryGradientMask(child: label)
+                                    : label,
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
               ),
               SizedBox(height: MediaQuery.paddingOf(context).bottom),
             ],

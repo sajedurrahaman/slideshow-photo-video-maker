@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'app/core/responsive/app_responsive.dart';
 import 'app/core/theme/app_theme.dart';
 import 'app/router/app_router.dart';
 import 'app/services/firebase_bootstrap.dart';
@@ -24,6 +25,9 @@ class ClipCraftApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
         routerConfig: appRouter,
+        builder: (context, child) => ResponsiveApp(
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
     );
   }

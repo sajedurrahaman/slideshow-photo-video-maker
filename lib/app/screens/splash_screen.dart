@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/responsive/app_responsive.dart';
+
 /// Splash styled like the marketing splash: white canvas, soft cyan
 /// bubbles/wave (code-drawn), brand logo, "Slide"+"show" title, tagline.
 class SplashScreen extends StatefulWidget {
@@ -65,8 +67,8 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Match marketing splash logo size (~78% of screen width).
-    final iconSize = 120.0;
+    // Fixed 120 — same visual size as native splash on Android 11–16.
+    const iconSize = 120.0;
     return Scaffold(
       backgroundColor: Colors.white,
       body: FadeTransition(
@@ -86,8 +88,9 @@ class _SplashScreenState extends State<SplashScreen>
                       height: iconSize,
                       child: Image.asset(
                         'assets/images/app_icon.png',
-                        fit: BoxFit.contain,
+                        fit: BoxFit.fill,
                         filterQuality: FilterQuality.high,
+                        gaplessPlayback: true,
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -120,37 +123,39 @@ class _BrandTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
+    final titleSize = rs.sp(34);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(width: 28, height: 2, color: cyan),
-        const SizedBox(width: 12),
+        Container(width: rs.w(28), height: rs.h(2), color: cyan),
+        SizedBox(width: rs.w(12)),
         Text.rich(
           TextSpan(
             children: [
               TextSpan(
                 text: 'Slide',
                 style: TextStyle(
-                  fontSize: 34,
+                  fontSize: titleSize,
                   fontWeight: FontWeight.w800,
                   color: cyan,
                   letterSpacing: -0.4,
                 ),
               ),
-              const TextSpan(
+              TextSpan(
                 text: 'show',
                 style: TextStyle(
-                  fontSize: 34,
+                  fontSize: titleSize,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF111111),
+                  color: const Color(0xFF111111),
                   letterSpacing: -0.4,
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(width: 12),
-        Container(width: 28, height: 2, color: cyan),
+        SizedBox(width: rs.w(12)),
+        Container(width: rs.w(28), height: rs.h(2), color: cyan),
       ],
     );
   }

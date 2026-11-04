@@ -51,8 +51,10 @@ flutter_native_splash:
   android: true
   ios: true
   android_12:
+    # Use padded asset so logo ≈ 120dp (50% of ~240dp splash slot) like Flutter.
     color: "#FFFFFF"
-    image: assets/images/app_icon.png
+    image: assets/images/app_icon_splash_120.png
+    icon_background_color: "#FFFFFF"
   fullscreen: true
 
 flutter:

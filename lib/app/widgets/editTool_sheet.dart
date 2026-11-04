@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 
 class TealPillButton extends StatelessWidget {
@@ -16,7 +17,8 @@ class TealPillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(8);
+    final rs = AppResponsive.of(context);
+    final radius = BorderRadius.circular(rs.r(8));
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -31,16 +33,19 @@ class TealPillButton extends StatelessWidget {
             borderRadius: radius,
           ),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 34),
+            constraints: BoxConstraints(minHeight: rs.h(34)),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+              padding: EdgeInsets.symmetric(
+                horizontal: rs.w(16),
+                vertical: rs.h(2),
+              ),
               child: Center(
                 child: Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
-                    fontSize: 12,
+                    fontSize: rs.sp(12),
                   ),
                 ),
               ),
@@ -70,26 +75,28 @@ class EditorToolIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
     final muted = AppColors.iconNormal;
+    final iconSize = rs.r(24);
     Widget iconWidget;
     if (assetPath != null) {
       iconWidget = Image.asset(
         assetPath!,
-        width: 24,
-        height: 24,
+        width: iconSize,
+        height: iconSize,
         fit: BoxFit.contain,
         color: selected ? Colors.white : muted,
         errorBuilder: (_, _, _) => Icon(
           icon ?? Icons.extension_outlined,
           color: selected ? Colors.white : muted,
-          size: 24,
+          size: iconSize,
         ),
       );
     } else {
       iconWidget = Icon(
         icon!,
         color: selected ? Colors.white : muted,
-        size: 24,
+        size: iconSize,
       );
     }
     if (selected) {
@@ -101,7 +108,7 @@ class EditorToolIcon extends StatelessWidget {
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: TextStyle(
-        fontSize: 11,
+        fontSize: rs.sp(11),
         fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
         color: selected ? Colors.white : muted,
       ),
@@ -109,14 +116,14 @@ class EditorToolIcon extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(rs.r(10)),
       child: SizedBox(
-        width: 64,
+        width: rs.w(64),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             iconWidget,
-            const SizedBox(height: 4),
+            SizedBox(height: rs.h(4)),
             if (selected)
               PrimaryGradientMask(child: labelWidget)
             else

@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../services/export_service.dart';
 
@@ -69,43 +70,53 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(title: const Text('Studio')),
-      body: _loading
+      body: ResponsiveBody(
+        child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _files.isEmpty
-              ? const Center(
+              ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         Icons.video_library_outlined,
-                        size: 56,
+                        size: rs.r(56),
                         color: AppColors.textMuted,
                       ),
-                      SizedBox(height: 12),
+                      SizedBox(height: rs.h(12)),
                       Text(
                         'No creations yet',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
+                          fontSize: rs.sp(16),
                           color: AppColors.textDark,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      SizedBox(height: rs.h(4)),
                       Text(
                         'Export a slideshow to see it here',
-                        style: TextStyle(color: AppColors.textMuted),
+                        style: TextStyle(
+                          fontSize: rs.sp(13),
+                          color: AppColors.textMuted,
+                        ),
                       ),
                     ],
                   ),
                 )
               : GridView.builder(
-                  padding: const EdgeInsets.all(14),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
+                  padding: EdgeInsets.all(rs.w(14)),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: rs.gridCrossAxisCount(
+                      phone: 2,
+                      tablet: 3,
+                      largeTablet: 4,
+                    ),
+                    mainAxisSpacing: rs.h(12),
+                    crossAxisSpacing: rs.w(12),
                     childAspectRatio: 0.78,
                   ),
                   itemCount: _files.length,
@@ -115,17 +126,17 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
                     final modified = file.lastModifiedSync();
                     return Material(
                       color: AppColors.surfaceAlt,
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(rs.r(14)),
                       child: InkWell(
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(rs.r(14)),
                         onTap: () => _play(file),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Expanded(
                               child: ClipRRect(
-                                borderRadius: const BorderRadius.vertical(
-                                  top: Radius.circular(14),
+                                borderRadius: BorderRadius.vertical(
+                                  top: Radius.circular(rs.r(14)),
                                 ),
                                 child: Stack(
                                   fit: StackFit.expand,
@@ -134,11 +145,11 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
                                       color: Colors.black87,
                                       child: _VideoThumb(video: file),
                                     ),
-                                    const Center(
+                                    Center(
                                       child: Icon(
                                         Icons.play_circle_filled,
                                         color: Colors.white70,
-                                        size: 42,
+                                        size: rs.r(42),
                                       ),
                                     ),
                                   ],
@@ -146,7 +157,12 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
                               ),
                             ),
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+                              padding: EdgeInsets.fromLTRB(
+                                rs.w(10),
+                                rs.h(8),
+                                rs.w(4),
+                                rs.h(8),
+                              ),
                               child: Row(
                                 children: [
                                   Expanded(
@@ -205,6 +221,7 @@ class _MyCreationScreenState extends State<MyCreationScreen> {
                     );
                   },
                 ),
+      ),
     );
   }
 }

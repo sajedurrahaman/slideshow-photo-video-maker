@@ -3,10 +3,10 @@
     <item>
         <bitmap android:gravity="fill" android:src="@drawable/background"/>
     </item>
-    <!-- Same visual size as Flutter splash logo (~78% of typical phone width). -->
+    <!-- Fixed 120dp — matches Flutter splash icon on all Android versions. -->
     <item
-        android:width="280dp"
-        android:height="280dp"
+        android:width="120dp"
+        android:height="120dp"
         android:gravity="center">
         <bitmap
             android:gravity="fill"

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../responsive/app_responsive.dart';
+
 /// Brand tokens — primary CTAs use [primaryGradient].
 class AppColors {
   static const primaryStart = Color(0xFF26EBD7);
@@ -299,7 +301,8 @@ class PrimaryGradientButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(borderRadius);
+    final r = AppResponsive.of(context);
+    final radius = BorderRadius.circular(r.r(borderRadius));
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -314,15 +317,20 @@ class PrimaryGradientButton extends StatelessWidget {
             borderRadius: radius,
           ),
           child: Container(
-            height: height,
-            padding: padding,
+            height: r.h(height),
+            padding: padding is EdgeInsets
+                ? EdgeInsets.symmetric(
+                    horizontal: r.w((padding as EdgeInsets).horizontal / 2),
+                    vertical: r.h((padding as EdgeInsets).vertical / 2),
+                  )
+                : padding,
             alignment: Alignment.center,
             child: Text(
               label,
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w700,
-                fontSize: fontSize,
+                fontSize: r.sp(fontSize),
               ),
             ),
           ),

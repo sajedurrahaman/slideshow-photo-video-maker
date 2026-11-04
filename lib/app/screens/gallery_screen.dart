@@ -9,6 +9,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
@@ -272,16 +273,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
     Uint8List? bytes = item.thumbBytes;
     if (bytes == null || bytes.isEmpty) {
       try {
-        bytes = await item.entity.thumbnailData.timeout(
-          const Duration(seconds: 2),
-        );
-      } catch (_) {}
-    }
-    if (bytes == null || bytes.isEmpty) {
-      try {
-        bytes = await item.entity
-            .thumbnailDataWithSize(const ThumbnailSize(512, 512))
-            .timeout(const Duration(seconds: 2));
+        bytes = await _thumbBytes(
+          item.entity,
+          const ThumbnailSize(512, 512),
+        ).timeout(const Duration(seconds: 2));
       } catch (_) {}
     }
     if (bytes == null || bytes.isEmpty) return null;
@@ -378,30 +373,40 @@ class _GalleryScreenState extends State<GalleryScreen> {
                       )
                     : _loadingAlbum
                     ? const Center(child: CircularProgressIndicator())
-                    : GridView.builder(
-                        padding: const EdgeInsets.all(2),
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              mainAxisSpacing: 2,
-                              crossAxisSpacing: 2,
+                    : Builder(
+                        builder: (context) {
+                          final rs = AppResponsive.of(context);
+                          return GridView.builder(
+                            padding: EdgeInsets.all(rs.r(2)),
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: rs.gridCrossAxisCount(
+                                phone: 3,
+                                tablet: 4,
+                                largeTablet: 5,
+                              ),
+                              mainAxisSpacing: rs.r(2),
+                              crossAxisSpacing: rs.r(2),
                             ),
-                        itemCount: _assets.length,
-                        itemBuilder: (context, index) {
-                          final item = _assets[index];
-                          final selected = _selectedIds.contains(item.id);
-                          return _ThumbTile(
-                            entity: item.entity,
-                            selected: selected,
-                            onTap: () => _toggle(item.id),
-                            onThumb: (data) => item.thumbBytes = data,
+                            itemCount: _assets.length,
+                            itemBuilder: (context, index) {
+                              final item = _assets[index];
+                              final selected =
+                                  _selectedIds.contains(item.id);
+                              return _ThumbTile(
+                                entity: item.entity,
+                                selected: selected,
+                                onTap: () => _toggle(item.id),
+                                onThumb: (data) => item.thumbBytes = data,
+                              );
+                            },
                           );
                         },
                       ),
               ),
               if (_orderedIds.isNotEmpty)
                 Container(
-                  height: 108,
+                  height: AppResponsive.of(context).h(108),
                   width: double.infinity,
                   decoration: const BoxDecoration(
                     color: Colors.white,
@@ -595,9 +600,7 @@ class _AlbumCoverThumbState extends State<_AlbumCoverThumb> {
     try {
       final list = await widget.path.getAssetListRange(start: 0, end: 1);
       if (list.isEmpty || !mounted) return;
-      final data = await list.first.thumbnailDataWithSize(
-        const ThumbnailSize(160, 160),
-      );
+      final data = await _thumbBytes(list.first, const ThumbnailSize(160, 160));
       if (!mounted || data == null) return;
       setState(() => _bytes = data);
     } catch (_) {}
@@ -661,9 +664,7 @@ class _ThumbTileState extends State<_ThumbTile> {
   }
 
   Future<void> _load() async {
-    final data = await widget.entity.thumbnailDataWithSize(
-      const ThumbnailSize(300, 300),
-    );
+    final data = await _thumbBytes(widget.entity, const ThumbnailSize(300, 300));
     if (!mounted || data == null) return;
     widget.onThumb(data);
     setState(() => _bytes = data);
@@ -738,9 +739,7 @@ class _TrayThumbState extends State<_TrayThumb> {
   }
 
   Future<void> _load() async {
-    final d = await widget.entity.thumbnailDataWithSize(
-      const ThumbnailSize(120, 120),
-    );
+    final d = await _thumbBytes(widget.entity, const ThumbnailSize(120, 120));
     if (!mounted) return;
     setState(() => _bytes = d);
   }
@@ -755,4 +754,18 @@ class _TrayThumbState extends State<_TrayThumb> {
           : Container(color: AppColors.surfaceAlt),
     );
   }
+}
+
+/// Glide / MediaMetadataRetriever can throw on corrupt or exotic assets.
+/// Never let that bubble as an uncaught PlatformException.
+Future<Uint8List?> _thumbBytes(AssetEntity entity, ThumbnailSize size) async {
+  try {
+    final data = await entity.thumbnailDataWithSize(size);
+    if (data != null && data.isNotEmpty) return data;
+  } catch (_) {}
+  try {
+    final data = await entity.thumbnailData;
+    if (data != null && data.isNotEmpty) return data;
+  } catch (_) {}
+  return null;
 }

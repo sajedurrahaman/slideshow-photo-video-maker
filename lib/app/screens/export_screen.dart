@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../services/export_service.dart';
 import '../services/slideshow_project.dart';
@@ -122,22 +123,23 @@ class _ExportScreenState extends State<ExportScreen> {
           onPressed: _cancelAndLeave,
         ),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
+      body: ResponsiveBody(
+        child: Padding(
+        padding: EdgeInsets.all(AppResponsive.of(context).w(20)),
         child: Column(
           children: [
             if (!_started) ...[
-              const Align(
+              Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'Resolution',
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
-                    fontSize: 15,
+                    fontSize: AppResponsive.of(context).sp(15),
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: AppResponsive.of(context).h(12)),
               Row(
                 children: [
                   for (final q in ExportQuality.values) ...[
@@ -146,14 +148,17 @@ class _ExportScreenState extends State<ExportScreen> {
                         onTap: () => project.setExportQuality(q),
                         child: PrimarySelectedFill(
                           selected: project.exportQuality == q,
-                          borderRadius: 12,
+                          borderRadius: AppResponsive.of(context).r(12),
                           unselectedColor: AppColors.surfaceAlt,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          padding: EdgeInsets.symmetric(
+                            vertical: AppResponsive.of(context).h(14),
+                          ),
                           child: Text(
                             q.label,
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
+                              fontSize: AppResponsive.of(context).sp(14),
                               color: project.exportQuality == q
                                   ? Colors.white
                                   : AppColors.textDark,
@@ -162,14 +167,15 @@ class _ExportScreenState extends State<ExportScreen> {
                         ),
                       ),
                     ),
-                    if (q != ExportQuality.p1080) const SizedBox(width: 10),
+                    if (q != ExportQuality.p1080)
+                      SizedBox(width: AppResponsive.of(context).w(10)),
                   ],
                 ],
               ),
               const Spacer(),
               SizedBox(
                 width: double.infinity,
-                height: 48,
+                height: AppResponsive.of(context).h(48),
                 child: PrimaryGradientButton(
                   label: 'Start Export',
                   onPressed: _startExport,
@@ -263,6 +269,7 @@ class _ExportScreenState extends State<ExportScreen> {
             ],
           ],
         ),
+      ),
       ),
       ),
     );

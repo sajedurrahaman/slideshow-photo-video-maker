@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/effect_overlay_service.dart';
@@ -118,26 +119,27 @@ class _EditorScreenState extends State<EditorScreen>
   /// ScrollController is never attached to two scroll views at once.
   final _photoStripListKey = GlobalKey();
 
-  static const _sheetHeight = 180.0;
-  static const _timelineHeaderHeight = 48.0;
-  static const _photoToolbarHeight = 72.0;
-  static const _musicTrackHeight = 28.0;
+  AppResponsive get _rs => AppResponsive.of(context);
+
+  double get _sheetHeight => _rs.h(180);
+  double get _timelineHeaderHeight => _rs.h(48);
+  double get _photoToolbarHeight => _rs.h(72);
+  double get _musicTrackHeight => _rs.h(28);
 
   /// Gap between photo thumbs and music lane / placeholder line.
-  static const _musicUnderPhotosGap = 4.0;
-  static const _musicPlaceholderH = 2.0;
+  double get _musicUnderPhotosGap => _rs.h(4);
 
   /// Compact slot for the inactive track's thin line (tools open / Done).
-  static const _collapsedLineSlotH = 6.0;
-  static const _collapsedToActiveGap = 2.0;
+  double get _collapsedLineSlotH => _rs.h(6);
+  double get _collapsedToActiveGap => _rs.h(2);
 
   /// Effect lane sits this far above the strip bottom edge.
-  static const _effectBottomPad = 5.0;
-  static const _plusW = 52.0;
-  static const _pixelsPerSecond = 44.0;
-  static const _thumbH = 60.0;
-  static const _transitionMarkerSize = 22.0;
-  static const _stripPadLeft = 16.0;
+  double get _effectBottomPad => _rs.h(5);
+  double get _plusW => _rs.w(52);
+  double get _pixelsPerSecond => _rs.w(44);
+  double get _thumbH => _rs.h(60);
+  double get _transitionMarkerSize => _rs.r(22);
+  double get _stripPadLeft => _rs.w(16);
 
   SlideshowProject? _listenedProject;
 
@@ -690,11 +692,13 @@ class _EditorScreenState extends State<EditorScreen>
   Widget _idleToolPanel(
     SlideshowProject project, {
     Widget? timelineContent,
-    double height = _sheetHeight,
-    double timelineHeaderHeight = _timelineHeaderHeight,
+    double? height,
+    double? timelineHeaderHeight,
   }) {
+    final panelH = height ?? _sheetHeight;
+    final headerH = timelineHeaderHeight ?? _timelineHeaderHeight;
     return Container(
-      height: height,
+      height: panelH,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: AppColors.border)),
@@ -707,7 +711,7 @@ class _EditorScreenState extends State<EditorScreen>
               Column(
                 children: [
                   SizedBox(
-                    height: timelineHeaderHeight,
+                    height: headerH,
                     child: Padding(
                       padding: const EdgeInsets.only(left: 14, right: 6),
                       child: _idlePreviewRow(project),
@@ -1217,15 +1221,16 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   Widget _editorToolbar() {
+    final rs = AppResponsive.of(context);
     return Container(
-      height: 72,
+      height: rs.h(72),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        padding: EdgeInsets.symmetric(horizontal: rs.w(8)),
         children: [
           for (final t in EditorTool.values)
             if (!_toolsHiddenThisRelease.contains(t))
@@ -3882,7 +3887,7 @@ class _MusicCollapsedLineState extends State<_MusicCollapsedLine> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final lineH = _EditorScreenState._musicPlaceholderH;
+        final lineH = AppResponsive.of(context).h(2);
         final lineTop = ((constraints.maxHeight - lineH) / 2).clamp(
           0.0,
           double.infinity,
@@ -4540,7 +4545,7 @@ class _EffectCollapsedLineState extends State<_EffectCollapsedLine> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final lineH = _EditorScreenState._musicPlaceholderH;
+        final lineH = AppResponsive.of(context).h(2);
         final lineTop = ((constraints.maxHeight - lineH) / 2).clamp(
           0.0,
           double.infinity,
@@ -5767,7 +5772,6 @@ class _FramePanel extends StatelessWidget {
   final VoidCallback onChanged;
 
   static const _muted = Color(0xFF9E9E9E);
-  static const _tile = 72.0;
 
   @override
   Widget build(BuildContext context) {
@@ -5781,6 +5785,7 @@ class _FramePanel extends StatelessWidget {
         if (i == 0) {
           final selected = project.selectedFrameAsset == null;
           return _frameTile(
+            context: context,
             selected: selected,
             label: 'Default',
             onTap: () {
@@ -5794,6 +5799,7 @@ class _FramePanel extends StatelessWidget {
         final selected = project.selectedFrameAsset == frame.assetPath;
         final n = i.toString().padLeft(2, '0');
         return _frameTile(
+          context: context,
           selected: selected,
           label: 'Frame_$n',
           onTap: () {
@@ -5815,15 +5821,17 @@ class _FramePanel extends StatelessWidget {
   }
 
   Widget _frameTile({
+    required BuildContext context,
     required bool selected,
     required String label,
     required VoidCallback onTap,
     required Widget child,
   }) {
+    final tile = AppResponsive.of(context).w(72);
     return GestureDetector(
       onTap: onTap,
       child: SizedBox(
-        width: _tile,
+        width: tile,
         child: Column(
           children: [
             Expanded(

@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -37,48 +38,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        children: [
-          const SizedBox(height: 8),
-          _tile(
-            Icons.star_outline,
-            'Rate Us',
-            () => _openUrl(
-              'https://play.google.com/store/apps/details?id=${AppConstants.packageId}',
+      body: ResponsiveBody(
+        child: ListView(
+          children: [
+            SizedBox(height: rs.h(8)),
+            _tile(
+              Icons.star_outline,
+              'Rate Us',
+              () => _openUrl(
+                'https://play.google.com/store/apps/details?id=${AppConstants.packageId}',
+              ),
             ),
-          ),
-          _tile(
-            Icons.share_outlined,
-            'Share App',
-            () {
-              SharePlus.instance.share(
-                ShareParams(
-                  text:
-                      'Check out ${AppConstants.appName} — make photo slideshows easily!',
-                ),
-              );
-            },
-          ),
-          _tile(
-            Icons.privacy_tip_outlined,
-            'Privacy Policy',
-            () => _openUrl('https://sites.google.com/view/graphicscycle/home'),
-          ),
-          _tile(
-            Icons.description_outlined,
-            'Terms of Service',
-            () => _openUrl('https://sites.google.com/view/graphicscycle/home'),
-          ),
-          const Divider(height: 32),
-          ListTile(
-            leading: const Icon(Icons.info_outline, color: AppColors.iconNormal),
-            title: const Text('Version'),
-            subtitle: Text(_version.isEmpty ? '…' : _version),
-          ),
-        ],
+            _tile(
+              Icons.share_outlined,
+              'Share App',
+              () {
+                SharePlus.instance.share(
+                  ShareParams(
+                    text:
+                        'Check out ${AppConstants.appName} — make photo slideshows easily!',
+                  ),
+                );
+              },
+            ),
+            _tile(
+              Icons.privacy_tip_outlined,
+              'Privacy Policy',
+              () => _openUrl('https://sites.google.com/view/graphicscycle/home'),
+            ),
+            _tile(
+              Icons.description_outlined,
+              'Terms of Service',
+              () => _openUrl('https://sites.google.com/view/graphicscycle/home'),
+            ),
+            Divider(height: rs.h(32)),
+            ListTile(
+              leading:
+                  const Icon(Icons.info_outline, color: AppColors.iconNormal),
+              title: Text(
+                'Version',
+                style: TextStyle(fontSize: rs.sp(16)),
+              ),
+              subtitle: Text(_version.isEmpty ? '…' : _version),
+            ),
+          ],
+        ),
       ),
     );
   }

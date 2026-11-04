@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
@@ -157,9 +158,10 @@ class _TextToolsSheetState extends State<TextToolsSheet> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+            final rs = AppResponsive.of(context);
             // Parent AnimatedContainer may still be mid-size (64→280). Only
             // mount tabs once height can fit input + tabs + body.
-            final tallEnough = constraints.maxHeight >= 160;
+            final tallEnough = constraints.maxHeight >= rs.h(160);
             final showPanel =
                 _showTabs &&
                 tallEnough &&

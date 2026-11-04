@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 
+import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/slideshow_project.dart';
@@ -121,14 +122,20 @@ class _MusicScreenState extends State<MusicScreen>
           ],
         ),
       ),
-      body: Column(
+      body: ResponsiveBody(
+        child: Column(
         children: [
           Expanded(
             child: TabBarView(
               controller: _tabs,
               children: [
                 ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  padding: EdgeInsets.fromLTRB(
+                    AppResponsive.of(context).w(16),
+                    AppResponsive.of(context).h(12),
+                    AppResponsive.of(context).w(16),
+                    AppResponsive.of(context).h(16),
+                  ),
                   children: [
                     _MusicTile(
                       title: 'No music',
@@ -212,6 +219,7 @@ class _MusicScreenState extends State<MusicScreen>
               ),
             ),
         ],
+      ),
       ),
     );
   }

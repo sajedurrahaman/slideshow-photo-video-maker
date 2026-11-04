@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/responsive/app_responsive.dart';
 import '../services/draft_service.dart';
 import '../services/firebase_bootstrap.dart';
 import '../services/slideshow_project.dart';
@@ -175,317 +176,343 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
     final topInset = MediaQuery.paddingOf(context).top;
     final visibleDrafts = _drafts.take(3).toList();
     final heroCacheW = _imageCacheWidth(context);
 
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final heroH = rs.h(450) + topInset;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: Colors.white,
-        body: Column(
-          children: [
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _loadDrafts,
-                child: CustomScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: SizedBox(
-                        height: 390 + topInset,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Positioned.fill(
-                              child: PageView.builder(
-                                controller: _heroPageController,
-                                itemCount: _heroSlides.length,
-                                onPageChanged: (i) =>
-                                    setState(() => _heroIndex = i),
-                                itemBuilder: (context, index) {
-                                  return Image.asset(
-                                    _heroSlides[index],
-                                    fit: BoxFit.cover,
-                                    cacheWidth: heroCacheW,
-                                    filterQuality: FilterQuality.medium,
-                                    errorBuilder: (_, _, _) => Container(
-                                      decoration: const BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                          colors: [
-                                            Color(0xFF1A1035),
-                                            Color(0xFF4A148C),
-                                            Color(0xFF00BCD4),
-                                          ],
+        body: ResponsiveBody(
+          child: Column(
+            children: [
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _loadDrafts,
+                  child: CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: SizedBox(
+                          height: heroH,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Positioned.fill(
+                                child: PageView.builder(
+                                  controller: _heroPageController,
+                                  itemCount: _heroSlides.length,
+                                  onPageChanged: (i) =>
+                                      setState(() => _heroIndex = i),
+                                  itemBuilder: (context, index) {
+                                    return Image.asset(
+                                      _heroSlides[index],
+                                      fit: BoxFit.cover,
+                                      cacheWidth: heroCacheW,
+                                      filterQuality: FilterQuality.medium,
+                                      errorBuilder: (_, _, _) => Container(
+                                        decoration: const BoxDecoration(
+                                          gradient: LinearGradient(
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                            colors: [
+                                              Color(0xFF1A1035),
+                                              Color(0xFF4A148C),
+                                              Color(0xFF00BCD4),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  );
-                                },
+                                    );
+                                  },
+                                ),
                               ),
-                            ),
-                            Positioned(
-                              left: 0,
-                              right: 0,
-                              bottom: 88,
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: List.generate(_heroSlides.length, (
-                                  i,
-                                ) {
-                                  final active = i == _heroIndex;
-                                  return AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    margin: const EdgeInsets.symmetric(
-                                      horizontal: 3,
-                                    ),
-                                    width: active ? 16 : 6,
-                                    height: 6,
-                                    decoration: BoxDecoration(
-                                      color: active
-                                          ? Colors.white
-                                          : Colors.white.withValues(
-                                              alpha: 0.45,
-                                            ),
-                                      borderRadius: BorderRadius.circular(3),
-                                    ),
-                                  );
-                                }),
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: rs.h(88),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: List.generate(_heroSlides.length, (
+                                    i,
+                                  ) {
+                                    final active = i == _heroIndex;
+                                    return AnimatedContainer(
+                                      duration: const Duration(
+                                        milliseconds: 200,
+                                      ),
+                                      margin: EdgeInsets.symmetric(
+                                        horizontal: rs.w(3),
+                                      ),
+                                      width: active ? rs.w(16) : rs.w(6),
+                                      height: rs.h(6),
+                                      decoration: BoxDecoration(
+                                        color: active
+                                            ? Colors.white
+                                            : Colors.white.withValues(
+                                                alpha: 0.45,
+                                              ),
+                                        borderRadius: BorderRadius.circular(
+                                          rs.r(3),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ),
                               ),
-                            ),
-                            // Soft fade into white content
-                            Positioned(
-                              left: 0,
-                              right: 0,
-                              bottom: 0,
-                              height: 72,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      Colors.white.withValues(alpha: 0),
-                                      Colors.white,
-                                    ],
+                              // Soft fade into white content
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                height: rs.h(72),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        Colors.white.withValues(alpha: 0),
+                                        Colors.white,
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            // Slideshow + Studio (Figma image buttons)
-                            Positioned(
-                              left: 14,
-                              right: 14,
-                              bottom: 4,
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Expanded(
-                                    child: _HomeHeroImageButton(
-                                      backgroundAsset:
-                                          'assets/images/slideshowbutton.png',
-                                      iconAsset: 'assets/images/slideshow.png',
-                                      cacheWidth: heroCacheW ~/ 2,
-                                      onTap: () => context.push('/gallery'),
+                              // Slideshow + Studio (Figma image buttons)
+                              Positioned(
+                                left: rs.w(14),
+                                right: rs.w(14),
+                                bottom: rs.h(4),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Expanded(
+                                      child: _HomeHeroImageButton(
+                                        backgroundAsset:
+                                            'assets/images/slideshowbutton.png',
+                                        iconAsset:
+                                            'assets/images/slideshow.png',
+                                        cacheWidth: heroCacheW ~/ 2,
+                                        onTap: () => context.push('/gallery'),
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: _HomeHeroImageButton(
-                                      backgroundAsset:
-                                          'assets/images/studiobutton.png',
-                                      iconAsset: 'assets/images/studio.png',
-                                      iconWidth: 72,
-                                      iconTop: -28,
-                                      cacheWidth: heroCacheW ~/ 2,
-                                      onTap: () => context.push('/creations'),
+                                    SizedBox(width: rs.w(10)),
+                                    Expanded(
+                                      child: _HomeHeroImageButton(
+                                        backgroundAsset:
+                                            'assets/images/studiobutton.png',
+                                        iconAsset: 'assets/images/studio.png',
+                                        iconWidth: rs.w(72),
+                                        iconTop: -rs.h(28),
+                                        cacheWidth: heroCacheW ~/ 2,
+                                        onTap: () => context.push('/creations'),
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 4,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1A237E),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              'Drafts',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF1A237E),
-                              ),
-                            ),
-                            const Spacer(),
-                            TextButton(
-                              onPressed: () => context.push('/drafts'),
-                              style: TextButton.styleFrom(
-                                foregroundColor: const Color(0xFF1A237E),
-                                padding: EdgeInsets.zero,
-                                minimumSize: const Size(0, 32),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              child: const Text(
-                                'View All >',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (_loading)
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Center(child: CircularProgressIndicator()),
-                        ),
-                      )
-                    else if (visibleDrafts.isEmpty)
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.fromLTRB(16, 44, 16, 0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Text(
-                                'No drafts yet',
-                                style: TextStyle(
-                                  color: AppColors.textDark,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                'Your saved projects will appear here',
-                                style: TextStyle(
-                                  color: AppColors.textMuted,
-                                  fontSize: 11,
+                                  ],
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      )
-                    else
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          final draft = visibleDrafts[index];
-                          return _DraftTile(
-                            draft: draft,
-                            onTap: () => _openDraft(draft),
-                            onDelete: () => _deleteDraft(draft),
-                          );
-                        }, childCount: visibleDrafts.length),
                       ),
-                  ],
-                ),
-              ),
-            ),
-            // Always pinned to device bottom (above system nav inset).
-            ColoredBox(
-              color: Colors.white,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(16, 12, 16, 2 + bottomInset),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _OutlineActionButton(
-                            label: 'Rate Us',
-                            icon: Icons.star_rounded,
-                            color: const Color(0xFFFF9800),
-                            onTap: _rateUs,
-                            onLongPress: _copyFcmToken,
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            rs.w(16),
+                            rs.h(8),
+                            rs.w(16),
+                            0,
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: rs.w(4),
+                                height: rs.h(18),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1A237E),
+                                  borderRadius: BorderRadius.circular(rs.r(2)),
+                                ),
+                              ),
+                              SizedBox(width: rs.w(8)),
+                              Text(
+                                'Drafts',
+                                style: TextStyle(
+                                  fontSize: rs.sp(18),
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFF1A237E),
+                                ),
+                              ),
+                              const Spacer(),
+                              TextButton(
+                                onPressed: () => context.push('/drafts'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: const Color(0xFF1A237E),
+                                  padding: EdgeInsets.zero,
+                                  minimumSize: Size(0, rs.h(32)),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: Text(
+                                  'View All >',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: rs.sp(13),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _OutlineActionButton(
-                            label: 'Share Now',
-                            icon: Icons.share_rounded,
-                            color: const Color(0xFF13D23D),
-                            onTap: _shareApp,
+                      ),
+                      if (_loading)
+                        const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Center(child: CircularProgressIndicator()),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        const Text(
-                          'By Continuing you agree to the ',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF616161),
-                            height: 1.4,
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () => _openUrl(
-                            'https://sites.google.com/view/graphicscycle/home',
-                          ),
-                          child: const Text(
-                            'Terms and service',
-                            style: TextStyle(
-                              color: Color(0xFFE53935),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                        )
+                      else if (visibleDrafts.isEmpty)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              16,
+                              44.h(context),
+                              16,
+                              0,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'No drafts yet',
+                                  style: TextStyle(
+                                    color: AppColors.textDark,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  'Your saved projects will appear here',
+                                  style: TextStyle(
+                                    color: AppColors.textMuted,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
+                        )
+                      else
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate((
+                            context,
+                            index,
+                          ) {
+                            final draft = visibleDrafts[index];
+                            return _DraftTile(
+                              draft: draft,
+                              onTap: () => _openDraft(draft),
+                              onDelete: () => _deleteDraft(draft),
+                            );
+                          }, childCount: visibleDrafts.length),
                         ),
-                        const Text(
-                          ' & ',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF616161),
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () => _openUrl(
-                            'https://sites.google.com/view/graphicscycle/home',
-                          ),
-                          child: const Text(
-                            'privacy policy',
-                            style: TextStyle(
-                              color: Color(0xFFE53935),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+              // Always pinned to device bottom (above system nav inset).
+              ColoredBox(
+                color: Colors.white,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, 2 + bottomInset),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _OutlineActionButton(
+                              label: 'Rate Us',
+                              icon: Icons.star_rounded,
+                              color: const Color(0xFFFF9800),
+                              onTap: _rateUs,
+                              onLongPress: _copyFcmToken,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _OutlineActionButton(
+                              label: 'Share Now',
+                              icon: Icons.share_rounded,
+                              color: const Color(0xFF13D23D),
+                              onTap: _shareApp,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            const Text(
+                              'By Continuing you agree to the ',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF616161),
+                                height: 1.4,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => _openUrl(
+                                'https://sites.google.com/view/slideshow-photovideomaker-term',
+                              ),
+                              child: const Text(
+                                'Terms and service',
+                                style: TextStyle(
+                                  color: Color(0xFFE53935),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const Text(
+                              ' & ',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF616161),
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => _openUrl(
+                                'https://sites.google.com/view/slideshow-photovideomaker',
+                              ),
+                              child: const Text(
+                                'privacy policy',
+                                style: TextStyle(
+                                  color: Color(0xFFE53935),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -512,20 +539,21 @@ class _HomeHeroImageButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(rs.r(14)),
         child: SizedBox(
-          height: 76,
+          height: rs.h(76),
           child: Stack(
             clipBehavior: Clip.none,
             alignment: Alignment.bottomCenter,
             children: [
               Positioned.fill(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(rs.r(14)),
                   child: Image.asset(
                     backgroundAsset,
                     fit: BoxFit.fill,
@@ -536,7 +564,7 @@ class _HomeHeroImageButton extends StatelessWidget {
               ),
               Positioned(
                 top: iconTop,
-                right: -4,
+                right: -rs.w(4),
                 child: Image.asset(
                   iconAsset,
                   width: iconWidth,
@@ -573,30 +601,32 @@ class _DraftTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
     final stamp = DateFormat('yyyy-MM-dd HH:mm').format(draft.updatedAt);
     final thumb = draft.thumbPath;
+    final thumbSize = rs.r(64);
 
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+        padding: EdgeInsets.fromLTRB(rs.w(16), rs.h(10), rs.w(8), rs.h(10)),
         decoration: const BoxDecoration(
           border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
         ),
         child: Row(
           children: [
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(rs.r(8)),
               child: Container(
-                width: 64,
-                height: 64,
+                width: thumbSize,
+                height: thumbSize,
                 color: const Color(0xFF263238),
                 child: thumb != null && File(thumb).existsSync()
                     ? Image.file(
                         File(thumb),
                         fit: BoxFit.cover,
-                        width: 64,
-                        height: 64,
+                        width: thumbSize,
+                        height: thumbSize,
                       )
                     : const Center(
                         child: Icon(
@@ -606,7 +636,7 @@ class _DraftTile extends StatelessWidget {
                       ),
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: rs.w(12)),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
