@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import '../core/constants/app_constants.dart';
 import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../services/export_service.dart';
+import '../services/rate_app_service.dart';
 import '../services/slideshow_project.dart';
 import '../widgets/editTool_sheet.dart';
 
@@ -38,6 +40,12 @@ class _ExportScreenState extends State<ExportScreen> {
   void _cancelAndLeave() {
     context.read<SlideshowProject>().cancelExport();
     context.go('/home');
+  }
+
+  Future<void> _askForReviewAfterExport() async {
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
+    await RateAppService.promptAfterExportSuccess();
   }
 
   Future<void> _startExport() async {
@@ -94,6 +102,9 @@ class _ExportScreenState extends State<ExportScreen> {
         _progress = 1;
         _status = 'Saved to Studio';
       });
+
+      // Success screen first, then native in-app review (like other apps).
+      unawaited(_askForReviewAfterExport());
     } catch (e) {
       if (!mounted) return;
       setState(() {

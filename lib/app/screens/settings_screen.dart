@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/constants/app_constants.dart';
 import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
+import '../services/rate_app_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -49,9 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _tile(
               Icons.star_outline,
               'Rate Us',
-              () => _openUrl(
-                'https://play.google.com/store/apps/details?id=${AppConstants.packageId}',
-              ),
+              () => RateAppService.rateUs(),
             ),
             _tile(
               Icons.share_outlined,

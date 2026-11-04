@@ -14,6 +14,7 @@ import '../core/constants/app_constants.dart';
 import '../core/responsive/app_responsive.dart';
 import '../services/draft_service.dart';
 import '../services/firebase_bootstrap.dart';
+import '../services/rate_app_service.dart';
 import '../services/slideshow_project.dart';
 
 /// Figma `home-Screen` — hero + Slideshow/Studio + Drafts + Rate/Share.
@@ -102,11 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  Future<void> _rateUs() {
-    return _openUrl(
-      'https://play.google.com/store/apps/details?id=${AppConstants.packageId}',
-    );
-  }
+  Future<void> _rateUs() => RateAppService.rateUs();
 
   /// Long-press Rate Us → copy FCM token for Firebase Console push test.
   Future<void> _copyFcmToken() async {
