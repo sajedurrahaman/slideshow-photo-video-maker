@@ -48,6 +48,68 @@ class _ExportScreenState extends State<ExportScreen> {
     await RateAppService.promptAfterExportSuccess();
   }
 
+  /// Pre-export preview: first picked photo + static pause (not interactive).
+  Widget _exportPreviewThumb(SlideshowProject project) {
+    final rs = AppResponsive.of(context);
+    final (ow, oh) = project.outputSize;
+    final aspect = ow / oh;
+    final firstPath = project.photos.isNotEmpty
+        ? project.photos.first.path
+        : null;
+    final file = firstPath != null ? File(firstPath) : null;
+    final hasFile = file != null && file.existsSync();
+
+    return Center(
+      child: AspectRatio(
+        aspectRatio: aspect,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(rs.r(2)),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(color: Colors.black),
+              if (hasFile)
+                Image.file(
+                  file,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const ColoredBox(
+                    color: Color(0xFF263238),
+                    child: Center(
+                      child: Icon(
+                        Icons.image_outlined,
+                        color: Colors.white54,
+                        size: 48,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                const ColoredBox(
+                  color: Color(0xFF263238),
+                  child: Center(
+                    child: Icon(
+                      Icons.image_outlined,
+                      color: Colors.white54,
+                      size: 48,
+                    ),
+                  ),
+                ),
+              // Static pause — visual only (export not playing yet).
+              const Center(
+                child: Icon(
+                  Icons.play_circle_outline_outlined,
+                  color: Colors.white70,
+                  size: 64,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _startExport() async {
     final project = context.read<SlideshowProject>();
     setState(() {
@@ -126,162 +188,166 @@ class _ExportScreenState extends State<ExportScreen> {
         _cancelAndLeave();
       },
       child: Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text('Export'),
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: _cancelAndLeave,
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          title: const Text('Export'),
+          leading: IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: _cancelAndLeave,
+          ),
         ),
-      ),
-      body: ResponsiveBody(
-        child: Padding(
-        padding: EdgeInsets.all(AppResponsive.of(context).w(20)),
-        child: Column(
-          children: [
-            if (!_started) ...[
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Resolution',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: AppResponsive.of(context).sp(15),
+        body: ResponsiveBody(
+          child: Padding(
+            padding: EdgeInsets.all(AppResponsive.of(context).w(20)),
+            child: Column(
+              children: [
+                if (!_started) ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Resolution',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: AppResponsive.of(context).sp(15),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              SizedBox(height: AppResponsive.of(context).h(12)),
-              Row(
-                children: [
-                  for (final q in ExportQuality.values) ...[
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => project.setExportQuality(q),
-                        child: PrimarySelectedFill(
-                          selected: project.exportQuality == q,
-                          borderRadius: AppResponsive.of(context).r(12),
-                          unselectedColor: AppColors.surfaceAlt,
-                          padding: EdgeInsets.symmetric(
-                            vertical: AppResponsive.of(context).h(14),
-                          ),
-                          child: Text(
-                            q.label,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: AppResponsive.of(context).sp(14),
-                              color: project.exportQuality == q
-                                  ? Colors.white
-                                  : AppColors.textDark,
+                  SizedBox(height: AppResponsive.of(context).h(12)),
+                  Row(
+                    children: [
+                      for (final q in ExportQuality.values) ...[
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => project.setExportQuality(q),
+                            child: PrimarySelectedFill(
+                              selected: project.exportQuality == q,
+                              borderRadius: AppResponsive.of(context).r(12),
+                              unselectedColor: AppColors.surfaceAlt,
+                              padding: EdgeInsets.symmetric(
+                                vertical: AppResponsive.of(context).h(14),
+                              ),
+                              child: Text(
+                                q.label,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: AppResponsive.of(context).sp(14),
+                                  color: project.exportQuality == q
+                                      ? Colors.white
+                                      : AppColors.textDark,
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
+                        if (q != ExportQuality.p1080)
+                          SizedBox(width: AppResponsive.of(context).w(10)),
+                      ],
+                    ],
+                  ),
+                  SizedBox(height: AppResponsive.of(context).h(20)),
+                  _exportPreviewThumb(project),
+                  SizedBox(height: AppResponsive.of(context).h(16)),
+                  SizedBox(
+                    width: double.infinity,
+                    height: AppResponsive.of(context).h(48),
+                    child: PrimaryGradientButton(
+                      label: 'Start Export',
+                      onPressed: _startExport,
                     ),
-                    if (q != ExportQuality.p1080)
-                      SizedBox(width: AppResponsive.of(context).w(10)),
+                  ),
+                ] else ...[
+                  Expanded(
+                    child: Center(
+                      child:
+                          _controller != null &&
+                              _controller!.value.isInitialized
+                          ? AspectRatio(
+                              aspectRatio: _controller!.value.aspectRatio,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: VideoPlayer(_controller!),
+                              ),
+                            )
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_exporting) ...[
+                                  SizedBox(
+                                    width: 72,
+                                    height: 72,
+                                    child: CircularProgressIndicator(
+                                      value: _progress > 0 ? _progress : null,
+                                      color: AppColors.primary,
+                                      strokeWidth: 6,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _status ?? 'Working…',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ] else if (_error != null) ...[
+                                  const Icon(
+                                    Icons.error_outline,
+                                    size: 48,
+                                    color: AppColors.danger,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(_error!, textAlign: TextAlign.center),
+                                  const SizedBox(height: 16),
+                                  PrimaryGradientButton(
+                                    label: 'Retry',
+                                    onPressed: _startExport,
+                                    height: 40,
+                                    borderRadius: 8,
+                                    fontSize: 14,
+                                  ),
+                                ],
+                              ],
+                            ),
+                    ),
+                  ),
+                  if (_output != null) ...[
+                    Text(
+                      _output!.path.split('/').last,
+                      style: const TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              SharePlus.instance.share(
+                                ShareParams(files: [XFile(_output!.path)]),
+                              );
+                            },
+                            icon: const Icon(Icons.share_outlined),
+                            label: const Text('Share'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TealPillButton(
+                            label: 'Studio',
+                            onPressed: () => context.go('/creations'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ],
-              ),
-              const Spacer(),
-              SizedBox(
-                width: double.infinity,
-                height: AppResponsive.of(context).h(48),
-                child: PrimaryGradientButton(
-                  label: 'Start Export',
-                  onPressed: _startExport,
-                ),
-              ),
-            ] else ...[
-              Expanded(
-                child: Center(
-                  child: _controller != null && _controller!.value.isInitialized
-                      ? AspectRatio(
-                          aspectRatio: _controller!.value.aspectRatio,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: VideoPlayer(_controller!),
-                          ),
-                        )
-                      : Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_exporting) ...[
-                              SizedBox(
-                                width: 72,
-                                height: 72,
-                                child: CircularProgressIndicator(
-                                  value: _progress > 0 ? _progress : null,
-                                  color: AppColors.primary,
-                                  strokeWidth: 6,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _status ?? 'Working…',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ] else if (_error != null) ...[
-                              const Icon(
-                                Icons.error_outline,
-                                size: 48,
-                                color: AppColors.danger,
-                              ),
-                              const SizedBox(height: 12),
-                              Text(_error!, textAlign: TextAlign.center),
-                              const SizedBox(height: 16),
-                              PrimaryGradientButton(
-                                label: 'Retry',
-                                onPressed: _startExport,
-                                height: 40,
-                                borderRadius: 8,
-                                fontSize: 14,
-                              ),
-                            ],
-                          ],
-                        ),
-                ),
-              ),
-              if (_output != null) ...[
-                Text(
-                  _output!.path.split('/').last,
-                  style: const TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 12,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          SharePlus.instance.share(
-                            ShareParams(files: [XFile(_output!.path)]),
-                          );
-                        },
-                        icon: const Icon(Icons.share_outlined),
-                        label: const Text('Share'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TealPillButton(
-                        label: 'Studio',
-                        onPressed: () => context.go('/creations'),
-                      ),
-                    ),
-                  ],
-                ),
               ],
-            ],
-          ],
+            ),
+          ),
         ),
-      ),
-      ),
       ),
     );
   }
