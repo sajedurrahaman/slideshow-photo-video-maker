@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import '../core/app_navigator_key.dart';
 import '../screens/crop_screen.dart';
 import '../screens/drafts_screen.dart';
 import '../screens/editor_screen.dart';
@@ -12,6 +13,7 @@ import '../screens/settings_screen.dart';
 import '../screens/splash_screen.dart';
 
 final GoRouter appRouter = GoRouter(
+  navigatorKey: rootNavigatorKey,
   initialLocation: '/',
   routes: [
     GoRoute(

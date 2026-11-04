@@ -6,6 +6,7 @@ import 'app/core/theme/app_theme.dart';
 import 'app/router/app_router.dart';
 import 'app/services/firebase_bootstrap.dart';
 import 'app/services/slideshow_project.dart';
+import 'app/utils/force_update_upgrader.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,9 +26,13 @@ class ClipCraftApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
         routerConfig: appRouter,
-        builder: (context, child) => ResponsiveApp(
-          child: child ?? const SizedBox.shrink(),
-        ),
+        builder: (context, child) {
+          return ResponsiveApp(
+            child: wrapWithForceUpdateAlert(
+              child: child ?? const SizedBox.shrink(),
+            ),
+          );
+        },
       ),
     );
   }
