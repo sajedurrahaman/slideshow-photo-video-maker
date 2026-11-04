@@ -387,6 +387,13 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
+  /// Bottom nav tool selected (Slide / Text / Effects / Music / Frame / Ratio…).
+  bool get _navbarToolActive =>
+      _tool != null ||
+      _musicToolsOpen ||
+      _effectsToolsOpen ||
+      _textToolsOpen;
+
   void _dismissTool() {
     setState(() => _tool = null);
   }
@@ -2802,10 +2809,13 @@ class _EditorScreenState extends State<EditorScreen>
         resizeToAvoidBottomInset: false,
         appBar: AppBar(
           title: const Text('Editor'),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: _savingDraft ? null : _saveDraftAndLeave,
-          ),
+          automaticallyImplyLeading: false,
+          leading: _navbarToolActive
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: _savingDraft ? null : _saveDraftAndLeave,
+                ),
           actions: [
             // Photo/Music/Effects: Done check sits in timeline header — not AppBar.
             if (!_textToolsOpen &&
