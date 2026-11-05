@@ -342,8 +342,11 @@ class SlideshowProject extends ChangeNotifier {
 
   (int, int) get outputSize => aspectRatio.sizeForQuality(exportQuality);
 
-  /// Smaller size so preview can play near real-time like native.
-  (int, int) get previewSize => aspectRatio.sizeForQuality(ExportQuality.p480);
+  /// iOS camera photos are HEIC. A 480px preview looks blocky on a retina
+  /// screen, so the editor canvas stays at 1080 there.
+  (int, int) get previewSize => aspectRatio.sizeForQuality(
+        Platform.isIOS ? ExportQuality.p1080 : ExportQuality.p480,
+      );
 
   double get previewFps =>
       (AppConstants.framesPerTransition + AppConstants.holdFrames) /
@@ -2336,7 +2339,9 @@ class SlideshowProject extends ChangeNotifier {
       includeTextOverlays: false,
     );
     frameCursor[0] = frameCursor[0] + 1;
-    return Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 70));
+    return Uint8List.fromList(
+      TransitionEngine.encodeJpeg(baked, quality: Platform.isIOS ? 88 : 70),
+    );
   }
 
   Future<List<Uint8List>> _renderTransitionFramesOffThread({
@@ -3095,9 +3100,22 @@ class SlideshowProject extends ChangeNotifier {
         if (await file.length() > 350 * 1024) continue;
         final asset = await AssetEntity.fromId(photo.id);
         if (asset == null || token != _sharpenToken) continue;
-        final bytes = await asset
-            .thumbnailDataWithSize(const ThumbnailSize(1800, 1800), quality: 93)
-            .timeout(const Duration(seconds: 8));
+        final bytes = await (Platform.isIOS
+                ? asset.thumbnailDataWithOption(
+                    ThumbnailOption.ios(
+                      size: const ThumbnailSize(2048, 2048),
+                      format: ThumbnailFormat.jpeg,
+                      quality: 92,
+                      deliveryMode: DeliveryMode.highQualityFormat,
+                      resizeMode: ResizeMode.exact,
+                      resizeContentMode: ResizeContentMode.fit,
+                    ),
+                  )
+                : asset.thumbnailDataWithSize(
+                    const ThumbnailSize(1800, 1800),
+                    quality: 93,
+                  ))
+            .timeout(const Duration(seconds: 12));
         if (bytes == null || bytes.length < await file.length()) continue;
         if (token != _sharpenToken || i >= photos.length) return;
         if (photos[i].id != photo.id) continue;

@@ -270,7 +270,26 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final safeId = item.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     final dest = File(p.join(dir.path, 'pick_${index}_$safeId.jpg'));
 
-    Uint8List? bytes = item.thumbBytes;
+    Uint8List? bytes;
+    if (Platform.isIOS) {
+      // HEIC + opportunistic/fast resize comes back blocky. Ask Photos for a
+      // full-quality JPEG instead of the gallery grid thumb.
+      try {
+        bytes = await item.entity
+            .thumbnailDataWithOption(
+              ThumbnailOption.ios(
+                size: const ThumbnailSize(2048, 2048),
+                format: ThumbnailFormat.jpeg,
+                quality: 92,
+                deliveryMode: DeliveryMode.highQualityFormat,
+                resizeMode: ResizeMode.exact,
+                resizeContentMode: ResizeContentMode.fit,
+              ),
+            )
+            .timeout(const Duration(seconds: 12));
+      } catch (_) {}
+    }
+    bytes ??= item.thumbBytes;
     if (bytes == null || bytes.isEmpty) {
       try {
         bytes = await _thumbBytes(

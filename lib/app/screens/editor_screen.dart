@@ -2929,7 +2929,7 @@ class _EditorScreenState extends State<EditorScreen>
                                                     fit: BoxFit.contain,
                                                     gaplessPlayback: true,
                                                     filterQuality:
-                                                        FilterQuality.low,
+                                                        FilterQuality.medium,
                                                   );
                                                 }
                                                 if (project.photos.isNotEmpty) {
