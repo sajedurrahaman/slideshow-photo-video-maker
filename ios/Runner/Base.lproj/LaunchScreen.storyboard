@@ -27,8 +27,8 @@
                             <constraint firstItem="tWc-Dq-wcI" firstAttribute="leading" secondItem="Ze5-6b-2t3" secondAttribute="leading" id="kV7-tw-vXt"/>
                             <constraint firstItem="YRO-k0-Ey4" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="logo-cx"/>
                             <constraint firstItem="YRO-k0-Ey4" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="logo-cy"/>
-                            <constraint firstItem="YRO-k0-Ey4" firstAttribute="width" secondItem="Ze5-6b-2t3" secondAttribute="width" multiplier="0.78" id="logo-w"/>
-                            <constraint firstItem="YRO-k0-Ey4" firstAttribute="height" secondItem="YRO-k0-Ey4" secondAttribute="width" id="logo-h"/>
+                            <constraint firstItem="YRO-k0-Ey4" firstAttribute="width" constant="120" id="logo-w"/>
+                            <constraint firstItem="YRO-k0-Ey4" firstAttribute="height" constant="120" id="logo-h"/>
                         </constraints>
                     </view>
                 </viewController>

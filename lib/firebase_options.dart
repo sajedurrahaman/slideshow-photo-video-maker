@@ -36,14 +36,13 @@ class DefaultFirebaseOptions {
     storageBucket: 'clipcraft-image-slider-maker.firebasestorage.app',
   );
 
-  /// Update [appId] / [iosBundleId] after registering the iOS app in Firebase
-  /// and downloading GoogleService-Info.plist into ios/Runner/.
+  /// Photo Slideshow Maker — com.videoeditor.photoslideshow.videomaker.addmusic
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyCucxz5CQG9fHglSAQPLCH9SojfonA2XHI',
-    appId: 'REPLACE_WITH_IOS_APP_ID',
+    apiKey: 'AIzaSyCf7xhcw4CUsTXb12TGYsNPEVgeCd3UkHs',
+    appId: '1:167487194042:ios:4c3908dbde4e47c68f5383',
     messagingSenderId: '167487194042',
     projectId: 'clipcraft-image-slider-maker',
     storageBucket: 'clipcraft-image-slider-maker.firebasestorage.app',
-    iosBundleId: 'app.graphics_cycle.clipCraft',
+    iosBundleId: 'com.videoeditor.photoslideshow.videomaker.addmusic',
   );
 }

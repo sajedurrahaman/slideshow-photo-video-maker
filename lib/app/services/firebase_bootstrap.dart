@@ -149,6 +149,14 @@ class FirebaseBootstrap {
   static Future<void> _configureMessaging() async {
     final messaging = FirebaseMessaging.instance;
 
+    if (Platform.isIOS) {
+      await messaging.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    }
+
     final settings = await messaging.requestPermission(
       alert: true,
       badge: true,
@@ -157,24 +165,8 @@ class FirebaseBootstrap {
     );
     debugPrint('FCM permission: ${settings.authorizationStatus}');
 
-    if (Platform.isIOS) {
-      await messaging.setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-      String? apns = await messaging.getAPNSToken();
-      for (var i = 0; apns == null && i < 5; i++) {
-        await Future<void>.delayed(const Duration(seconds: 1));
-        apns = await messaging.getAPNSToken();
-      }
-      if (apns == null) {
-        debugPrint('FCM: APNs token not ready yet');
-        return;
-      }
-    }
-
-    await refreshFcmToken();
+    // Listen even if the APNs token is not ready yet. Returning early here
+    // dropped every later token and every foreground message.
     // ignore: deprecated_member_use
     messaging.onTokenRefresh.listen((token) {
       fcmToken = token;
@@ -199,5 +191,29 @@ class FirebaseBootstrap {
     if (initial != null) {
       debugPrint('FCM opened from terminated: ${initial.messageId}');
     }
+
+    if (Platform.isIOS) {
+      unawaited(_waitForIosApnsThenToken());
+    } else {
+      await refreshFcmToken();
+    }
+  }
+
+  /// APNs often arrives a few seconds after the permission dialog.
+  static Future<void> _waitForIosApnsThenToken() async {
+    final messaging = FirebaseMessaging.instance;
+    for (var i = 0; i < 20; i++) {
+      final apns = await messaging.getAPNSToken();
+      if (apns != null && apns.isNotEmpty) {
+        debugPrint('APNs token ready');
+        await refreshFcmToken();
+        return;
+      }
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+    debugPrint(
+      'FCM: APNs token missing. Enable Push on the App ID, and upload an '
+      'APNs Authentication Key in Firebase → Cloud Messaging.',
+    );
   }
 }
