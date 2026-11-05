@@ -26,6 +26,10 @@
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
+		<key>NSCameraUsageDescription</key>
+		<string>This app needs camera access if you take a photo to use in a slideshow.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>Location may be used by included services such as ads. Creating a slideshow does not use your location.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>This app needs photo access to create slideshows.</string>
 		<key>NSPhotoLibraryAddUsageDescription</key>
