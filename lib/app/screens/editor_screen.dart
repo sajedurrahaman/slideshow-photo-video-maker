@@ -105,6 +105,9 @@ class _EditorScreenState extends State<EditorScreen>
   /// Photo Done: bake in flight — play stays off until ready.
   bool _finishingPhotoEdits = false;
 
+  /// Decorative frame swap — preview loading until the new PNG is decoded.
+  bool _framePreviewLoading = false;
+
   /// AppBar / system back: draft export in progress.
   bool _savingDraft = false;
 
@@ -2964,6 +2967,44 @@ class _EditorScreenState extends State<EditorScreen>
                                       fit: BoxFit.fill,
                                       gaplessPlayback: false,
                                       filterQuality: FilterQuality.medium,
+                                      frameBuilder: (
+                                        context,
+                                        child,
+                                        frame,
+                                        wasSynchronouslyLoaded,
+                                      ) {
+                                        final ready =
+                                            wasSynchronouslyLoaded ||
+                                            frame != null;
+                                        if (ready && _framePreviewLoading) {
+                                          WidgetsBinding.instance
+                                              .addPostFrameCallback((_) {
+                                            if (mounted &&
+                                                _framePreviewLoading) {
+                                              setState(
+                                                () => _framePreviewLoading =
+                                                    false,
+                                              );
+                                            }
+                                          });
+                                        }
+                                        return child;
+                                      },
+                                      errorBuilder: (_, _, _) {
+                                        if (_framePreviewLoading) {
+                                          WidgetsBinding.instance
+                                              .addPostFrameCallback((_) {
+                                            if (mounted &&
+                                                _framePreviewLoading) {
+                                              setState(
+                                                () => _framePreviewLoading =
+                                                    false,
+                                              );
+                                            }
+                                          });
+                                        }
+                                        return const SizedBox.shrink();
+                                      },
                                     ),
                                   ),
                                 // Live effect layer (CapCut-style) — no frame bake / no loading.
@@ -3012,7 +3053,8 @@ class _EditorScreenState extends State<EditorScreen>
                                   editing: _textToolsOpen,
                                 ),
                                 // Loading while transition preview frames are prepared.
-                                if (project.isPreparingPreview)
+                                if (project.isPreparingPreview ||
+                                    _framePreviewLoading)
                                   const PreparingPreviewOverlay(),
                                 // Export-only progress.
                                 if (project.isProcessing)
@@ -3344,7 +3386,12 @@ class _EditorScreenState extends State<EditorScreen>
       EditorTool.music => const SizedBox.shrink(),
       EditorTool.frame => _FramePanel(
         project: project,
-        onChanged: () => project.refreshLivePreview(),
+        onSelect: (asset) {
+          if (project.selectedFrameAsset == asset) return;
+          setState(() => _framePreviewLoading = asset != null);
+          project.selectFrame(asset);
+          unawaited(project.refreshLivePreview());
+        },
       ),
       EditorTool.filter => _FilterPanel(
         project: project,
@@ -3966,7 +4013,7 @@ class _SelectedPhotoClip extends StatefulWidget {
 }
 
 class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
-  static const _minSec = 1.0;
+  static const _minSec = 2.0;
   static const _maxSec = 10.0;
   static const _shellPadV = 3.0;
 
@@ -5753,9 +5800,9 @@ class _EffectLoopPreviewState extends State<_EffectLoopPreview> {
 }
 
 class _FramePanel extends StatelessWidget {
-  const _FramePanel({required this.project, required this.onChanged});
+  const _FramePanel({required this.project, required this.onSelect});
   final SlideshowProject project;
-  final VoidCallback onChanged;
+  final ValueChanged<String?> onSelect;
 
   static const _muted = Color(0xFF9E9E9E);
 
@@ -5774,10 +5821,7 @@ class _FramePanel extends StatelessWidget {
             context: context,
             selected: selected,
             label: 'Default',
-            onTap: () {
-              project.selectFrame(null);
-              onChanged();
-            },
+            onTap: () => onSelect(null),
             child: const Icon(Icons.block, size: 34, color: _muted),
           );
         }
@@ -5788,10 +5832,7 @@ class _FramePanel extends StatelessWidget {
           context: context,
           selected: selected,
           label: 'Frame_$n',
-          onTap: () {
-            project.selectFrame(frame.assetPath);
-            onChanged();
-          },
+          onTap: () => onSelect(frame.assetPath),
           child: Padding(
             padding: const EdgeInsets.all(3),
             child: Image.asset(

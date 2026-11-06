@@ -956,7 +956,7 @@ class SlideshowProject extends ChangeNotifier {
 
   void changePhotoDuration(int index, double seconds) {
     if (index < 0 || index >= photos.length) return;
-    final duration = seconds.clamp(1.0, 10.0).toDouble();
+    final duration = seconds.clamp(2.0, 10.0).toDouble();
     if ((photos[index].durationSec - duration).abs() < 0.001) return;
     final current = photos[index];
     updatePhoto(
