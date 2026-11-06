@@ -246,6 +246,10 @@ class SlideshowProject extends ChangeNotifier {
   int? selectedPhotoIndex;
   SlideTransitionOption selectedSlideTransition =
       SlideTransitionOption.all.first;
+
+  /// Per-cut overrides. Key is `leftPhotoId|rightPhotoId`.
+  /// Empty means every cut uses [selectedSlideTransition].
+  final Map<String, String> junctionTransitionIds = {};
   String? selectedFrameAsset;
   double slideDurationSec = AppConstants.defaultDurationSec;
   MusicTrack? music;
@@ -487,6 +491,7 @@ class SlideshowProject extends ChangeNotifier {
   _EditorSnapshot _snapshot() => _EditorSnapshot(
     photos: List<SlideshowPhoto>.from(photos),
     transitionId: selectedSlideTransition.id,
+    junctionTransitionIds: Map<String, String>.from(junctionTransitionIds),
     selectedPhotoIndex: selectedPhotoIndex,
   );
 
@@ -516,6 +521,9 @@ class SlideshowProject extends ChangeNotifier {
       (o) => o.id == snap.transitionId,
       orElse: () => SlideTransitionOption.all.first,
     );
+    junctionTransitionIds
+      ..clear()
+      ..addAll(snap.junctionTransitionIds);
     selectedPhotoIndex = snap.selectedPhotoIndex == null || photos.isEmpty
         ? null
         : snap.selectedPhotoIndex!.clamp(0, photos.length - 1).toInt();
@@ -565,6 +573,7 @@ class SlideshowProject extends ChangeNotifier {
     overlayTimelineStartSec = 0;
     overlayTimelineEndSec = null;
     selectedSlideTransition = SlideTransitionOption.all.first;
+    junctionTransitionIds.clear();
     selectedFrameAsset = null;
     slideDurationSec = AppConstants.defaultDurationSec;
     music = null;
@@ -649,6 +658,16 @@ class SlideshowProject extends ChangeNotifier {
       (e) => e.id == transitionId,
       orElse: () => SlideTransitionOption.all.first,
     );
+    junctionTransitionIds.clear();
+    final savedJunctions = map['junctionTransitions'];
+    if (savedJunctions is Map) {
+      for (final entry in savedJunctions.entries) {
+        final id = entry.value;
+        if (id is String && id.isNotEmpty) {
+          junctionTransitionIds[entry.key.toString()] = id;
+        }
+      }
+    }
 
     final themeId = map['themeId'] as String?;
     selectedTheme = AppThemes.all.firstWhere(
@@ -1228,11 +1247,68 @@ class SlideshowProject extends ChangeNotifier {
   bool get isSlideEffectBusy =>
       isPreparingPreview || _isWarmingPreviewCache;
 
-  void selectSlideTransition(SlideTransitionOption option) {
+  /// Transition used between `photos[fromIndex]` and the next photo.
+  SlideTransitionOption transitionForJunction(int fromIndex) {
+    final key = _junctionPairKey(fromIndex);
+    final id = key == null ? null : junctionTransitionIds[key];
+    if (id == null) return selectedSlideTransition;
+    return SlideTransitionOption.all.firstWhere(
+      (o) => o.id == id,
+      orElse: () => selectedSlideTransition,
+    );
+  }
+
+  String? _junctionPairKey(int fromIndex) {
+    if (fromIndex < 0 || fromIndex >= photos.length - 1) return null;
+    return '${photos[fromIndex].id}|${photos[fromIndex + 1].id}';
+  }
+
+  String _junctionSignature() {
+    if (junctionTransitionIds.isEmpty) return '';
+    final entries = junctionTransitionIds.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries.map((e) => '${e.key}=${e.value}').join(',');
+  }
+
+  /// [onlyJunction] is the cut before that photo index (timeline button).
+  /// Null applies [option] to every cut and clears per-cut overrides.
+  void selectSlideTransition(
+    SlideTransitionOption option, {
+    int? onlyJunction,
+  }) {
     // Caller should toast when busy — do not switch mid-render.
     if (isSlideEffectBusy) return;
 
-    if (selectedSlideTransition.id == option.id) {
+    if (onlyJunction != null) {
+      final key = _junctionPairKey(onlyJunction);
+      if (key == null) return;
+      if (junctionTransitionIds[key] == option.id &&
+          isPreviewReady &&
+          _previewMemoryFrames.isNotEmpty) {
+        _playTransitionDemo(onlyJunction);
+        return;
+      }
+      _recordHistory();
+      junctionTransitionIds[key] = option.id;
+      _previewTimer?.cancel();
+      _previewTimer = null;
+      _transitionDemoTimer?.cancel();
+      _transitionDemoTimer = null;
+      _transitionPreviewDebounce?.cancel();
+      _preparingOverlayDelay?.cancel();
+      unawaited(_stopPreviewMusic());
+      isPreviewPlaying = false;
+      isPlaying = false;
+      isPreparingPreview = false;
+      notifyListeners();
+      unawaited(_applyJunctionTransitions(onlyJunction));
+      return;
+    }
+
+    final sameGlobal =
+        selectedSlideTransition.id == option.id &&
+        junctionTransitionIds.isEmpty;
+    if (sameGlobal) {
       if (isPreviewReady && _previewMemoryFrames.isNotEmpty) {
         unawaited(_playFirstTransitionDemo());
         return;
@@ -1243,6 +1319,7 @@ class SlideshowProject extends ChangeNotifier {
       return;
     }
     _recordHistory();
+    junctionTransitionIds.clear();
     selectedSlideTransition = option;
     // Keep prepared photos + base frames; only swap transition strips.
     _previewTimer?.cancel();
@@ -1388,9 +1465,24 @@ class SlideshowProject extends ChangeNotifier {
     }
     try {
       await _ensureDefaultNonePreviewReady();
-      final def = selectedSlideTransition;
-      if (def.type != SlideTransitionType.none && photos.length >= 2) {
-        await _cacheAllStripsForEffect(def);
+      if (junctionTransitionIds.isNotEmpty) {
+        _resetWorkingFramesFromBase();
+        await _spliceCurrentJunctions(
+          _previewGeneration,
+          ignoreGeneration: true,
+        );
+        _previewCacheKey = _buildPreviewCacheKey(selectedSlideTransition);
+        if (_previewMemoryFrames.isNotEmpty) {
+          isPreviewReady = true;
+          previewFrameIndex = 0;
+          _setPreviewPosition(0);
+          _setPreviewFrame(_previewMemoryFrames.first);
+        }
+      } else {
+        final def = selectedSlideTransition;
+        if (def.type != SlideTransitionType.none && photos.length >= 2) {
+          await _cacheAllStripsForEffect(def);
+        }
       }
     } finally {
       _isWarmingPreviewCache = false;
@@ -1415,7 +1507,8 @@ class SlideshowProject extends ChangeNotifier {
         _previewBaseCacheKey == _buildPreviewBaseCacheKey() &&
         (_previewMemoryFrames.isNotEmpty || isPreviewReady)) {
       // Ensure working frames are the clean default if None is selected.
-      if (selectedSlideTransition.type == SlideTransitionType.none) {
+      if (selectedSlideTransition.type == SlideTransitionType.none &&
+          junctionTransitionIds.isEmpty) {
         _restoreDefaultNoneFrames();
       }
       return;
@@ -1431,7 +1524,8 @@ class SlideshowProject extends ChangeNotifier {
     if (_previewBaseMemoryFrames.isNotEmpty &&
         _previewBaseCacheKey == baseKey &&
         _previewSegmentCounts.length == photos.length) {
-      if (selectedSlideTransition.type == SlideTransitionType.none) {
+      if (selectedSlideTransition.type == SlideTransitionType.none &&
+          junctionTransitionIds.isEmpty) {
         _restoreDefaultNoneFrames();
       }
       return;
@@ -1443,7 +1537,8 @@ class SlideshowProject extends ChangeNotifier {
     _storeBaseMemoryFramesFromWorking();
     _previewCacheKey = noneKey;
     _previewBaseCacheKey = baseKey;
-    if (selectedSlideTransition.type == SlideTransitionType.none) {
+    if (selectedSlideTransition.type == SlideTransitionType.none &&
+        junctionTransitionIds.isEmpty) {
       isPreviewReady = true;
       isPreparingPreview = false;
       previewFrameIndex = 0;
@@ -1451,6 +1546,80 @@ class SlideshowProject extends ChangeNotifier {
       _setPreviewFrame(_previewMemoryFrames.first);
       notifyListeners();
     }
+  }
+
+  /// One timeline cut changed. Keep every other cut, then play that cut.
+  Future<void> _applyJunctionTransitions(int fromIndex) async {
+    if (photos.length < AppConstants.minPhotos || isProcessing) return;
+    _previewGeneration++;
+    var generation = _previewGeneration;
+    final baseKey = _buildPreviewBaseCacheKey();
+
+    _preparingOverlayDelay?.cancel();
+    _preparingOverlayDelay = Timer(const Duration(milliseconds: 140), () {
+      if (generation != _previewGeneration) return;
+      if (isPreviewReady &&
+          _previewCacheKey == _buildPreviewCacheKey(selectedSlideTransition)) {
+        return;
+      }
+      isPreparingPreview = true;
+      notifyListeners();
+    });
+
+    try {
+      if (_previewBaseMemoryFrames.isEmpty ||
+          _previewBaseCacheKey != baseKey ||
+          _previewSegmentCounts.length != photos.length) {
+        await preparePreviewFrames(
+          showLoading: false,
+          transitionOption: SlideTransitionOption.all.first,
+        );
+        generation = _previewGeneration;
+        if (_previewMemoryFrames.isEmpty) return;
+      }
+      if (_previewBaseMemoryFrames.isEmpty && _previewMemoryFrames.isNotEmpty) {
+        _storeBaseMemoryFramesFromWorking();
+      }
+      _resetWorkingFramesFromBase();
+      final ok = await _spliceCurrentJunctions(generation);
+      if (!ok || generation != _previewGeneration) return;
+      _previewCacheKey = _buildPreviewCacheKey(selectedSlideTransition);
+      _previewBaseCacheKey = baseKey;
+      isPreviewReady = true;
+      isPreparingPreview = false;
+      _preparingOverlayDelay?.cancel();
+      notifyListeners();
+      _playTransitionDemo(fromIndex);
+    } finally {
+      _preparingOverlayDelay?.cancel();
+      _preparingOverlayDelay = null;
+      if (generation == _previewGeneration) {
+        isPreparingPreview = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<bool> _spliceCurrentJunctions(
+    int generation, {
+    bool ignoreGeneration = false,
+  }) async {
+    for (var i = 0; i < photos.length - 1; i++) {
+      if (!ignoreGeneration && generation != _previewGeneration) return false;
+      final option = transitionForJunction(i);
+      if (option.type == SlideTransitionType.none) continue;
+      final strip = await _ensureTransitionStrip(
+        fromIndex: i,
+        toIndex: i + 1,
+        option: option,
+        generation: generation,
+        ignoreGeneration: ignoreGeneration,
+      );
+      if (strip == null) return false;
+      if (strip.isEmpty) continue;
+      _spliceTransitionStrip(photoIndex: i, strip: strip);
+    }
+    return true;
   }
 
   void _storeBaseMemoryFramesFromWorking() {
@@ -1648,7 +1817,8 @@ class SlideshowProject extends ChangeNotifier {
       );
       if (strip == null || strip.isEmpty) continue;
       // Live timeline only if this effect is still selected.
-      if (selectedSlideTransition.id == option.id) {
+      if (junctionTransitionIds.isEmpty &&
+          selectedSlideTransition.id == option.id) {
         _spliceTransitionStrip(photoIndex: i, strip: strip);
       }
       await Future<void>.delayed(Duration.zero);
@@ -1657,6 +1827,10 @@ class SlideshowProject extends ChangeNotifier {
   }
 
   Future<void> _playFirstTransitionDemo() async {
+    _playTransitionDemo(0);
+  }
+
+  void _playTransitionDemo(int fromIndex) {
     if (_previewMemoryFrames.isEmpty || !isPreviewReady) return;
     _transitionDemoTimer?.cancel();
     _previewTimer?.cancel();
@@ -1664,18 +1838,25 @@ class SlideshowProject extends ChangeNotifier {
     isPreviewPlaying = false;
     isPlaying = false;
 
-    final effect = selectedSlideTransition.type;
-    if (effect == SlideTransitionType.none || photos.length < 2) return;
-
-    final total0 = frameCountForDuration(photos[0].durationSec);
-    final trans = math.min(AppConstants.framesPerTransition, total0);
-    final solo = total0 - trans;
-    var intro = 0;
-    if (startingCard != null) {
-      intro = frameCountForDuration(startingCard!.durationSec).clamp(4, 300);
+    if (fromIndex < 0 || fromIndex >= photos.length - 1) return;
+    if (transitionForJunction(fromIndex).type == SlideTransitionType.none) {
+      return;
     }
-    final start = (intro + solo).clamp(0, _previewMemoryFrames.length - 1);
-    final end = (intro + total0).clamp(0, _previewMemoryFrames.length).toInt();
+
+    final total = frameCountForDuration(photos[fromIndex].durationSec);
+    final trans = math.min(AppConstants.framesPerTransition, total);
+    final solo = total - trans;
+    var origin = 0;
+    if (startingCard != null) {
+      origin = frameCountForDuration(startingCard!.durationSec).clamp(4, 300);
+    }
+    for (var i = 0; i < fromIndex; i++) {
+      origin += i < _previewSegmentCounts.length
+          ? _previewSegmentCounts[i]
+          : frameCountForDuration(photos[i].durationSec);
+    }
+    final start = (origin + solo).clamp(0, _previewMemoryFrames.length - 1);
+    final end = (origin + total).clamp(0, _previewMemoryFrames.length).toInt();
     if (start >= end - 1) return;
 
     previewFrameIndex = start;
@@ -1825,8 +2006,13 @@ class SlideshowProject extends ChangeNotifier {
     }
 
     final baseKey = _buildPreviewBaseCacheKey();
+    final liveSelection = transitionOption == null;
+    final perJunction = liveSelection && junctionTransitionIds.isNotEmpty;
     final option = transitionOption ?? selectedSlideTransition;
-    final key = _buildPreviewCacheKey(option);
+    final key = _buildPreviewCacheKey(
+      option,
+      includeJunctions: liveSelection,
+    );
     if (_previewCacheKey == key && _previewMemoryFrames.isNotEmpty) {
       isPreviewReady = true;
       isPreparingPreview = false;
@@ -1843,6 +2029,7 @@ class SlideshowProject extends ChangeNotifier {
 
     try {
       final canRebuildTransitionsOnly =
+          !perJunction &&
           option.type != SlideTransitionType.none &&
           _previewBaseCacheKey == baseKey &&
           _previewMemoryFrames.isNotEmpty &&
@@ -1856,6 +2043,7 @@ class SlideshowProject extends ChangeNotifier {
               generation: generation,
               cacheKey: key,
               transitionOption: option,
+              perJunction: perJunction,
             );
       if (generation != _previewGeneration || built == null) return;
       _previewMemoryFrames
@@ -1870,8 +2058,11 @@ class SlideshowProject extends ChangeNotifier {
       }
       _previewCacheKey = key;
       _previewBaseCacheKey = baseKey;
-      final forSelected =
-          key == _buildPreviewCacheKey(selectedSlideTransition);
+      final forSelected = key ==
+          _buildPreviewCacheKey(
+            selectedSlideTransition,
+            includeJunctions: liveSelection,
+          );
       isPreviewReady = _previewMemoryFrames.isNotEmpty && forSelected;
       if (_previewMemoryFrames.isNotEmpty && forSelected) {
         final selectedStart = selectedPhotoIndex == null
@@ -1891,8 +2082,14 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
-  String _buildPreviewCacheKey(SlideTransitionOption transitionOption) {
-    return '${_buildPreviewBaseCacheKey()}::${transitionOption.id}';
+  String _buildPreviewCacheKey(
+    SlideTransitionOption transitionOption, {
+    bool includeJunctions = true,
+  }) {
+    final extra = includeJunctions ? _junctionSignature() : '';
+    final id = '${_buildPreviewBaseCacheKey()}::${transitionOption.id}';
+    if (extra.isEmpty) return id;
+    return '$id::$extra';
   }
 
   String _buildPreviewBaseCacheKey() {
@@ -2247,6 +2444,7 @@ class SlideshowProject extends ChangeNotifier {
     required int generation,
     required String cacheKey,
     required SlideTransitionOption transitionOption,
+    bool perJunction = false,
   }) async {
     final frames = <Uint8List>[];
     final counts = <int>[];
@@ -2287,7 +2485,7 @@ class SlideshowProject extends ChangeNotifier {
         decoded: decoded,
         layers: layers,
         generation: generation,
-        transitionOption: transitionOption,
+        transitionOption: perJunction ? transitionForJunction(i) : transitionOption,
         overlays: overlays,
         frameCursor: cursor,
       );
@@ -2989,10 +3187,9 @@ class SlideshowProject extends ChangeNotifier {
         }
       }
 
-      final effect = selectedSlideTransition.type;
-      final option = selectedSlideTransition;
-
       for (var i = 0; i < decoded.length; i++) {
+        final option = transitionForJunction(i);
+        final effect = option.type;
         final photo = photos[i];
         final totalFrames = frameCountForDuration(photo.durationSec);
         final transitionFrames = i < pairs && effect != SlideTransitionType.none
@@ -3203,11 +3400,13 @@ class SlideshowProject extends ChangeNotifier {
 class _EditorSnapshot {
   final List<SlideshowPhoto> photos;
   final String transitionId;
+  final Map<String, String> junctionTransitionIds;
   final int? selectedPhotoIndex;
 
   _EditorSnapshot({
     required this.photos,
     required this.transitionId,
+    required this.junctionTransitionIds,
     required this.selectedPhotoIndex,
   });
 }

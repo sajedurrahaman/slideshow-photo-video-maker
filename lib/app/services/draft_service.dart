@@ -164,6 +164,7 @@ class DraftService {
       'estimatedDurationSec': project.estimatedDurationSec,
       'photos': savedPhotos,
       'transitionId': project.selectedSlideTransition.id,
+      'junctionTransitions': project.junctionTransitionIds,
       'themeId': project.selectedTheme.id,
       'selectedFrameAsset': project.selectedFrameAsset,
       'slideDurationSec': project.slideDurationSec,
