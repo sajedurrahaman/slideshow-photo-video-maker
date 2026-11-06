@@ -471,10 +471,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             GestureDetector(
                               onTap: () => _openUrl(
-                                'https://sites.google.com/view/slideshow-photovideomaker-term',
+                                'https://sites.google.com/view/photoslideshowvideomaker',
                               ),
                               child: const Text(
-                                'Terms and service',
+                                'Terms and Condition',
                                 style: TextStyle(
                                   color: Color(0xFFE53935),
                                   fontSize: 11,
@@ -491,10 +491,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             GestureDetector(
                               onTap: () => _openUrl(
-                                'https://sites.google.com/view/slideshow-photovideomaker',
+                                'https://sites.google.com/view/photoslideshowvideomaker-',
                               ),
                               child: const Text(
-                                'privacy policy',
+                                'Privacy Policy',
                                 style: TextStyle(
                                   color: Color(0xFFE53935),
                                   fontSize: 11,
