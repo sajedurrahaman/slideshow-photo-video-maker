@@ -5784,7 +5784,7 @@ class _FramePanel extends StatelessWidget {
     final frames = FrameAsset.all;
     return ListView.separated(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
       itemCount: frames.length + 1,
       separatorBuilder: (_, _) => const SizedBox(width: 12),
       itemBuilder: (context, i) {
@@ -5813,7 +5813,7 @@ class _FramePanel extends StatelessWidget {
             onChanged();
           },
           child: Padding(
-            padding: const EdgeInsets.all(6),
+            padding: const EdgeInsets.all(3),
             child: Image.asset(
               frame.assetPath,
               fit: BoxFit.cover,
@@ -5847,31 +5847,31 @@ class _FramePanel extends StatelessWidget {
                   Positioned.fill(
                     child: PrimarySelectedBorder(
                       selected: selected,
-                      borderRadius: 10,
+                      borderRadius: 4,
                       width: 2,
                       unselectedColor: const Color(0xFFD0D0D0),
                       backgroundColor: Colors.white,
                       child: child,
                     ),
                   ),
-                  if (selected)
-                    Positioned(
-                      left: -2,
-                      top: -2,
-                      child: Container(
-                        width: 20,
-                        height: 20,
-                        decoration: const BoxDecoration(
-                          gradient: AppColors.primaryGradient,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.check,
-                          size: 13,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
+                  // if (selected)
+                  //   Positioned(
+                  //     left: -2,
+                  //     top: -2,
+                  //     child: Container(
+                  //       width: 15,
+                  //       height: 15,
+                  //       decoration: const BoxDecoration(
+                  //         gradient: AppColors.primaryGradient,
+                  //         shape: BoxShape.circle,
+                  //       ),
+                  //       child: const Icon(
+                  //         Icons.check,
+                  //         size: 13,
+                  //         color: Colors.white,
+                  //       ),
+                  //     ),
+                  //   ),
                 ],
               ),
             ),
@@ -5884,8 +5884,8 @@ class _FramePanel extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   )
@@ -5895,8 +5895,8 @@ class _FramePanel extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: _muted,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w400,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
           ],
