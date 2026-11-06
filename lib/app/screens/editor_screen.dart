@@ -496,9 +496,13 @@ class _EditorScreenState extends State<EditorScreen>
     if (result == null || result.files.isEmpty || !mounted) return;
     final path = result.files.single.path;
     if (path == null) return;
-    context.read<SlideshowProject>().addLocalMusicTrack(
+    final project = context.read<SlideshowProject>();
+    project.addLocalMusicTrack(
       MusicTrack(path: path, title: result.files.single.name),
     );
+    if (!project.isPreviewPlaying) {
+      await project.togglePreviewPlayback();
+    }
   }
 
   /// Preview row shown inside SectionSheet for every tool.
@@ -2032,10 +2036,10 @@ class _EditorScreenState extends State<EditorScreen>
             ],
           ),
           Slider(
-            min: 1,
+            min: 2,
             max: 10,
-            divisions: 18,
-            value: duration.clamp(1.0, 10.0).toDouble(),
+            divisions: 16,
+            value: duration.clamp(2.0, 10.0).toDouble(),
             onChanged: (value) => setState(() => _durationSliderValue = value),
             onChangeEnd: (value) {
               project.changePhotoDuration(index, value);
@@ -5137,48 +5141,24 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet>
     }
   }
 
-  Future<void> _playTrack(MusicTrack track) async {
-    try {
-      widget.project.setMusic(track);
-      // Avoid clashing with editor slideshow preview audio.
-      widget.project.stopPreviewPlayback();
-      if (track.isAsset) {
-        await _previewPlayer.setAsset(track.path);
-      } else {
-        await _previewPlayer.setFilePath(track.path);
-      }
-      await _previewPlayer.setVolume((track.volume / 100).clamp(0.0, 1.0));
-      await _previewPlayer.play();
-      if (!mounted) return;
-      setState(() {
-        _previewPath = track.path;
-        _previewPlaying = true;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Playback failed: $e')));
-    }
-  }
-
   Future<void> _onTrackTap(MusicTrack track) async {
-    final isSel = widget.project.music?.path == track.path;
-    if (isSel && _previewPath == track.path && _previewPlaying) {
-      await _previewPlayer.pause();
-      if (mounted) setState(() => _previewPlaying = false);
+    final project = widget.project;
+    // The slideshow preview is the only audio. Do not start a second player.
+    await _stopPreview();
+    final isSel = project.music?.path == track.path;
+    if (isSel) {
+      await project.togglePreviewPlayback();
       return;
     }
-    if (isSel && _previewPath == track.path && !_previewPlaying) {
-      await _previewPlayer.play();
-      if (mounted) setState(() => _previewPlaying = true);
-      return;
+    project.setMusic(track);
+    if (!project.isPreviewPlaying) {
+      await project.togglePreviewPlayback();
     }
-    await _playTrack(track);
   }
 
   Widget _trackTile(MusicTrack track, MusicTrack? selected) {
     final isSel = selected?.path == track.path;
-    final isPlaying = isSel && _previewPath == track.path && _previewPlaying;
+    final isPlaying = isSel && widget.project.isPreviewPlaying;
     return _MusicThumbTile(
       title: track.title,
       selected: isSel,

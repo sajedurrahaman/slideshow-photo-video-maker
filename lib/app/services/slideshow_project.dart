@@ -2539,7 +2539,11 @@ class SlideshowProject extends ChangeNotifier {
       clearClipEnd: true,
     );
     _previewMusicPath = null;
-    if (!isPreviewPlaying) unawaited(_stopPreviewMusic());
+    if (isPreviewPlaying) {
+      unawaited(_startPreviewMusicAt(previewPositionSec));
+    } else {
+      unawaited(_stopPreviewMusic());
+    }
     notifyListeners();
     if (music != null) unawaited(_probeMusicDuration(music!));
   }
@@ -2555,7 +2559,11 @@ class SlideshowProject extends ChangeNotifier {
       clearClipEnd: true,
     );
     _previewMusicPath = null;
-    if (!isPreviewPlaying) unawaited(_stopPreviewMusic());
+    if (isPreviewPlaying) {
+      unawaited(_startPreviewMusicAt(previewPositionSec));
+    } else {
+      unawaited(_stopPreviewMusic());
+    }
     notifyListeners();
     unawaited(_probeMusicDuration(music!));
   }
