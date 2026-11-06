@@ -389,10 +389,7 @@ class _EditorScreenState extends State<EditorScreen>
 
   /// Bottom nav tool selected (Slide / Text / Effects / Music / Frame / Ratio…).
   bool get _navbarToolActive =>
-      _tool != null ||
-      _musicToolsOpen ||
-      _effectsToolsOpen ||
-      _textToolsOpen;
+      _tool != null || _musicToolsOpen || _effectsToolsOpen || _textToolsOpen;
 
   void _dismissTool() {
     setState(() => _tool = null);
@@ -2103,7 +2100,7 @@ class _EditorScreenState extends State<EditorScreen>
             PhotoAnimationType.flyOutRight,
             PhotoAnimationType.flyOutUp,
           ];
-    final thumb = compact ? 56.0 : 56.0;
+    final thumb = compact ? 52.0 : 56.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2213,7 +2210,6 @@ class _EditorScreenState extends State<EditorScreen>
                                 ),
                         ),
                       ),
-                      const SizedBox(height: 1),
                       Text(
                         _animationLabel(animation, _animationPhase),
                         maxLines: 1,
@@ -5943,15 +5939,9 @@ class _FilterPanel extends StatelessWidget {
                   child: Center(
                     child: selected
                         ? const PrimaryGradientMask(
-                            child: Icon(
-                              Icons.filter,
-                              color: Colors.white,
-                            ),
+                            child: Icon(Icons.filter, color: Colors.white),
                           )
-                        : const Icon(
-                            Icons.filter,
-                            color: AppColors.iconNormal,
-                          ),
+                        : const Icon(Icons.filter, color: AppColors.iconNormal),
                   ),
                 ),
               ),
