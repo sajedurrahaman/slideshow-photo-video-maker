@@ -2100,7 +2100,7 @@ class _EditorScreenState extends State<EditorScreen>
             PhotoAnimationType.flyOutRight,
             PhotoAnimationType.flyOutUp,
           ];
-    final thumb = compact ? 52.0 : 56.0;
+    final thumb = compact ? 56.0 : 56.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2147,7 +2147,7 @@ class _EditorScreenState extends State<EditorScreen>
             ],
           ),
         ),
-        const SizedBox(height: 4.4),
+        const SizedBox(height: 2),
         Expanded(
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
@@ -2264,7 +2264,7 @@ class _EditorScreenState extends State<EditorScreen>
       color: AppColors.textDark,
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       child: Row(
         children: [
           const SizedBox(width: 24, child: Text('In', style: labelStyle)),
