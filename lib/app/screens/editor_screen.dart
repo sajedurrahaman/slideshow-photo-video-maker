@@ -77,6 +77,9 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen>
     with WidgetsBindingObserver {
   EditorTool? _tool;
+
+  /// Timeline cut opened from the between-photo button. Null = apply to all.
+  int? _slideJunctionIndex;
   _PhotoTool? _photoTool;
   _AnimationPhase _animationPhase = _AnimationPhase.inAnimation;
   _CanvasSheetTab _canvasSheetTab = _CanvasSheetTab.background;
@@ -105,8 +108,15 @@ class _EditorScreenState extends State<EditorScreen>
   /// Photo Done: bake in flight — play stays off until ready.
   bool _finishingPhotoEdits = false;
 
+  /// Decorative frame swap — preview loading until the new PNG is decoded.
+  bool _framePreviewLoading = false;
+
+  /// Effect pick — preview loading until overlay frames are ready, then auto-play.
+  bool _effectPreviewLoading = false;
+
   /// AppBar / system back: draft export in progress.
   bool _savingDraft = false;
+  bool _pickingFile = false;
 
   /// Text tools (CapCut-style Template / Font / Color).
   bool _textToolsOpen = false;
@@ -389,10 +399,7 @@ class _EditorScreenState extends State<EditorScreen>
 
   /// Bottom nav tool selected (Slide / Text / Effects / Music / Frame / Ratio…).
   bool get _navbarToolActive =>
-      _tool != null ||
-      _musicToolsOpen ||
-      _effectsToolsOpen ||
-      _textToolsOpen;
+      _tool != null || _musicToolsOpen || _effectsToolsOpen || _textToolsOpen;
 
   void _dismissTool() {
     setState(() => _tool = null);
@@ -455,10 +462,31 @@ class _EditorScreenState extends State<EditorScreen>
         context.read<SlideshowProject>().selectedOverlayEffect != null;
     setState(() {
       _tool = null;
+      _effectPreviewLoading = false;
       _effectsToolsOpen = true;
       _effectsTrackSelected = hasEffect;
       _musicToolsOpen = false;
     });
+  }
+
+  void _onEffectFramesReady(String id) {
+    if (!mounted) return;
+    final project = context.read<SlideshowProject>();
+    if (project.selectedOverlayEffect?.id != id) return;
+    final shouldPlay = _effectPreviewLoading && _tool == EditorTool.effects;
+    if (_effectPreviewLoading) {
+      setState(() => _effectPreviewLoading = false);
+    }
+    if (shouldPlay && !project.isPreviewPlaying) {
+      unawaited(project.togglePreviewPlayback());
+    }
+  }
+
+  void _onEffectFramesFailed(String id) {
+    if (!mounted || !_effectPreviewLoading) return;
+    final project = context.read<SlideshowProject>();
+    if (project.selectedOverlayEffect?.id != id) return;
+    setState(() => _effectPreviewLoading = false);
   }
 
   void _closeEffectsTools() {
@@ -492,16 +520,17 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   Future<void> _pickLocalMusic() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.audio,
-      allowMultiple: false,
-    );
+    final result = await _pickSingleFile(FileType.audio);
     if (result == null || result.files.isEmpty || !mounted) return;
     final path = result.files.single.path;
     if (path == null) return;
-    context.read<SlideshowProject>().addLocalMusicTrack(
+    final project = context.read<SlideshowProject>();
+    project.addLocalMusicTrack(
       MusicTrack(path: path, title: result.files.single.name),
     );
+    if (!project.isPreviewPlaying) {
+      await project.togglePreviewPlayback();
+    }
   }
 
   /// Preview row shown inside SectionSheet for every tool.
@@ -921,6 +950,7 @@ class _EditorScreenState extends State<EditorScreen>
                                       onTap: () {
                                         project.clearTimelinePhotoSelection();
                                         setState(() {
+                                          _slideJunctionIndex = photoIndex - 1;
                                           _tool = EditorTool.slide;
                                           _photoTool = null;
                                         });
@@ -1301,6 +1331,9 @@ class _EditorScreenState extends State<EditorScreen>
                     }
                     if (t == EditorTool.music) {
                       _effectsToolsOpen = false;
+                    }
+                    if (t == EditorTool.slide) {
+                      _slideJunctionIndex = null;
                     }
                   });
                   if (t == EditorTool.slide) {
@@ -1830,16 +1863,30 @@ class _EditorScreenState extends State<EditorScreen>
     });
   }
 
+  /// iOS file_picker throws [PlatformException] code `multiple_request` when a
+  /// second pick starts before the first document picker has closed.
+  Future<FilePickerResult?> _pickSingleFile(FileType type) async {
+    if (_pickingFile) return null;
+    _pickingFile = true;
+    try {
+      return await FilePicker.platform.pickFiles(
+        type: type,
+        allowMultiple: false,
+      );
+    } on PlatformException catch (e) {
+      if (e.code == 'multiple_request') return null;
+      rethrow;
+    } finally {
+      _pickingFile = false;
+    }
+  }
+
   Future<void> _replaceSelectedPhoto(
     SlideshowProject project,
     int index,
     SlideshowPhoto photo,
   ) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: false,
-      withData: true,
-    );
+    final result = await _pickSingleFile(FileType.image);
     if (!mounted || result == null || result.files.isEmpty) return;
     final picked = result.files.single;
     final temp = await getTemporaryDirectory();
@@ -2035,10 +2082,10 @@ class _EditorScreenState extends State<EditorScreen>
             ],
           ),
           Slider(
-            min: 1,
+            min: 2,
             max: 10,
-            divisions: 18,
-            value: duration.clamp(1.0, 10.0).toDouble(),
+            divisions: 16,
+            value: duration.clamp(2.0, 10.0).toDouble(),
             onChanged: (value) => setState(() => _durationSliderValue = value),
             onChangeEnd: (value) {
               project.changePhotoDuration(index, value);
@@ -2964,6 +3011,46 @@ class _EditorScreenState extends State<EditorScreen>
                                       fit: BoxFit.fill,
                                       gaplessPlayback: false,
                                       filterQuality: FilterQuality.medium,
+                                      frameBuilder:
+                                          (
+                                            context,
+                                            child,
+                                            frame,
+                                            wasSynchronouslyLoaded,
+                                          ) {
+                                            final ready =
+                                                wasSynchronouslyLoaded ||
+                                                frame != null;
+                                            if (ready && _framePreviewLoading) {
+                                              WidgetsBinding.instance
+                                                  .addPostFrameCallback((_) {
+                                                    if (mounted &&
+                                                        _framePreviewLoading) {
+                                                      setState(
+                                                        () =>
+                                                            _framePreviewLoading =
+                                                                false,
+                                                      );
+                                                    }
+                                                  });
+                                            }
+                                            return child;
+                                          },
+                                      errorBuilder: (_, _, _) {
+                                        if (_framePreviewLoading) {
+                                          WidgetsBinding.instance
+                                              .addPostFrameCallback((_) {
+                                                if (mounted &&
+                                                    _framePreviewLoading) {
+                                                  setState(
+                                                    () => _framePreviewLoading =
+                                                        false,
+                                                  );
+                                                }
+                                              });
+                                        }
+                                        return const SizedBox.shrink();
+                                      },
                                     ),
                                   ),
                                 // Live effect layer (CapCut-style) — no frame bake / no loading.
@@ -2975,6 +3062,8 @@ class _EditorScreenState extends State<EditorScreen>
                                     ),
                                     project: project,
                                     effect: project.selectedOverlayEffect!,
+                                    onFramesReady: _onEffectFramesReady,
+                                    onFramesFailed: _onEffectFramesFailed,
                                   ),
                                 // Live text: tap to select/move; Edit opens sheet.
                                 LiveTextOverlaysLayer(
@@ -3012,7 +3101,9 @@ class _EditorScreenState extends State<EditorScreen>
                                   editing: _textToolsOpen,
                                 ),
                                 // Loading while transition preview frames are prepared.
-                                if (project.isPreparingPreview)
+                                if (project.isPreparingPreview ||
+                                    _framePreviewLoading ||
+                                    _effectPreviewLoading)
                                   const PreparingPreviewOverlay(),
                                 // Export-only progress.
                                 if (project.isProcessing)
@@ -3130,6 +3221,10 @@ class _EditorScreenState extends State<EditorScreen>
                             project: project,
                             onClose: _finishEffectsPicker,
                             onConfirm: _finishEffectsPicker,
+                            onPreviewLoading: (loading) {
+                              if (_effectPreviewLoading == loading) return;
+                              setState(() => _effectPreviewLoading = loading);
+                            },
                           ),
                         ),
                       ],
@@ -3315,6 +3410,7 @@ class _EditorScreenState extends State<EditorScreen>
     return switch (_tool!) {
       EditorTool.slide => _SlideTransitions(
         project: project,
+        junctionIndex: _slideJunctionIndex,
         onChanged: () => project.refreshLivePreview(),
       ),
       EditorTool.text => _TextPanel(
@@ -3344,7 +3440,12 @@ class _EditorScreenState extends State<EditorScreen>
       EditorTool.music => const SizedBox.shrink(),
       EditorTool.frame => _FramePanel(
         project: project,
-        onChanged: () => project.refreshLivePreview(),
+        onSelect: (asset) {
+          if (project.selectedFrameAsset == asset) return;
+          setState(() => _framePreviewLoading = asset != null);
+          project.selectFrame(asset);
+          unawaited(project.refreshLivePreview());
+        },
       ),
       EditorTool.filter => _FilterPanel(
         project: project,
@@ -3966,7 +4067,7 @@ class _SelectedPhotoClip extends StatefulWidget {
 }
 
 class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
-  static const _minSec = 1.0;
+  static const _minSec = 2.0;
   static const _maxSec = 10.0;
   static const _shellPadV = 3.0;
 
@@ -4885,10 +4986,14 @@ class _LiveEffectOverlayLayer extends StatefulWidget {
     super.key,
     required this.project,
     required this.effect,
+    this.onFramesReady,
+    this.onFramesFailed,
   });
 
   final SlideshowProject project;
   final OverlayEffect effect;
+  final ValueChanged<String>? onFramesReady;
+  final ValueChanged<String>? onFramesFailed;
 
   @override
   State<_LiveEffectOverlayLayer> createState() =>
@@ -4986,9 +5091,11 @@ class _LiveEffectOverlayLayerState extends State<_LiveEffectOverlayLayer> {
       );
       setState(() => _ready = true);
       _syncToClock();
+      widget.onFramesReady?.call(effect.id);
     } catch (_) {
       if (mounted && gen == _loadGen) {
         setState(() => _ready = false);
+        widget.onFramesFailed?.call(effect.id);
       }
     }
   }
@@ -5141,48 +5248,24 @@ class _MusicPickerSheetState extends State<_MusicPickerSheet>
     }
   }
 
-  Future<void> _playTrack(MusicTrack track) async {
-    try {
-      widget.project.setMusic(track);
-      // Avoid clashing with editor slideshow preview audio.
-      widget.project.stopPreviewPlayback();
-      if (track.isAsset) {
-        await _previewPlayer.setAsset(track.path);
-      } else {
-        await _previewPlayer.setFilePath(track.path);
-      }
-      await _previewPlayer.setVolume((track.volume / 100).clamp(0.0, 1.0));
-      await _previewPlayer.play();
-      if (!mounted) return;
-      setState(() {
-        _previewPath = track.path;
-        _previewPlaying = true;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Playback failed: $e')));
-    }
-  }
-
   Future<void> _onTrackTap(MusicTrack track) async {
-    final isSel = widget.project.music?.path == track.path;
-    if (isSel && _previewPath == track.path && _previewPlaying) {
-      await _previewPlayer.pause();
-      if (mounted) setState(() => _previewPlaying = false);
+    final project = widget.project;
+    // Sheet must not keep its own player — the slideshow preview is the only audio.
+    await _stopPreview();
+    final isSel = project.music?.path == track.path;
+    if (isSel) {
+      await project.togglePreviewPlayback();
       return;
     }
-    if (isSel && _previewPath == track.path && !_previewPlaying) {
-      await _previewPlayer.play();
-      if (mounted) setState(() => _previewPlaying = true);
-      return;
+    project.setMusic(track);
+    if (!project.isPreviewPlaying) {
+      await project.togglePreviewPlayback();
     }
-    await _playTrack(track);
   }
 
   Widget _trackTile(MusicTrack track, MusicTrack? selected) {
     final isSel = selected?.path == track.path;
-    final isPlaying = isSel && _previewPath == track.path && _previewPlaying;
+    final isPlaying = isSel && widget.project.isPreviewPlaying;
     return _MusicThumbTile(
       title: track.title,
       selected: isSel,
@@ -5455,15 +5538,24 @@ class _MusicThumbTile extends StatelessWidget {
 
 /// Slide tool content: horizontal list of transition tiles.
 class _SlideTransitions extends StatelessWidget {
-  const _SlideTransitions({required this.project, required this.onChanged});
+  const _SlideTransitions({
+    required this.project,
+    required this.onChanged,
+    this.junctionIndex,
+  });
 
   final SlideshowProject project;
   final VoidCallback onChanged;
 
+  /// Set when the sheet was opened from one timeline cut.
+  final int? junctionIndex;
+
   @override
   Widget build(BuildContext context) {
     final options = SlideTransitionOption.all;
-    final selectedId = project.selectedSlideTransition.id;
+    final selectedId = junctionIndex == null
+        ? project.selectedSlideTransition.id
+        : project.transitionForJunction(junctionIndex!).id;
 
     return ListView.separated(
       scrollDirection: Axis.horizontal,
@@ -5497,7 +5589,10 @@ class _SlideTransitions extends StatelessWidget {
                 );
               return;
             }
-            project.selectSlideTransition(option);
+            project.selectSlideTransition(
+              option,
+              onlyJunction: junctionIndex,
+            );
             onChanged();
           },
           child: AnimatedContainer(
@@ -5518,11 +5613,13 @@ class _EffectsPickerSheet extends StatefulWidget {
     required this.project,
     required this.onClose,
     required this.onConfirm,
+    required this.onPreviewLoading,
   });
 
   final SlideshowProject project;
   final VoidCallback onClose;
   final VoidCallback onConfirm;
+  final ValueChanged<bool> onPreviewLoading;
 
   @override
   State<_EffectsPickerSheet> createState() => _EffectsPickerSheetState();
@@ -5581,8 +5678,22 @@ class _EffectsPickerSheetState extends State<_EffectsPickerSheet> {
                   selected: isSel,
                   playing: playing,
                   onTap: () {
-                    // Soft pick + in-list video only (no preview rebuild).
-                    widget.project.previewPickOverlayEffect(effect);
+                    final project = widget.project;
+                    final same = project.selectedOverlayEffect?.id == effect.id;
+                    if (same) {
+                      if (project.overlaySourceDurationSec != null) {
+                        unawaited(project.togglePreviewPlayback());
+                      } else {
+                        widget.onPreviewLoading(true);
+                      }
+                      setState(() => _previewId = effect.id);
+                      return;
+                    }
+                    if (project.isPreviewPlaying) {
+                      project.stopPreviewPlayback();
+                    }
+                    widget.onPreviewLoading(true);
+                    project.previewPickOverlayEffect(effect);
                     setState(() => _previewId = effect.id);
                   },
                 );
@@ -5777,9 +5888,9 @@ class _EffectLoopPreviewState extends State<_EffectLoopPreview> {
 }
 
 class _FramePanel extends StatelessWidget {
-  const _FramePanel({required this.project, required this.onChanged});
+  const _FramePanel({required this.project, required this.onSelect});
   final SlideshowProject project;
-  final VoidCallback onChanged;
+  final ValueChanged<String?> onSelect;
 
   static const _muted = Color(0xFF9E9E9E);
 
@@ -5798,10 +5909,7 @@ class _FramePanel extends StatelessWidget {
             context: context,
             selected: selected,
             label: 'Default',
-            onTap: () {
-              project.selectFrame(null);
-              onChanged();
-            },
+            onTap: () => onSelect(null),
             child: const Icon(Icons.block, size: 34, color: _muted),
           );
         }
@@ -5812,10 +5920,7 @@ class _FramePanel extends StatelessWidget {
           context: context,
           selected: selected,
           label: 'Frame_$n',
-          onTap: () {
-            project.selectFrame(frame.assetPath);
-            onChanged();
-          },
+          onTap: () => onSelect(frame.assetPath),
           child: Padding(
             padding: const EdgeInsets.all(6),
             child: Image.asset(
@@ -5943,15 +6048,9 @@ class _FilterPanel extends StatelessWidget {
                   child: Center(
                     child: selected
                         ? const PrimaryGradientMask(
-                            child: Icon(
-                              Icons.filter,
-                              color: Colors.white,
-                            ),
+                            child: Icon(Icons.filter, color: Colors.white),
                           )
-                        : const Icon(
-                            Icons.filter,
-                            color: AppColors.iconNormal,
-                          ),
+                        : const Icon(Icons.filter, color: AppColors.iconNormal),
                   ),
                 ),
               ),

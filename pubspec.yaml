@@ -1,7 +1,7 @@
 name: clip_craft_slideshow
 description: Slideshow - Photo Video Maker (Flutter) for Android & iOS
 publish_to: "none"
-version: 1.0.0+2
+version: 1.0.0+3
 
 environment:
   sdk: ^3.13.3
@@ -44,6 +44,7 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: assets/images/app_icon.png
+  image_path_ios: assets/images/app_icon_ios.png
   adaptive_icon_background: "#2A1210"
   adaptive_icon_foreground: assets/images/app_icon.png
   remove_alpha_ios: true
@@ -54,9 +55,8 @@ flutter_native_splash:
   android: true
   ios: true
   android_12:
-    # Use padded asset so logo ≈ 120dp (50% of ~240dp splash slot) like Flutter.
     color: "#FFFFFF"
-    image: assets/images/app_icon_splash_120.png
+    image: assets/images/app_icon.png
     icon_background_color: "#FFFFFF"
   fullscreen: true
 
