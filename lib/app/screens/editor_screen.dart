@@ -676,10 +676,13 @@ class _EditorScreenState extends State<EditorScreen>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              if (project.selectedPhotoIndex != null &&
-                  _photoTool != _PhotoTool.duration &&
-                  _photoTool != _PhotoTool.animation &&
-                  _photoTool != _PhotoTool.background)
+              // Duration / Animation / Background sheets own the confirm check —
+              // never stack a second check in this preview row.
+              if (_photoTool == _PhotoTool.duration ||
+                  _photoTool == _PhotoTool.animation ||
+                  _photoTool == _PhotoTool.background)
+                const SizedBox.shrink()
+              else if (project.selectedPhotoIndex != null)
                 IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: _finishingPhotoEdits ? null : _finishPhotoEdits,
@@ -694,10 +697,7 @@ class _EditorScreenState extends State<EditorScreen>
                       : _closeMusicTools,
                   icon: const Icon(Icons.check, color: AppColors.primary),
                 )
-              else if (_photoTool != _PhotoTool.duration &&
-                  _photoTool != _PhotoTool.animation &&
-                  _photoTool != _PhotoTool.background &&
-                  _tool != EditorTool.slide &&
+              else if (_tool != EditorTool.slide &&
                   _tool != EditorTool.effects &&
                   _tool != EditorTool.music &&
                   _tool != EditorTool.ratio &&
@@ -930,6 +930,11 @@ class _EditorScreenState extends State<EditorScreen>
                                       _durationSliderValue = null;
                                       _liveMode = _LiveMode.idle;
                                       _livePhotoDurationSec = null;
+                                      _musicToolsOpen = false;
+                                      _musicVolumeOpen = false;
+                                      _musicEditOpen = false;
+                                      _effectsToolsOpen = false;
+                                      _textToolsOpen = false;
                                     });
                                     project.selectTimelinePhoto(photoIndex);
                                   },
@@ -946,42 +951,60 @@ class _EditorScreenState extends State<EditorScreen>
                                   top: 0,
                                   bottom: 0,
                                   child: Center(
-                                    child: GestureDetector(
-                                      onLongPress: () =>
-                                          project.removePhoto(photoIndex),
-                                      onTap: () {
-                                        project.clearTimelinePhotoSelection();
-                                        setState(() {
-                                          _slideJunctionIndex = photoIndex - 1;
-                                          _tool = EditorTool.slide;
-                                          _photoTool = null;
-                                        });
-                                        unawaited(
-                                          project.prepareDefaultSlideForSheet(),
+                                    child: Builder(
+                                      builder: (context) {
+                                        final junction = photoIndex - 1;
+                                        final marked = project
+                                            .junctionHasCustomTransition(
+                                              junction,
+                                            );
+                                        return GestureDetector(
+                                          onLongPress: () =>
+                                              project.removePhoto(photoIndex),
+                                          onTap: () {
+                                            project
+                                                .clearTimelinePhotoSelection();
+                                            setState(() {
+                                              _slideJunctionIndex = junction;
+                                              _tool = EditorTool.slide;
+                                              _photoTool = null;
+                                            });
+                                            unawaited(
+                                              project
+                                                  .prepareDefaultSlideForSheet(),
+                                            );
+                                          },
+                                          child: Container(
+                                            width: _transitionMarkerSize,
+                                            height: _transitionMarkerSize,
+                                            decoration: BoxDecoration(
+                                              color: Colors.white,
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              border: marked
+                                                  ? Border.all(
+                                                      color: AppColors.primary,
+                                                      width: 2,
+                                                    )
+                                                  : null,
+                                              boxShadow: const [
+                                                BoxShadow(
+                                                  color: Color(0x33000000),
+                                                  blurRadius: 4,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ],
+                                            ),
+                                            child: Icon(
+                                              Icons.compare_arrows_rounded,
+                                              size: 16,
+                                              color: marked
+                                                  ? AppColors.primary
+                                                  : Colors.black87,
+                                            ),
+                                          ),
                                         );
                                       },
-                                      child: Container(
-                                        width: _transitionMarkerSize,
-                                        height: _transitionMarkerSize,
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(
-                                            6,
-                                          ),
-                                          boxShadow: const [
-                                            BoxShadow(
-                                              color: Color(0x33000000),
-                                              blurRadius: 4,
-                                              offset: Offset(0, 1),
-                                            ),
-                                          ],
-                                        ),
-                                        child: const Icon(
-                                          Icons.compare_arrows_rounded,
-                                          size: 16,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
                                     ),
                                   ),
                                 ),
@@ -1859,6 +1882,11 @@ class _EditorScreenState extends State<EditorScreen>
 
     setState(() {
       _photoTool = tool;
+      _musicToolsOpen = false;
+      _musicVolumeOpen = false;
+      _musicEditOpen = false;
+      _effectsToolsOpen = false;
+      _tool = null;
       if (tool == _PhotoTool.animation) {
         _animationPhase = _AnimationPhase.inAnimation;
       }

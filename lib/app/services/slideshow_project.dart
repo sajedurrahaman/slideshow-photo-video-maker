@@ -1258,6 +1258,15 @@ class SlideshowProject extends ChangeNotifier {
     );
   }
 
+  /// True when this cut was set from the timeline button (not navbar Slide).
+  bool junctionHasCustomTransition(int fromIndex) {
+    final key = _junctionPairKey(fromIndex);
+    if (key == null) return false;
+    final id = junctionTransitionIds[key];
+    if (id == null) return false;
+    return id != SlideTransitionOption.all.first.id;
+  }
+
   String? _junctionPairKey(int fromIndex) {
     if (fromIndex < 0 || fromIndex >= photos.length - 1) return null;
     return '${photos[fromIndex].id}|${photos[fromIndex + 1].id}';
@@ -1270,8 +1279,8 @@ class SlideshowProject extends ChangeNotifier {
     return entries.map((e) => '${e.key}=${e.value}').join(',');
   }
 
-  /// [onlyJunction] is the cut before that photo index (timeline button).
-  /// Null applies [option] to every cut and clears per-cut overrides.
+  /// [onlyJunction] is the cut from the timeline button — only that cut changes.
+  /// Null = navbar Slide: keep existing per-cut overrides; fill every other cut.
   void selectSlideTransition(
     SlideTransitionOption option, {
     int? onlyJunction,
@@ -1289,7 +1298,11 @@ class SlideshowProject extends ChangeNotifier {
         return;
       }
       _recordHistory();
-      junctionTransitionIds[key] = option.id;
+      if (option.type == SlideTransitionType.none) {
+        junctionTransitionIds.remove(key);
+      } else {
+        junctionTransitionIds[key] = option.id;
+      }
       _previewTimer?.cancel();
       _previewTimer = null;
       _transitionDemoTimer?.cancel();
@@ -1305,21 +1318,22 @@ class SlideshowProject extends ChangeNotifier {
       return;
     }
 
-    final sameGlobal =
-        selectedSlideTransition.id == option.id &&
-        junctionTransitionIds.isEmpty;
-    if (sameGlobal) {
+    if (selectedSlideTransition.id == option.id) {
       if (isPreviewReady && _previewMemoryFrames.isNotEmpty) {
         unawaited(_playFirstTransitionDemo());
         return;
       }
       if (!_isWarmingPreviewCache && !isPreparingPreview) {
-        unawaited(_applySlideTransitionFast(option));
+        if (junctionTransitionIds.isEmpty) {
+          unawaited(_applySlideTransitionFast(option));
+        } else {
+          unawaited(_applyJunctionTransitions(0));
+        }
       }
       return;
     }
     _recordHistory();
-    junctionTransitionIds.clear();
+    // Keep per-cut overrides from timeline buttons; only unset cuts get [option].
     selectedSlideTransition = option;
     // Keep prepared photos + base frames; only swap transition strips.
     _previewTimer?.cancel();
@@ -1337,7 +1351,11 @@ class SlideshowProject extends ChangeNotifier {
 
     _transitionPreviewDebounce = Timer(const Duration(milliseconds: 40), () {
       _transitionPreviewDebounce = null;
-      unawaited(_applySlideTransitionFast(option));
+      if (junctionTransitionIds.isEmpty) {
+        unawaited(_applySlideTransitionFast(option));
+      } else {
+        unawaited(_applyJunctionTransitions(0));
+      }
     });
   }
 
