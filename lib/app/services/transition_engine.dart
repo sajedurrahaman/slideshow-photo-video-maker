@@ -85,8 +85,11 @@ class TransitionEngine {
     double pivotNy = 0.5,
   }) {
     final p = progress.clamp(0.0, 1.0);
-    final a = _ensureSameSize(from, to.width, to.height);
-    final b = _ensureSameSize(to, to.width, to.height);
+    // [to] is the size reference — skip resize when already matching.
+    final a = (from.width == to.width && from.height == to.height)
+        ? from
+        : _ensureSameSize(from, to.width, to.height);
+    final b = to;
 
     switch (type) {
       case SlideTransitionType.none:
@@ -1316,6 +1319,11 @@ class TransitionEngine {
 
   static Uint8List encodeJpeg(img.Image image, {int quality = 85}) {
     return Uint8List.fromList(img.encodeJpg(image, quality: quality));
+  }
+
+  /// Editor preview frames — uncompressed pixels (BMP), no JPEG re-encode.
+  static Uint8List encodePreviewFrame(img.Image image) {
+    return Uint8List.fromList(img.encodeBmp(image));
   }
 
   static img.Image? decode(Uint8List bytes) {

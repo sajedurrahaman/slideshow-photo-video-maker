@@ -222,7 +222,7 @@ Map<String, Object> _renderTransitionBatchInWorker(Map<String, Object> args) {
       pivotNx: args['pivotNx'] as double,
       pivotNy: args['pivotNy'] as double,
     );
-    rendered.add(TransitionEngine.encodeJpeg(frame, quality: 70));
+    rendered.add(TransitionEngine.encodePreviewFrame(frame));
   }
   return {'frames': rendered};
 }
@@ -294,7 +294,7 @@ class SlideshowProject extends ChangeNotifier {
   final ValueNotifier<({int index, double fraction})?> scrubLive =
       ValueNotifier<({int index, double fraction})?>(null);
 
-  /// In-memory JPEG frames for smooth editor preview (no % overlay).
+  /// In-memory preview frames (uncompressed BMP — no JPEG).
   final List<Uint8List> _previewMemoryFrames = [];
   /// Pristine default (None) hold timeline — never mutated by effect splices.
   final List<Uint8List> _previewBaseMemoryFrames = [];
@@ -319,7 +319,7 @@ class SlideshowProject extends ChangeNotifier {
   Timer? _transitionDemoTimer;
   Timer? _preparingOverlayDelay;
 
-  /// A→B TransitionEngine JPEG strips — reused across effect taps.
+  /// A→B TransitionEngine preview strips — reused across effect taps.
   /// After an effect is used, EVERY photo-pair strip for it stays cached.
   final LinkedHashMap<String, List<Uint8List>> _transitionStripCache =
       LinkedHashMap();
@@ -346,32 +346,60 @@ class SlideshowProject extends ChangeNotifier {
 
   (int, int) get outputSize => aspectRatio.sizeForQuality(exportQuality);
 
-  /// Smaller size so preview can play near real-time like native.
+  /// Editor preview size — default 480P; export uses [outputSize].
   (int, int) get previewSize => aspectRatio.sizeForQuality(ExportQuality.p480);
 
   double get previewFps =>
+      (AppConstants.previewFramesPerTransition + AppConstants.holdFrames) /
+      slideDurationSec;
+
+  /// Export timeline FPS (keeps full [framesPerTransition] quality).
+  double get exportFps =>
       (AppConstants.framesPerTransition + AppConstants.holdFrames) /
       slideDurationSec;
 
   int frameCountForDuration(double seconds) =>
       (seconds * previewFps).round().clamp(1, 10000);
 
+  int exportFrameCountForDuration(double seconds) =>
+      (seconds * exportFps).round().clamp(1, 10000);
+
   double _animSeconds(double seconds, double photoDuration) {
     final cap = photoDuration < 0.1 ? 0.1 : photoDuration;
     return seconds.clamp(0.1, cap);
   }
 
-  int _animFrames(double seconds, double photoDuration) =>
-      frameCountForDuration(_animSeconds(seconds, photoDuration));
+  int _animFrames(
+    double seconds,
+    double photoDuration, {
+    bool forExport = false,
+  }) {
+    final sec = _animSeconds(seconds, photoDuration);
+    return forExport
+        ? exportFrameCountForDuration(sec)
+        : frameCountForDuration(sec);
+  }
 
-  (int, int) _splitAnimFrames(SlideshowPhoto photo, int totalFrames) {
+  (int, int) _splitAnimFrames(
+    SlideshowPhoto photo,
+    int totalFrames, {
+    bool forExport = false,
+  }) {
     final hasIn = photo.animationIn != PhotoAnimationType.none;
     final hasOut = photo.animationOut != PhotoAnimationType.none;
     var inFrames = hasIn
-        ? _animFrames(photo.animationInDurationSec, photo.durationSec)
+        ? _animFrames(
+            photo.animationInDurationSec,
+            photo.durationSec,
+            forExport: forExport,
+          )
         : 0;
     var outFrames = hasOut
-        ? _animFrames(photo.animationOutDurationSec, photo.durationSec)
+        ? _animFrames(
+            photo.animationOutDurationSec,
+            photo.durationSec,
+            forExport: forExport,
+          )
         : 0;
     if (inFrames > totalFrames) inFrames = totalFrames;
     if (outFrames > totalFrames - inFrames) {
@@ -1061,9 +1089,7 @@ class SlideshowProject extends ChangeNotifier {
         includeDecorativeFrame: false,
         includeTextOverlays: false,
       );
-      _setPreviewFrame(
-        Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
-      );
+      _setPreviewFrame(TransitionEngine.encodePreviewFrame(baked));
       notifyListeners();
     } catch (_) {
       // Keep the current frame if a replacement image cannot be decoded.
@@ -1359,7 +1385,7 @@ class SlideshowProject extends ChangeNotifier {
     });
   }
 
-  /// Fast path: reuse base preview; rebuild/cache only A→B transition JPEGs.
+  /// Fast path: reuse base preview; rebuild/cache only A→B transition strips.
   Future<void> _applySlideTransitionFast(SlideTransitionOption option) async {
     if (photos.length < AppConstants.minPhotos || isProcessing) return;
     // Cancel any in-flight prepare/demo from a previous tile.
@@ -1447,8 +1473,8 @@ class SlideshowProject extends ChangeNotifier {
       notifyListeners();
       unawaited(_playFirstTransitionDemo());
 
-      // Cache EVERY remaining strip for this effect (survives switching tiles).
-      unawaited(_cacheAllStripsForEffect(option));
+      // Idle-warm remaining pairs after first A→B paints (don't block marking).
+      unawaited(_idleCacheRemainingStrips(option));
     } finally {
       _preparingOverlayDelay?.cancel();
       _preparingOverlayDelay = null;
@@ -1599,7 +1625,11 @@ class SlideshowProject extends ChangeNotifier {
         _storeBaseMemoryFramesFromWorking();
       }
       _resetWorkingFramesFromBase();
-      final ok = await _spliceCurrentJunctions(generation);
+      // Selected cut first so demo can start; other cuts warm in idle.
+      final ok = await _spliceCurrentJunctions(
+        generation,
+        priorityJunction: fromIndex,
+      );
       if (!ok || generation != _previewGeneration) return;
       _previewCacheKey = _buildPreviewCacheKey(selectedSlideTransition);
       _previewBaseCacheKey = baseKey;
@@ -1608,6 +1638,9 @@ class SlideshowProject extends ChangeNotifier {
       _preparingOverlayDelay?.cancel();
       notifyListeners();
       _playTransitionDemo(fromIndex);
+      unawaited(
+        _idleSpliceRemainingJunctions(generation, skipJunction: fromIndex),
+      );
     } finally {
       _preparingOverlayDelay?.cancel();
       _preparingOverlayDelay = null;
@@ -1621,8 +1654,21 @@ class SlideshowProject extends ChangeNotifier {
   Future<bool> _spliceCurrentJunctions(
     int generation, {
     bool ignoreGeneration = false,
+    int? priorityJunction,
   }) async {
+    final order = <int>[];
+    if (priorityJunction != null &&
+        priorityJunction >= 0 &&
+        priorityJunction < photos.length - 1) {
+      order.add(priorityJunction);
+    }
     for (var i = 0; i < photos.length - 1; i++) {
+      if (i == priorityJunction) continue;
+      // With a priority cut, only bake that cut now — rest idle-warm.
+      if (priorityJunction != null) break;
+      order.add(i);
+    }
+    for (final i in order) {
       if (!ignoreGeneration && generation != _previewGeneration) return false;
       final option = transitionForJunction(i);
       if (option.type == SlideTransitionType.none) continue;
@@ -1638,6 +1684,32 @@ class SlideshowProject extends ChangeNotifier {
       _spliceTransitionStrip(photoIndex: i, strip: strip);
     }
     return true;
+  }
+
+  Future<void> _idleSpliceRemainingJunctions(
+    int generation, {
+    required int skipJunction,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    if (generation != _previewGeneration) return;
+    for (var i = 0; i < photos.length - 1; i++) {
+      if (i == skipJunction) continue;
+      if (generation != _previewGeneration) return;
+      final option = transitionForJunction(i);
+      if (option.type == SlideTransitionType.none) continue;
+      final strip = await _ensureTransitionStrip(
+        fromIndex: i,
+        toIndex: i + 1,
+        option: option,
+        generation: generation,
+        ignoreGeneration: true,
+      );
+      if (strip == null || strip.isEmpty) continue;
+      if (generation == _previewGeneration) {
+        _spliceTransitionStrip(photoIndex: i, strip: strip);
+      }
+      await Future<void>.delayed(Duration.zero);
+    }
   }
 
   void _storeBaseMemoryFramesFromWorking() {
@@ -1753,7 +1825,7 @@ class SlideshowProject extends ChangeNotifier {
     final photo = photos[fromIndex];
     final totalFrames = frameCountForDuration(photo.durationSec);
     final transitionFrames = math.min(
-      AppConstants.framesPerTransition,
+      AppConstants.previewFramesPerTransition,
       totalFrames,
     );
     final background = photo.backgroundArgb ?? backgroundArgb;
@@ -1821,7 +1893,13 @@ class SlideshowProject extends ChangeNotifier {
     }
   }
 
-  /// After an effect is used: bake+keep every photo-pair strip in cache.
+  /// After first A→B paints: bake remaining pairs in idle (ignoreGeneration).
+  Future<void> _idleCacheRemainingStrips(SlideTransitionOption option) async {
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await _cacheAllStripsForEffect(option);
+  }
+
+  /// Bake+keep every photo-pair strip in cache for [option].
   /// Continues even if the user taps another effect (ignoreGeneration).
   Future<void> _cacheAllStripsForEffect(SlideTransitionOption option) async {
     if (option.type == SlideTransitionType.none || photos.length < 2) return;
@@ -1862,7 +1940,7 @@ class SlideshowProject extends ChangeNotifier {
     }
 
     final total = frameCountForDuration(photos[fromIndex].durationSec);
-    final trans = math.min(AppConstants.framesPerTransition, total);
+    final trans = math.min(AppConstants.previewFramesPerTransition, total);
     final solo = total - trans;
     var origin = 0;
     if (startingCard != null) {
@@ -2541,7 +2619,7 @@ class SlideshowProject extends ChangeNotifier {
     return const [];
   }
 
-  Future<Uint8List> _jpegFrame(
+  Future<Uint8List> _previewEncodedFrame(
     img.Image image,
     List<img.Image> overlays,
     List<int> frameCursor,
@@ -2552,7 +2630,7 @@ class SlideshowProject extends ChangeNotifier {
       includeTextOverlays: false,
     );
     frameCursor[0] = frameCursor[0] + 1;
-    return Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 70));
+    return TransitionEngine.encodePreviewFrame(baked);
   }
 
   Future<List<Uint8List>> _renderTransitionFramesOffThread({
@@ -2594,14 +2672,14 @@ class SlideshowProject extends ChangeNotifier {
     if (generation != _previewGeneration) return null;
     final cursor = frameCursor ?? <int>[0];
     if (overlays.isEmpty) {
-      final bytes = await _jpegFrame(image, overlays, cursor);
+      final bytes = await _previewEncodedFrame(image, overlays, cursor);
       cursor[0] = cursor[0] + count - 1;
       return List<Uint8List>.filled(count, bytes);
     }
     final frames = <Uint8List>[];
     for (var i = 0; i < count; i++) {
       if (generation != _previewGeneration) return null;
-      frames.add(await _jpegFrame(image, overlays, cursor));
+      frames.add(await _previewEncodedFrame(image, overlays, cursor));
     }
     return frames;
   }
@@ -2621,7 +2699,7 @@ class SlideshowProject extends ChangeNotifier {
     final pairs = decoded.length - 1;
     final totalFrames = frameCountForDuration(photo.durationSec);
     final transitionFrames = index < pairs && effect != SlideTransitionType.none
-        ? math.min(AppConstants.framesPerTransition, totalFrames)
+        ? math.min(AppConstants.previewFramesPerTransition, totalFrames)
         : 0;
     final background = photo.backgroundArgb ?? backgroundArgb;
     final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
@@ -2641,7 +2719,7 @@ class SlideshowProject extends ChangeNotifier {
         cursor[0] = cursor[0] + 1;
         return true;
       }
-      final bytes = await _jpegFrame(image, overlays, cursor);
+      final bytes = await _previewEncodedFrame(image, overlays, cursor);
       if (generation != _previewGeneration) return false;
       lastSource = image;
       lastBytes = bytes;
@@ -3114,7 +3192,7 @@ class SlideshowProject extends ChangeNotifier {
 
       Future<img.Image> applyExportEffect(img.Image image) async {
         if (exportEffect == null || effectFrameFiles.isEmpty) return image;
-        final t = frameIndex / previewFps;
+        final t = frameIndex / exportFps;
         if (!isEffectVisibleAt(t)) return image;
         final local = effectLocalSecAt(t);
         final idx =
@@ -3170,17 +3248,18 @@ class SlideshowProject extends ChangeNotifier {
       // Starting title card
       var introFrames = 0;
       if (startingCard != null) {
-        introFrames = frameCountForDuration(startingCard!.durationSec);
+        introFrames = exportFrameCountForDuration(startingCard!.durationSec);
       }
 
       final endingFrames = endingCard == null
           ? 0
-          : frameCountForDuration(endingCard!.durationSec);
+          : exportFrameCountForDuration(endingCard!.durationSec);
       final totalFramesEstimate =
           introFrames +
           photos.fold<int>(
             0,
-            (total, photo) => total + frameCountForDuration(photo.durationSec),
+            (total, photo) =>
+                total + exportFrameCountForDuration(photo.durationSec),
           ) +
           endingFrames;
 
@@ -3209,12 +3288,16 @@ class SlideshowProject extends ChangeNotifier {
         final option = transitionForJunction(i);
         final effect = option.type;
         final photo = photos[i];
-        final totalFrames = frameCountForDuration(photo.durationSec);
+        final totalFrames = exportFrameCountForDuration(photo.durationSec);
         final transitionFrames = i < pairs && effect != SlideTransitionType.none
             ? math.min(AppConstants.framesPerTransition, totalFrames)
             : 0;
         final background = photo.backgroundArgb ?? backgroundArgb;
-        final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
+        final (inFrames, outFrames) = _splitAnimFrames(
+          photo,
+          totalFrames,
+          forExport: true,
+        );
         final soloFrames = totalFrames - transitionFrames;
 
         for (var hold = 0; hold < soloFrames; hold++) {
@@ -3357,9 +3440,7 @@ class SlideshowProject extends ChangeNotifier {
         includeDecorativeFrame: false,
         includeTextOverlays: false,
       );
-      _setPreviewFrame(
-        Uint8List.fromList(TransitionEngine.encodeJpeg(baked, quality: 85)),
-      );
+      _setPreviewFrame(TransitionEngine.encodePreviewFrame(baked));
       notifyListeners();
     } catch (_) {
       // Keep previous preview on failure.

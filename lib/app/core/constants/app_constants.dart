@@ -6,7 +6,10 @@ class AppConstants {
   static const draftsFolder = 'SlideShowDrafts';
   static const minPhotos = 4;
   static const maxPhotos = 30;
-  static const framesPerTransition = 22;
+  /// Preview + export transition length (same for both).
+  static const framesPerTransition = 14;
+  /// Editor preview uses the same count as export.
+  static const previewFramesPerTransition = framesPerTransition;
   static const holdFrames = 8;
   static const defaultDurationSec = 2.0;
   static const durations = <double>[
@@ -61,6 +64,11 @@ extension AspectPresetX on AspectPreset {
       ExportQuality.p720 => 720,
       ExportQuality.p1080 => 1080,
     };
+    return sizeForLongEdge(long);
+  }
+
+  /// Longest edge [long]; the other edge keeps [ratio].
+  (int, int) sizeForLongEdge(int long) {
     final r = ratio;
     if ((r - 1).abs() < 0.001) return (long, long);
     if (r > 1) return (long, (long / r).round());

@@ -36,7 +36,7 @@ class ExportService {
     if (await output.exists()) await output.delete();
 
     final framesDir = project.generatedFrames.first.parent.path;
-    final fps = project.previewFps;
+    final fps = project.exportFps;
 
     String? musicPath;
     final music = project.music;
