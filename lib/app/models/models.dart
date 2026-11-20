@@ -51,6 +51,12 @@ enum SlideTransitionType {
 
   /// Native Whole3D_BT — opposite of TB (new from bottom).
   whole3dBt,
+
+  /// Vertical book page curl — from right edge toward left.
+  bookPageLeft,
+
+  /// Vertical book page curl — from left edge toward right.
+  bookPageRight,
 }
 
 class SlideTheme {
@@ -221,6 +227,18 @@ class SlideTransitionOption {
       assetPath: 'assets/images/editor/transitions/slide_18.png',
       type: SlideTransitionType.rollInTurnLr,
     ),
+    // Book page turn left (forward flip).
+    SlideTransitionOption(
+      id: 'slide_19',
+      assetPath: 'assets/images/editor/transitions/slide_19.png',
+      type: SlideTransitionType.bookPageLeft,
+    ),
+    // Book page turn right (reverse flip).
+    SlideTransitionOption(
+      id: 'slide_20',
+      assetPath: 'assets/images/editor/transitions/slide_20.png',
+      type: SlideTransitionType.bookPageRight,
+    ),
   ];
 }
 
@@ -291,14 +309,126 @@ class OverlayEffect {
     thumbPath: 'assets/effects/effect_06_thumb.jpg',
   );
 
-  /// Only these 6 video effects appear in the Effects list.
+  static const effect07 = OverlayEffect(
+    id: 'effect_07',
+    name: 'Sparkles',
+    assetPath: 'assets/effects/effect_07.mp4',
+    thumbPath: 'assets/effects/effect_07_thumb.jpg',
+  );
+
+  static const effect08 = OverlayEffect(
+    id: 'effect_08',
+    name: 'Snow',
+    assetPath: 'assets/effects/effect_08.mp4',
+    thumbPath: 'assets/effects/effect_08_thumb.jpg',
+  );
+
+  static const effect09 = OverlayEffect(
+    id: 'effect_09',
+    name: 'Bubbles',
+    assetPath: 'assets/effects/effect_09.mp4',
+    thumbPath: 'assets/effects/effect_09_thumb.jpg',
+  );
+
+  static const effect10 = OverlayEffect(
+    id: 'effect_10',
+    name: 'Fireflies',
+    assetPath: 'assets/effects/effect_10.mp4',
+    thumbPath: 'assets/effects/effect_10_thumb.jpg',
+  );
+
+  static const effect11 = OverlayEffect(
+    id: 'effect_11',
+    name: 'Confetti',
+    assetPath: 'assets/effects/effect_11.mp4',
+    thumbPath: 'assets/effects/effect_11_thumb.jpg',
+  );
+
+  static const effect12 = OverlayEffect(
+    id: 'effect_12',
+    name: 'Sakura',
+    assetPath: 'assets/effects/effect_12.mp4',
+    thumbPath: 'assets/effects/effect_12_thumb.jpg',
+  );
+
+  static const effect13 = OverlayEffect(
+    id: 'effect_13',
+    name: 'Love Hearts',
+    assetPath: 'assets/effects/effect_13.mp4',
+    thumbPath: 'assets/effects/effect_13_thumb.jpg',
+  );
+
+  static const effect14 = OverlayEffect(
+    id: 'effect_14',
+    name: 'Gems',
+    assetPath: 'assets/effects/effect_14.mp4',
+    thumbPath: 'assets/effects/effect_14_thumb.jpg',
+  );
+
+  static const effect15 = OverlayEffect(
+    id: 'effect_15',
+    name: 'Coins',
+    assetPath: 'assets/effects/effect_15.mp4',
+    thumbPath: 'assets/effects/effect_15_thumb.jpg',
+  );
+
+  static const effect16 = OverlayEffect(
+    id: 'effect_16',
+    name: 'Rainbow Stars',
+    assetPath: 'assets/effects/effect_16.mp4',
+    thumbPath: 'assets/effects/effect_16_thumb.jpg',
+  );
+
+  static const effect17 = OverlayEffect(
+    id: 'effect_17',
+    name: 'Autumn Leaves',
+    assetPath: 'assets/effects/effect_17.mp4',
+    thumbPath: 'assets/effects/effect_17_thumb.jpg',
+  );
+
+  static const effect18 = OverlayEffect(
+    id: 'effect_18',
+    name: 'Soft Petals',
+    assetPath: 'assets/effects/effect_18.mp4',
+    thumbPath: 'assets/effects/effect_18_thumb.jpg',
+  );
+
+  static const effect19 = OverlayEffect(
+    id: 'effect_19',
+    name: 'Music Notes',
+    assetPath: 'assets/effects/effect_19.mp4',
+    thumbPath: 'assets/effects/effect_19_thumb.jpg',
+  );
+
+  static const effect20 = OverlayEffect(
+    id: 'effect_20',
+    name: 'Clovers',
+    assetPath: 'assets/effects/effect_20.mp4',
+    thumbPath: 'assets/effects/effect_20_thumb.jpg',
+  );
+
+  /// All bundled video effects shown in the Effects list (20 → 01).
   static const List<OverlayEffect> all = [
-    effect01,
-    effect02,
-    effect03,
-    effect04,
-    effect05,
+    effect20,
+    effect19,
+    effect18,
+    effect17,
+    effect16,
+    effect15,
+    effect14,
+    effect13,
+    effect12,
+    effect11,
+    effect10,
+    effect09,
+    effect08,
+    effect07,
     effect06,
+    effect05,
+    effect04,
+    effect03,
+    effect02,
+    effect01,
   ];
 }
 

@@ -1866,12 +1866,14 @@ class SlideshowProject extends ChangeNotifier {
     return rendered;
   }
 
+  /// Split a baked strip across the junction: end of A + start of B.
   void _spliceTransitionStrip({
     required int photoIndex,
     required List<Uint8List> strip,
   }) {
     if (_previewSegmentCounts.length != photos.length ||
         photoIndex >= _previewSegmentCounts.length ||
+        photoIndex + 1 >= _previewSegmentCounts.length ||
         strip.isEmpty) {
       return;
     }
@@ -1881,16 +1883,55 @@ class SlideshowProject extends ChangeNotifier {
     for (var i = 0; i < photoIndex; i++) {
       segmentStart += _previewSegmentCounts[i];
     }
-    final segmentCount = _previewSegmentCounts[photoIndex];
-    final transitionFrames = math.min(strip.length, segmentCount);
-    final tailStart = segmentStart + segmentCount - transitionFrames;
-    if (tailStart < 0 ||
-        tailStart + transitionFrames > _previewMemoryFrames.length) {
-      return;
+    final aCount = _previewSegmentCounts[photoIndex];
+    final bCount = _previewSegmentCounts[photoIndex + 1];
+    final bStart = segmentStart + aCount;
+
+    var outN = AppConstants.transitionOutFrames(strip.length);
+    var inN = AppConstants.transitionInFrames(strip.length);
+    outN = math.min(outN, aCount);
+    inN = math.min(inN, bCount);
+    // Keep strip indices contiguous even if one side is clamped.
+    if (outN + inN > strip.length) {
+      inN = strip.length - outN;
     }
-    for (var t = 0; t < transitionFrames; t++) {
-      _previewMemoryFrames[tailStart + t] = strip[t];
+
+    final aTail = segmentStart + aCount - outN;
+    if (aTail >= 0 && aTail + outN <= _previewMemoryFrames.length) {
+      for (var t = 0; t < outN; t++) {
+        _previewMemoryFrames[aTail + t] = strip[t];
+      }
     }
+    if (bStart >= 0 && bStart + inN <= _previewMemoryFrames.length) {
+      for (var t = 0; t < inN; t++) {
+        _previewMemoryFrames[bStart + t] = strip[outN + t];
+      }
+    }
+  }
+
+  /// How many transition frames fit at the end (out) / start (in) of a photo.
+  (int outTake, int inTake) _transitionTakes({
+    required int totalFrames,
+    required bool hasOutgoing,
+    required bool hasIncoming,
+    required int fullTrans,
+  }) {
+    var outTake =
+        hasOutgoing ? AppConstants.transitionOutFrames(fullTrans) : 0;
+    var inTake = hasIncoming ? AppConstants.transitionInFrames(fullTrans) : 0;
+    if (outTake + inTake <= totalFrames) return (outTake, inTake);
+    // Short clip: shrink both sides to fit.
+    if (!hasOutgoing) {
+      return (0, math.min(inTake, totalFrames));
+    }
+    if (!hasIncoming) {
+      return (math.min(outTake, totalFrames), 0);
+    }
+    final outH = AppConstants.transitionOutFrames(fullTrans);
+    final inH = AppConstants.transitionInFrames(fullTrans);
+    final scaledOut =
+        ((outH / (outH + inH)) * totalFrames).round().clamp(0, totalFrames);
+    return (scaledOut, totalFrames - scaledOut);
   }
 
   /// After first A→B paints: bake remaining pairs in idle (ignoreGeneration).
@@ -1939,9 +1980,24 @@ class SlideshowProject extends ChangeNotifier {
       return;
     }
 
-    final total = frameCountForDuration(photos[fromIndex].durationSec);
-    final trans = math.min(AppConstants.previewFramesPerTransition, total);
-    final solo = total - trans;
+    final totalA = frameCountForDuration(photos[fromIndex].durationSec);
+    final totalB = frameCountForDuration(photos[fromIndex + 1].durationSec);
+    final fullTrans = AppConstants.previewFramesPerTransition;
+    final (outTake, inTake) = _transitionTakes(
+      totalFrames: totalA,
+      hasOutgoing: true,
+      hasIncoming: false,
+      fullTrans: fullTrans,
+    );
+    // Incoming half is budgeted against B's length.
+    final (_, inOnB) = _transitionTakes(
+      totalFrames: totalB,
+      hasOutgoing: false,
+      hasIncoming: true,
+      fullTrans: fullTrans,
+    );
+    final playOut = outTake;
+    final playIn = inOnB;
     var origin = 0;
     if (startingCard != null) {
       origin = frameCountForDuration(startingCard!.durationSec).clamp(4, 300);
@@ -1951,8 +2007,12 @@ class SlideshowProject extends ChangeNotifier {
           ? _previewSegmentCounts[i]
           : frameCountForDuration(photos[i].durationSec);
     }
-    final start = (origin + solo).clamp(0, _previewMemoryFrames.length - 1);
-    final end = (origin + total).clamp(0, _previewMemoryFrames.length).toInt();
+    // Demo spans end of A + start of B (full transition across the cut).
+    final start =
+        (origin + totalA - playOut).clamp(0, _previewMemoryFrames.length - 1);
+    final end = (origin + totalA + playIn)
+        .clamp(0, _previewMemoryFrames.length)
+        .toInt();
     if (start >= end - 1) return;
 
     previewFrameIndex = start;
@@ -2695,15 +2755,27 @@ class SlideshowProject extends ChangeNotifier {
   }) async {
     if (generation != _previewGeneration) return null;
     final photo = photos[index];
-    final effect = transitionOption.type;
     final pairs = decoded.length - 1;
     final totalFrames = frameCountForDuration(photo.durationSec);
-    final transitionFrames = index < pairs && effect != SlideTransitionType.none
-        ? math.min(AppConstants.previewFramesPerTransition, totalFrames)
-        : 0;
+    final fullTrans = AppConstants.previewFramesPerTransition;
+
+    final inOption =
+        index > 0 ? transitionForJunction(index - 1) : null;
+    final hasIncoming = inOption != null &&
+        inOption.type != SlideTransitionType.none;
+    final hasOutgoing =
+        index < pairs && transitionOption.type != SlideTransitionType.none;
+
+    final (outTake, inTake) = _transitionTakes(
+      totalFrames: totalFrames,
+      hasOutgoing: hasOutgoing,
+      hasIncoming: hasIncoming,
+      fullTrans: fullTrans,
+    );
+
     final background = photo.backgroundArgb ?? backgroundArgb;
-    final (inFrames, outFrames) = _splitAnimFrames(photo, totalFrames);
-    final soloFrames = totalFrames - transitionFrames;
+    final (animInFrames, animOutFrames) = _splitAnimFrames(photo, totalFrames);
+    final soloFrames = totalFrames - outTake - inTake;
     final photoLayers = index < layers.length ? layers[index] : null;
     final frames = <Uint8List>[];
     final cursor = frameCursor ?? <int>[0];
@@ -2727,16 +2799,56 @@ class SlideshowProject extends ChangeNotifier {
       return true;
     }
 
+    // 1) Incoming half — start of this photo (end of previous junction strip).
+    if (inTake > 0 && inOption != null) {
+      if (overlays.isEmpty) {
+        final rendered = await _ensureTransitionStrip(
+          fromIndex: index - 1,
+          toIndex: index,
+          option: inOption,
+          generation: generation,
+        );
+        if (generation != _previewGeneration || rendered == null) return null;
+        final start = (rendered.length - inTake).clamp(0, rendered.length);
+        frames.addAll(rendered.sublist(start));
+        cursor[0] = cursor[0] + (rendered.length - start);
+        lastSource = null;
+        lastBytes = null;
+      } else {
+        final outH = AppConstants.transitionOutFrames(fullTrans);
+        for (var t = 0; t < inTake; t++) {
+          if (generation != _previewGeneration) return null;
+          final progress = ((outH + t + 1) / fullTrans).clamp(0.0, 1.0);
+          final blended = TransitionEngine.apply(
+            from: decoded[index - 1],
+            to: decoded[index],
+            type: inOption.type,
+            progress: progress,
+            gridCols: inOption.gridCols,
+            gridRows: inOption.gridRows,
+            reverseDiagonal: inOption.reverseDiagonal,
+            topToBottom: inOption.topToBottom,
+            pivotNx: inOption.pivotNx,
+            pivotNy: inOption.pivotNy,
+          );
+          final kept = await pushFrame(blended);
+          if (!kept) return null;
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+    }
+
+    // 2) Solo hold / motion of this photo.
     for (var hold = 0; hold < soloFrames; hold++) {
       if (generation != _previewGeneration) return null;
       final kept = await pushFrame(
         _animatePhotoFrame(
           source: decoded[index],
           photo: photo,
-          frameIndex: hold,
+          frameIndex: inTake + hold,
           totalFrames: totalFrames,
-          inFrames: inFrames,
-          outFrames: outFrames,
+          inFrames: animInFrames,
+          outFrames: animOutFrames,
           background: background,
           layers: photoLayers,
         ),
@@ -2747,7 +2859,8 @@ class SlideshowProject extends ChangeNotifier {
       await Future<void>.delayed(Duration.zero);
     }
 
-    if (transitionFrames > 0) {
+    // 3) Outgoing half — end of this photo (start of next junction strip).
+    if (outTake > 0) {
       if (overlays.isEmpty) {
         final rendered = await _ensureTransitionStrip(
           fromIndex: index,
@@ -2756,33 +2869,34 @@ class SlideshowProject extends ChangeNotifier {
           generation: generation,
         );
         if (generation != _previewGeneration || rendered == null) return null;
-        frames.addAll(rendered);
-        cursor[0] = cursor[0] + rendered.length;
+        final n = math.min(outTake, rendered.length);
+        frames.addAll(rendered.sublist(0, n));
+        cursor[0] = cursor[0] + n;
         lastSource = null;
         lastBytes = null;
       } else {
         final option = transitionOption;
         final staticFrom =
-            !_photoHasMotion(photo) || (inFrames == 0 && outFrames == 0);
-        for (var t = 0; t < transitionFrames; t++) {
+            !_photoHasMotion(photo) || (animInFrames == 0 && animOutFrames == 0);
+        for (var t = 0; t < outTake; t++) {
           if (generation != _previewGeneration) return null;
           final fromFrame = staticFrom
               ? decoded[index]
               : _animatePhotoFrame(
                   source: decoded[index],
                   photo: photo,
-                  frameIndex: soloFrames + t,
+                  frameIndex: inTake + soloFrames + t,
                   totalFrames: totalFrames,
-                  inFrames: inFrames,
-                  outFrames: outFrames,
+                  inFrames: animInFrames,
+                  outFrames: animOutFrames,
                   background: background,
                   layers: photoLayers,
                 );
           final blended = TransitionEngine.apply(
             from: fromFrame,
             to: decoded[index + 1],
-            type: effect,
-            progress: (t + 1) / transitionFrames,
+            type: option.type,
+            progress: (t + 1) / fullTrans,
             gridCols: option.gridCols,
             gridRows: option.gridRows,
             reverseDiagonal: option.reverseDiagonal,
@@ -3285,20 +3399,51 @@ class SlideshowProject extends ChangeNotifier {
       }
 
       for (var i = 0; i < decoded.length; i++) {
-        final option = transitionForJunction(i);
-        final effect = option.type;
+        final outOption = transitionForJunction(i);
+        final inOption = i > 0 ? transitionForJunction(i - 1) : null;
         final photo = photos[i];
         final totalFrames = exportFrameCountForDuration(photo.durationSec);
-        final transitionFrames = i < pairs && effect != SlideTransitionType.none
-            ? math.min(AppConstants.framesPerTransition, totalFrames)
-            : 0;
+        final fullTrans = AppConstants.framesPerTransition;
+        final hasIncoming = inOption != null &&
+            inOption.type != SlideTransitionType.none;
+        final hasOutgoing =
+            i < pairs && outOption.type != SlideTransitionType.none;
+        final (outTake, inTake) = _transitionTakes(
+          totalFrames: totalFrames,
+          hasOutgoing: hasOutgoing,
+          hasIncoming: hasIncoming,
+          fullTrans: fullTrans,
+        );
         final background = photo.backgroundArgb ?? backgroundArgb;
-        final (inFrames, outFrames) = _splitAnimFrames(
+        final (animInFrames, animOutFrames) = _splitAnimFrames(
           photo,
           totalFrames,
           forExport: true,
         );
-        final soloFrames = totalFrames - transitionFrames;
+        final soloFrames = totalFrames - outTake - inTake;
+
+        // Incoming half at start of this photo.
+        if (inTake > 0 && inOption != null) {
+          final outH = AppConstants.transitionOutFrames(fullTrans);
+          for (var t = 0; t < inTake; t++) {
+            if (cancelled()) return false;
+            final progress = ((outH + t + 1) / fullTrans).clamp(0.0, 1.0);
+            final blended = TransitionEngine.apply(
+              from: decoded[i - 1],
+              to: decoded[i],
+              type: inOption.type,
+              progress: progress,
+              gridCols: inOption.gridCols,
+              gridRows: inOption.gridRows,
+              reverseDiagonal: inOption.reverseDiagonal,
+              topToBottom: inOption.topToBottom,
+              pivotNx: inOption.pivotNx,
+              pivotNy: inOption.pivotNy,
+            );
+            await writeFrame(blended);
+            reportProgress();
+          }
+        }
 
         for (var hold = 0; hold < soloFrames; hold++) {
           if (cancelled()) return false;
@@ -3306,10 +3451,10 @@ class SlideshowProject extends ChangeNotifier {
             _animatePhotoFrame(
               source: decoded[i],
               photo: photo,
-              frameIndex: hold,
+              frameIndex: inTake + hold,
               totalFrames: totalFrames,
-              inFrames: inFrames,
-              outFrames: outFrames,
+              inFrames: animInFrames,
+              outFrames: animOutFrames,
               background: background,
               layers: photoLayers[i],
             ),
@@ -3317,32 +3462,32 @@ class SlideshowProject extends ChangeNotifier {
           reportProgress();
         }
 
-        if (transitionFrames > 0) {
-          for (var t = 0; t < transitionFrames; t++) {
+        // Outgoing half at end of this photo.
+        if (outTake > 0) {
+          for (var t = 0; t < outTake; t++) {
             if (cancelled()) return false;
-            final progress = (t + 1) / transitionFrames;
+            final progress = (t + 1) / fullTrans;
             final fromFrame = _animatePhotoFrame(
               source: decoded[i],
               photo: photo,
-              frameIndex: soloFrames + t,
+              frameIndex: inTake + soloFrames + t,
               totalFrames: totalFrames,
-              inFrames: inFrames,
-              outFrames: outFrames,
+              inFrames: animInFrames,
+              outFrames: animOutFrames,
               background: background,
               layers: photoLayers[i],
             );
-            final toFrame = decoded[i + 1];
             final blended = TransitionEngine.apply(
               from: fromFrame,
-              to: toFrame,
-              type: effect,
+              to: decoded[i + 1],
+              type: outOption.type,
               progress: progress,
-              gridCols: option.gridCols,
-              gridRows: option.gridRows,
-              reverseDiagonal: option.reverseDiagonal,
-              topToBottom: option.topToBottom,
-              pivotNx: option.pivotNx,
-              pivotNy: option.pivotNy,
+              gridCols: outOption.gridCols,
+              gridRows: outOption.gridRows,
+              reverseDiagonal: outOption.reverseDiagonal,
+              topToBottom: outOption.topToBottom,
+              pivotNx: outOption.pivotNx,
+              pivotNy: outOption.pivotNy,
             );
             await writeFrame(blended);
             reportProgress();

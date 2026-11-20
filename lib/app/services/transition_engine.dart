@@ -176,6 +176,12 @@ class TransitionEngine {
       case SlideTransitionType.whole3dBt:
         // Exact opposite of TB — new swings in from bottom.
         return _whole3dFold(a, b, p, bottomToTop: true);
+      case SlideTransitionType.bookPageLeft:
+        // Vertical page-curl: from right edge → left.
+        return _bookPageTurn(a, b, p, turnToLeft: true);
+      case SlideTransitionType.bookPageRight:
+        // Vertical page-curl: from left edge → right.
+        return _bookPageTurn(a, b, p, turnToLeft: false);
     }
   }
 
@@ -1156,6 +1162,182 @@ class TransitionEngine {
       }
     }
     return _imageFromRgba(bytes, a.width, a.height);
+  }
+
+  /// FotoSlider page-curl — matched to reference video (slide_19).
+  ///
+  /// Compared to our previous export vs FotoSlider capture:
+  /// - REF early band ~0.14·W then grows to ~0.30·W mid; ours was thick from start.
+  /// - REF early has stronger bottom-lead diagonal; mid becomes more vertical.
+  /// - Paper cylinder luma ~185–230; soft lip shadow on NEW; bottom tip rounds in.
+  static img.Image _bookPageTurn(
+    img.Image oldImg,
+    img.Image newImg,
+    double p, {
+    required bool turnToLeft,
+  }) {
+    if (p <= 0.001) return img.Image.from(oldImg);
+    if (p >= 0.999) return img.Image.from(newImg);
+
+    final w = oldImg.width;
+    final h = oldImg.height;
+    final oldPixels = _PixelBuffer(oldImg);
+    final newPixels = _PixelBuffer(newImg);
+    final bytes = _rgbaBytes(w, h);
+
+    final t = 0.5 - 0.5 * math.cos(p * math.pi);
+    final minSide = math.min(w, h).toDouble();
+
+    // Radius vs progress (REF): thin tip → thick mid → thin exit.
+    // Early ~0.12·W, mid ~0.30·W, late ~0.16·W of silhouette width.
+    final grow = math.sin(t * math.pi); // 0→1→0
+    final baseR = minSide * (0.11 + 0.19 * grow);
+
+    // Keep mid-progress near center (REF mid paper ~0.15–0.45·W).
+    final travel = w + baseR * 0.7;
+    final baseCurlX =
+        turnToLeft ? (w - 1) - t * travel : t * travel;
+
+    // Early: strong bottom-lead diagonal; mid/late: milder (REF measured).
+    final frontSkew = minSide * (0.22 - 0.10 * grow);
+    final aa = math.max(3.0, minSide * 0.01);
+
+    for (var y = 0; y < h; y++) {
+      final outRow = y * w * 4;
+      final oldRow = y * oldPixels.rowStride;
+      final newRow = y * newPixels.rowStride;
+      final yn = h <= 1 ? 0.0 : y / (h - 1);
+
+      final curlX = turnToLeft
+          ? baseCurlX - yn * frontSkew
+          : baseCurlX + yn * frontSkew;
+
+      // Vertical profile: thicker mid-height; bottom tip rounds in (REF).
+      final midBulge = 0.82 + 0.28 * math.sin(yn * math.pi);
+      final tipShrink = 1.0 - 0.42 * _smoothstep(0.70, 1.0, yn);
+      final r = math.max(1.0, baseR * midBulge * tipShrink);
+
+      for (var x = 0; x < w; x++) {
+        final out = outRow + x * 4;
+        final d = turnToLeft ? (curlX - x) : (x - curlX);
+
+        if (d >= r + aa) {
+          oldPixels.copyTo(bytes, out, oldRow + x * oldPixels.channels);
+          continue;
+        }
+        if (d <= -aa) {
+          newPixels.copyTo(bytes, out, newRow + x * newPixels.channels);
+          continue;
+        }
+
+        final nd = (d / r).clamp(0.0, 1.0);
+        final cylinder = math.sin(nd * math.pi);
+        final paperLuma = (192.0 + 36.0 * cylinder).clamp(185.0, 230.0);
+        final pr = paperLuma.round();
+        final pg = paperLuma.round();
+        final pb = (paperLuma * 0.99).round().clamp(0, 255);
+
+        if (d > 0) {
+          // Early tip: brief darkened OLD on outer curl, then full paper back.
+          // Matches REF start (thin roll still reading as a page edge).
+          final showOldFace = t < 0.18 && nd > 0.55;
+          if (showOldFace) {
+            final theta = math.asin(nd);
+            final dFront = theta * r;
+            final frontX = (turnToLeft ? curlX - dFront : curlX + dFront)
+                .round()
+                .clamp(0, w - 1);
+            final faceMix = ((nd - 0.55) / 0.45).clamp(0.0, 1.0);
+            final shade = (0.55 + 0.35 * cylinder).clamp(0.45, 0.95);
+            oldPixels.shadeTo(
+              bytes,
+              out,
+              oldRow + frontX * oldPixels.channels,
+              shade,
+            );
+            // Blend toward paper as we leave the tip phase.
+            final toPaper = (1.0 - faceMix) * 0.65 + _smoothstep(0.12, 0.22, t);
+            final k = toPaper.clamp(0.0, 1.0);
+            bytes[out] =
+                (bytes[out] + (pr - bytes[out]) * k).round().clamp(0, 255);
+            bytes[out + 1] =
+                (bytes[out + 1] + (pg - bytes[out + 1]) * k)
+                    .round()
+                    .clamp(0, 255);
+            bytes[out + 2] =
+                (bytes[out + 2] + (pb - bytes[out + 2]) * k)
+                    .round()
+                    .clamp(0, 255);
+          } else {
+            bytes[out] = pr;
+            bytes[out + 1] = pg;
+            bytes[out + 2] = pb;
+            bytes[out + 3] = 255;
+          }
+
+          if (d > r - aa) {
+            final u = _smoothstep(r - aa, r + aa, d);
+            _blendTowardBuffer(
+              bytes,
+              out,
+              oldPixels,
+              oldRow + x * oldPixels.channels,
+              u,
+            );
+          }
+        } else {
+          newPixels.copyTo(bytes, out, newRow + x * newPixels.channels);
+          final edge = (1.0 - ((-d) / (r * 1.35)).clamp(0.0, 1.0));
+          final shade = 1.0 - (0.52 + 0.14 * yn) * edge * edge;
+          bytes[out] = (bytes[out] * shade).round().clamp(0, 255);
+          bytes[out + 1] = (bytes[out + 1] * shade).round().clamp(0, 255);
+          bytes[out + 2] = (bytes[out + 2] * shade).round().clamp(0, 255);
+
+          final u = 1.0 - _smoothstep(-aa, aa, d);
+          if (u > 0.001) {
+            bytes[out] =
+                (bytes[out] + (pr - bytes[out]) * u).round().clamp(0, 255);
+            bytes[out + 1] =
+                (bytes[out + 1] + (pg - bytes[out + 1]) * u)
+                    .round()
+                    .clamp(0, 255);
+            bytes[out + 2] =
+                (bytes[out + 2] + (pb - bytes[out + 2]) * u)
+                    .round()
+                    .clamp(0, 255);
+          }
+        }
+      }
+    }
+
+    return _imageFromRgba(bytes, w, h);
+  }
+
+  static double _smoothstep(double edge0, double edge1, double x) {
+    if (edge1 <= edge0) return x >= edge1 ? 1.0 : 0.0;
+    final t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+  }
+
+  static void _blendTowardBuffer(
+    Uint8List bytes,
+    int out,
+    _PixelBuffer src,
+    int srcOffset,
+    double t,
+  ) {
+    final u = t.clamp(0.0, 1.0);
+    if (u <= 0) return;
+    bytes[out] =
+        (bytes[out] + (src.bytes[srcOffset] - bytes[out]) * u).round().clamp(0, 255);
+    bytes[out + 1] =
+        (bytes[out + 1] + (src.bytes[srcOffset + 1] - bytes[out + 1]) * u)
+            .round()
+            .clamp(0, 255);
+    bytes[out + 2] =
+        (bytes[out + 2] + (src.bytes[srcOffset + 2] - bytes[out + 2]) * u)
+            .round()
+            .clamp(0, 255);
   }
 
   /// Whole3D vertical fold (native Camera.rotateX).
