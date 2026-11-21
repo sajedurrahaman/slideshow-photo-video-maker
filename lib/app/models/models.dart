@@ -54,9 +54,6 @@ enum SlideTransitionType {
 
   /// Vertical book page curl — from right edge toward left.
   bookPageLeft,
-
-  /// Vertical book page curl — from left edge toward right.
-  bookPageRight,
 }
 
 class SlideTheme {
@@ -232,12 +229,6 @@ class SlideTransitionOption {
       id: 'slide_19',
       assetPath: 'assets/images/editor/transitions/slide_19.png',
       type: SlideTransitionType.bookPageLeft,
-    ),
-    // Book page turn right (reverse flip).
-    SlideTransitionOption(
-      id: 'slide_20',
-      assetPath: 'assets/images/editor/transitions/slide_20.png',
-      type: SlideTransitionType.bookPageRight,
     ),
   ];
 }

@@ -179,9 +179,6 @@ class TransitionEngine {
       case SlideTransitionType.bookPageLeft:
         // Vertical page-curl: from right edge → left.
         return _bookPageTurn(a, b, p, turnToLeft: true);
-      case SlideTransitionType.bookPageRight:
-        // Vertical page-curl: from left edge → right.
-        return _bookPageTurn(a, b, p, turnToLeft: false);
     }
   }
 
