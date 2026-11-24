@@ -20,11 +20,15 @@ class GalleryScreen extends StatefulWidget {
     super.key,
     this.insertMode = false,
     this.insertIndex = 0,
+    this.videoMode = false,
   });
 
   /// When opened from editor timeline "+", insert at [insertIndex] and pop back.
   final bool insertMode;
   final int insertIndex;
+
+  /// Home → Video: pick device videos then open video editor.
+  final bool videoMode;
 
   @override
   State<GalleryScreen> createState() => _GalleryScreenState();
@@ -69,19 +73,21 @@ class _GalleryScreenState extends State<GalleryScreen> {
       return;
     }
 
-    // Newest photos first in Recent / albums.
+    // Newest first in Recent / albums.
     final filter = FilterOptionGroup(
       orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)],
     );
     final paths = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
+      type: widget.videoMode ? RequestType.video : RequestType.image,
       onlyAll: false,
       filterOption: filter,
     );
     if (paths.isEmpty) {
       setState(() {
         _loading = false;
-        _error = 'No photos found on this device.';
+        _error = widget.videoMode
+            ? 'No videos found on this device.'
+            : 'No photos found on this device.';
       });
       return;
     }
@@ -109,7 +115,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
     if (albums.isEmpty) {
       setState(() {
         _loading = false;
-        _error = 'No photos found on this device.';
+        _error = widget.videoMode
+            ? 'No videos found on this device.'
+            : 'No photos found on this device.';
       });
       return;
     }
@@ -149,12 +157,14 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   int get _maxSelectable {
+    if (widget.videoMode) return 20;
     if (!widget.insertMode) return AppConstants.maxPhotos;
     final existing = context.read<SlideshowProject>().photos.length;
     return (AppConstants.maxPhotos - existing).clamp(0, AppConstants.maxPhotos);
   }
 
-  int get _minSelectable => widget.insertMode ? 1 : AppConstants.minPhotos;
+  int get _minSelectable =>
+      (widget.insertMode || widget.videoMode) ? 1 : AppConstants.minPhotos;
 
   void _toggle(String id) {
     setState(() {
@@ -205,7 +215,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            widget.insertMode
+            widget.videoMode
+                ? 'Select at least 1 video'
+                : widget.insertMode
                 ? 'Select at least 1 photo'
                 : 'Select at least ${AppConstants.minPhotos} photos',
           ),
@@ -221,6 +233,34 @@ class _GalleryScreenState extends State<GalleryScreen> {
         p.join(dir.path, 'picked_${DateTime.now().millisecondsSinceEpoch}'),
       );
       await pickDir.create(recursive: true);
+
+      if (widget.videoMode) {
+        final paths = <String>[];
+        for (var i = 0; i < _orderedIds.length; i++) {
+          if (!mounted) return;
+          final id = _orderedIds[i];
+          final item = _assetForId(id);
+          if (item == null) continue;
+          final dest = await _copyPickedVideo(item, pickDir, i);
+          if (dest == null) continue;
+          paths.add(dest.path);
+        }
+        if (paths.isEmpty) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not load selected videos')),
+          );
+          return;
+        }
+        if (!mounted) return;
+        // Editor "+" insert → return paths; home Video → open editor.
+        if (widget.insertMode) {
+          context.pop(paths);
+        } else {
+          context.push('/video-editor', extra: paths);
+        }
+        return;
+      }
 
       final photos = <SlideshowPhoto>[];
       for (var i = 0; i < _orderedIds.length; i++) {
@@ -257,6 +297,25 @@ class _GalleryScreenState extends State<GalleryScreen> {
           .showSnackBar(SnackBar(content: Text('Could not open editor: $e')));
     } finally {
       if (mounted) setState(() => _continuing = false);
+    }
+  }
+
+  Future<File?> _copyPickedVideo(
+    _PickedAsset item,
+    Directory dir,
+    int index,
+  ) async {
+    try {
+      final src = await item.entity.originFile
+          .timeout(const Duration(seconds: 8));
+      if (src == null || !src.existsSync()) return null;
+      final ext = p.extension(src.path).isEmpty ? '.mp4' : p.extension(src.path);
+      final safeId = item.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final dest = File(p.join(dir.path, 'vid_${index}_$safeId$ext'));
+      await src.copy(dest.path);
+      return dest;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -396,6 +455,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                               return _ThumbTile(
                                 entity: item.entity,
                                 selected: selected,
+                                showDuration: widget.videoMode,
                                 onTap: () => _toggle(item.id),
                                 onThumb: (data) => item.thumbBytes = data,
                               );
@@ -634,10 +694,12 @@ class _ThumbTile extends StatefulWidget {
     required this.selected,
     required this.onTap,
     required this.onThumb,
+    this.showDuration = false,
   });
 
   final AssetEntity entity;
   final bool selected;
+  final bool showDuration;
   final VoidCallback onTap;
   final ValueChanged<Uint8List> onThumb;
 
@@ -705,11 +767,38 @@ class _ThumbTileState extends State<_ThumbTile> {
                     : null,
               ),
             ),
+            if (widget.showDuration)
+              Positioned(
+                left: 4,
+                bottom: 4,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _formatVideoDuration(widget.entity.duration),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
+}
+
+String _formatVideoDuration(int seconds) {
+  final m = (seconds ~/ 60).toString().padLeft(2, '0');
+  final s = (seconds % 60).toString().padLeft(2, '0');
+  return '$m:$s';
 }
 
 class _TrayThumb extends StatefulWidget {

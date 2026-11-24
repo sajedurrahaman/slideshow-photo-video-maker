@@ -8,18 +8,13 @@ import 'package:flutter_svg/svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../ads/bottom_banner_ad.dart';
-import '../core/constants/app_constants.dart';
 import '../core/responsive/app_responsive.dart';
 import '../services/draft_service.dart';
-import '../services/firebase_bootstrap.dart';
-import '../services/rate_app_service.dart';
 import '../services/slideshow_project.dart';
 
-/// Home — header + Slideshow/Video + Quick Tools + Drafts + Rate/Share.
+/// Home — header + Slideshow/Video + Quick Tools + Drafts.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -65,43 +60,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _drafts = drafts;
       _loading = false;
     });
-  }
-
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
-  Future<void> _rateUs() => RateAppService.rateUs();
-
-  /// Long-press Rate Us → copy FCM token for Firebase Console push test.
-  Future<void> _copyFcmToken() async {
-    final token =
-        FirebaseBootstrap.fcmToken ?? await FirebaseBootstrap.refreshFcmToken();
-    if (!mounted) return;
-    if (token == null || token.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('FCM token not ready yet. Try again.')),
-      );
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: token));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('FCM token copied (${token.length} chars)'),
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  Future<void> _shareApp() {
-    return SharePlus.instance.share(
-      ShareParams(
-        text:
-            'Check out ${AppConstants.appName} — make photo slideshows easily!',
-      ),
-    );
   }
 
   Future<void> _openDraft(DraftMeta draft) async {
@@ -266,7 +224,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                         iconAsset: 'assets/images/studio.png',
                                         iconWidth: rs.w(78),
                                         iconTop: -rs.h(30),
-                                        onTap: () => context.push('/creations'),
+                                        onTap: () =>
+                                            context.push('/gallery?type=video'),
                                       ),
                                     ),
                                   ],
@@ -352,21 +311,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       if (_loading)
-                        const SliverToBoxAdapter(
+                        SliverToBoxAdapter(
                           child: Padding(
-                            padding: EdgeInsets.all(32),
+                            padding: EdgeInsets.fromLTRB(16, 70, 16, 0),
                             child: Center(child: CircularProgressIndicator()),
                           ),
                         )
                       else if (visibleDrafts.isEmpty)
                         SliverToBoxAdapter(
                           child: Padding(
-                            padding: EdgeInsets.fromLTRB(
-                              16,
-                              44.h(context),
-                              16,
-                              0,
-                            ),
+                            padding: EdgeInsets.fromLTRB(16, 70, 16, 0),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
@@ -407,91 +361,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-              // Rate / Share / Terms — banner sits below this block.
-              ColoredBox(
-                color: Colors.white,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _OutlineActionButton(
-                              label: 'Rate Us',
-                              icon: Icons.star_rounded,
-                              color: const Color(0xFFFF9800),
-                              onTap: _rateUs,
-                              onLongPress: _copyFcmToken,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _OutlineActionButton(
-                              label: 'Share Now',
-                              icon: Icons.share_rounded,
-                              color: const Color(0xFF13D23D),
-                              onTap: _shareApp,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                        child: Wrap(
-                          alignment: WrapAlignment.center,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            const Text(
-                              'By Continuing you agree to the ',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF616161),
-                                height: 1.4,
-                              ),
-                            ),
-                            GestureDetector(
-                              onTap: () => _openUrl(
-                                'https://sites.google.com/view/slideshow-photovideomaker-term',
-                              ),
-                              child: const Text(
-                                'Terms and service',
-                                style: TextStyle(
-                                  color: Color(0xFFE53935),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            const Text(
-                              ' & ',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF616161),
-                              ),
-                            ),
-                            GestureDetector(
-                              onTap: () => _openUrl(
-                                'https://sites.google.com/view/slideshow-photovideomaker',
-                              ),
-                              child: const Text(
-                                'privacy policy',
-                                style: TextStyle(
-                                  color: Color(0xFFE53935),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
               // Hide entirely when load fails (no empty slot on Home).
               const BottomBannerAd(reserveSpace: false),
               SizedBox(height: bottomInset),
@@ -528,7 +397,7 @@ class _HomeCtaButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(rs.r(14)),
         child: SizedBox(
-          height: rs.h(70),
+          height: rs.h(74),
           child: Stack(
             clipBehavior: Clip.none,
             alignment: Alignment.bottomCenter,
@@ -778,40 +647,6 @@ class _DraftTile extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _OutlineActionButton extends StatelessWidget {
-  const _OutlineActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-    this.onLongPress,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-  final VoidCallback? onLongPress;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      onLongPress: onLongPress,
-      icon: Icon(icon, color: color, size: 20),
-      label: Text(
-        label,
-        style: TextStyle(color: color, fontWeight: FontWeight.w700),
-      ),
-      style: OutlinedButton.styleFrom(
-        side: BorderSide(color: color, width: 1.4),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }

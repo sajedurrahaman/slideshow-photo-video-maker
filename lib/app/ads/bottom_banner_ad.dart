@@ -87,7 +87,7 @@ class _BottomBannerAdState extends State<BottomBannerAd> {
     if (!widget.reserveSpace) {
       if (!showAd) return const SizedBox.shrink();
       return ColoredBox(
-        color: Colors.white,
+        color: const Color(0xFFF7F8FC),
         child: SizedBox(
           width: double.infinity,
           height: _bannerHeight,

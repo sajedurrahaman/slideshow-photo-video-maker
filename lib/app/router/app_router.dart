@@ -11,6 +11,7 @@ import '../screens/music_screen.dart';
 import '../screens/my_creation_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/splash_screen.dart';
+import '../screens/video_editor_screen.dart';
 
 final GoRouter appRouter = GoRouter(
   navigatorKey: rootNavigatorKey,
@@ -31,12 +32,31 @@ final GoRouter appRouter = GoRouter(
             state.uri.queryParameters['insert'] == '1' ||
             state.uri.queryParameters['insert'] == 'true';
         final at = int.tryParse(state.uri.queryParameters['at'] ?? '') ?? 0;
-        return GalleryScreen(insertMode: insert, insertIndex: at);
+        final video =
+            state.uri.queryParameters['type'] == 'video' ||
+            state.uri.queryParameters['video'] == '1';
+        return GalleryScreen(
+          insertMode: insert,
+          insertIndex: at,
+          videoMode: video,
+        );
       },
     ),
     GoRoute(
       path: '/editor',
       builder: (context, state) => const EditorScreen(),
+    ),
+    GoRoute(
+      path: '/video-editor',
+      builder: (context, state) {
+        final extra = state.extra;
+        final paths = extra is List<String>
+            ? extra
+            : extra is List
+                ? extra.whereType<String>().toList()
+                : <String>[];
+        return VideoEditorScreen(videoPaths: paths);
+      },
     ),
     GoRoute(
       path: '/crop',
