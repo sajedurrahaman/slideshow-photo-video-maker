@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:clip_craft_slideshow/app/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -18,7 +19,7 @@ import '../services/firebase_bootstrap.dart';
 import '../services/rate_app_service.dart';
 import '../services/slideshow_project.dart';
 
-/// Figma `home-Screen` — hero + Slideshow/Studio + Drafts + Rate/Share.
+/// Home — header + Slideshow/Video + Quick Tools + Drafts + Rate/Share.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -27,24 +28,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static const _heroSlides = [
-    'assets/images/home/slider/slide_1.png',
-    'assets/images/home/slider/slide_2.png',
-    'assets/images/home/slider/slide_3.jpg',
-    'assets/images/home/slider/slide_4.png',
-  ];
-
   List<DraftMeta> _drafts = [];
   bool _loading = true;
-  late final PageController _heroPageController;
-  int _heroIndex = 0;
-  Timer? _heroTimer;
 
   @override
   void initState() {
     super.initState();
-    _heroPageController = PageController();
-    _startHeroAutoPlay();
     DraftService.changes.addListener(_onDraftsChanged);
     unawaited(_loadDrafts());
   }
@@ -55,24 +44,9 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_loadDrafts(showLoading: false));
   }
 
-  void _startHeroAutoPlay() {
-    _heroTimer?.cancel();
-    _heroTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!mounted || !_heroPageController.hasClients) return;
-      final next = (_heroIndex + 1) % _heroSlides.length;
-      _heroPageController.animateToPage(
-        next,
-        duration: const Duration(milliseconds: 450),
-        curve: Curves.easeInOut,
-      );
-    });
-  }
-
   @override
   void dispose() {
     DraftService.changes.removeListener(_onDraftsChanged);
-    _heroTimer?.cancel();
-    _heroPageController.dispose();
     super.dispose();
   }
 
@@ -81,12 +55,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.activate();
     // Home may stay under the nav stack; refresh when it becomes visible again.
     unawaited(_loadDrafts(showLoading: false));
-  }
-
-  int _imageCacheWidth(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    return (width * dpr).round().clamp(360, 960);
   }
 
   Future<void> _loadDrafts({bool showLoading = true}) async {
@@ -172,20 +140,27 @@ class _HomeScreenState extends State<HomeScreen> {
     await _loadDrafts();
   }
 
+  void _quickToolTap(String label) {
+    if (label == 'Music') {
+      context.push('/music');
+      return;
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('$label — coming soon')));
+  }
+
   @override
   Widget build(BuildContext context) {
     final rs = AppResponsive.of(context);
     final topInset = MediaQuery.paddingOf(context).top;
     final visibleDrafts = _drafts.take(3).toList();
-    final heroCacheW = _imageCacheWidth(context);
 
     final bottomInset = MediaQuery.paddingOf(context).bottom;
-    final heroH = rs.h(450) + topInset;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: SystemUiOverlayStyle.dark,
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFFF7F8FC),
         body: ResponsiveBody(
           child: Column(
             children: [
@@ -196,126 +171,134 @@ class _HomeScreenState extends State<HomeScreen> {
                     physics: const AlwaysScrollableScrollPhysics(),
                     slivers: [
                       SliverToBoxAdapter(
-                        child: SizedBox(
-                          height: heroH,
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Positioned.fill(
-                                child: PageView.builder(
-                                  controller: _heroPageController,
-                                  itemCount: _heroSlides.length,
-                                  onPageChanged: (i) =>
-                                      setState(() => _heroIndex = i),
-                                  itemBuilder: (context, index) {
-                                    return Image.asset(
-                                      _heroSlides[index],
-                                      fit: BoxFit.cover,
-                                      cacheWidth: heroCacheW,
-                                      filterQuality: FilterQuality.medium,
-                                      errorBuilder: (_, _, _) => Container(
-                                        decoration: const BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.topLeft,
-                                            end: Alignment.bottomRight,
-                                            colors: [
-                                              Color(0xFF1A1035),
-                                              Color(0xFF4A148C),
-                                              Color(0xFF00BCD4),
-                                            ],
+                        child: ColoredBox(
+                          color: const Color(0xFFF7F8FC),
+                          child: Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              rs.w(16),
+                              topInset + rs.h(12),
+                              rs.w(16),
+                              rs.h(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Photo & Video Editor',
+                                            style: TextStyle(
+                                              fontSize: rs.sp(22),
+                                              fontWeight: FontWeight.w800,
+                                              color: const Color(0xFF1A237E),
+                                              height: 1.15,
+                                            ),
+                                          ),
+                                          SizedBox(height: rs.h(4)),
+                                          Text(
+                                            'make your photo alive',
+                                            style: TextStyle(
+                                              fontSize: rs.sp(13),
+                                              fontWeight: FontWeight.w500,
+                                              color: const Color(0xFF9E9E9E),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    // Material has no gradient — use decoration + transparent Material.
+                                    Material(
+                                      color: Colors.transparent,
+                                      shape: const CircleBorder(),
+                                      elevation: 2,
+                                      shadowColor: const Color(0x6637B5F2),
+                                      child: InkWell(
+                                        customBorder: const CircleBorder(),
+                                        onTap: () => context.push('/settings'),
+                                        child: Ink(
+                                          width: rs.r(40),
+                                          height: rs.r(40),
+                                          decoration: const BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topLeft,
+                                              end: Alignment.bottomRight,
+                                              colors: [
+                                                Color(0xFF21EDD6),
+                                                Color(0xFF37B5F2),
+                                              ],
+                                            ),
+                                          ),
+                                          child: Icon(
+                                            Icons.settings_outlined,
+                                            color: Colors.white,
+                                            size: rs.r(26),
                                           ),
                                         ),
                                       ),
-                                    );
-                                  },
-                                ),
-                              ),
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: rs.h(88),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: List.generate(_heroSlides.length, (
-                                    i,
-                                  ) {
-                                    final active = i == _heroIndex;
-                                    return AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 200,
-                                      ),
-                                      margin: EdgeInsets.symmetric(
-                                        horizontal: rs.w(3),
-                                      ),
-                                      width: active ? rs.w(16) : rs.w(6),
-                                      height: rs.h(6),
-                                      decoration: BoxDecoration(
-                                        color: active
-                                            ? Colors.white
-                                            : Colors.white.withValues(
-                                                alpha: 0.45,
-                                              ),
-                                        borderRadius: BorderRadius.circular(
-                                          rs.r(3),
-                                        ),
-                                      ),
-                                    );
-                                  }),
-                                ),
-                              ),
-                              // Soft fade into white content
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                height: rs.h(72),
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        Colors.white.withValues(alpha: 0),
-                                        Colors.white,
-                                      ],
                                     ),
-                                  ),
+                                  ],
                                 ),
-                              ),
-                              // Slideshow + Studio (Figma image buttons)
-                              Positioned(
-                                left: rs.w(14),
-                                right: rs.w(14),
-                                bottom: rs.h(4),
-                                child: Row(
+                                SizedBox(height: rs.h(24)),
+                                Row(
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
                                     Expanded(
-                                      child: _HomeHeroImageButton(
+                                      child: _HomeCtaButton(
                                         backgroundAsset:
-                                            'assets/images/slideshowbutton.png',
+                                            'assets/images/slideshowbutton.svg',
                                         iconAsset:
                                             'assets/images/slideshow.png',
-                                        cacheWidth: heroCacheW ~/ 2,
                                         onTap: () => context.push('/gallery'),
                                       ),
                                     ),
-                                    SizedBox(width: rs.w(10)),
+                                    SizedBox(width: rs.w(12)),
                                     Expanded(
-                                      child: _HomeHeroImageButton(
+                                      child: _HomeCtaButton(
                                         backgroundAsset:
-                                            'assets/images/studiobutton.png',
+                                            'assets/images/videobutton.svg',
                                         iconAsset: 'assets/images/studio.png',
-                                        iconWidth: rs.w(72),
-                                        iconTop: -rs.h(28),
-                                        cacheWidth: heroCacheW ~/ 2,
+                                        iconWidth: rs.w(78),
+                                        iconTop: -rs.h(30),
                                         onTap: () => context.push('/creations'),
                                       ),
                                     ),
                                   ],
                                 ),
-                              ),
-                            ],
+                                SizedBox(height: rs.h(22)),
+                                Row(
+                                  children: [
+                                    Container(
+                                      width: rs.w(4),
+                                      height: rs.h(18),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1A237E),
+                                        borderRadius: BorderRadius.circular(
+                                          rs.r(2),
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(width: rs.w(8)),
+                                    Text(
+                                      'Quick Tools',
+                                      style: TextStyle(
+                                        fontSize: rs.sp(18),
+                                        fontWeight: FontWeight.w800,
+                                        color: const Color(0xFF1A237E),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: rs.h(14)),
+                                _QuickToolsGrid(onTap: _quickToolTap),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -520,15 +503,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// Figma home hero button: PNG background + decorative icon overlapping top.
-class _HomeHeroImageButton extends StatelessWidget {
-  const _HomeHeroImageButton({
+/// PNG background (label baked in) + decorative 3D icon overlapping top-right.
+class _HomeCtaButton extends StatelessWidget {
+  const _HomeCtaButton({
     required this.backgroundAsset,
     required this.iconAsset,
     required this.onTap,
     this.iconWidth = 64,
     this.iconTop = -24,
-    this.cacheWidth,
   });
 
   final String backgroundAsset;
@@ -536,7 +518,6 @@ class _HomeHeroImageButton extends StatelessWidget {
   final VoidCallback onTap;
   final double iconWidth;
   final double iconTop;
-  final int? cacheWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -547,34 +528,150 @@ class _HomeHeroImageButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(rs.r(14)),
         child: SizedBox(
-          height: rs.h(76),
+          height: rs.h(70),
           child: Stack(
             clipBehavior: Clip.none,
             alignment: Alignment.bottomCenter,
             children: [
               Positioned.fill(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(rs.r(14)),
-                  child: Image.asset(
-                    backgroundAsset,
-                    fit: BoxFit.fill,
-                    cacheWidth: cacheWidth,
-                    filterQuality: FilterQuality.medium,
-                  ),
+                  borderRadius: BorderRadius.circular(rs.r(16)),
+                  child: SvgPicture.asset(backgroundAsset, fit: BoxFit.fill),
                 ),
               ),
               Positioned(
                 top: iconTop,
-                right: -rs.w(4),
+                right: -rs.w(2),
                 child: Image.asset(
                   iconAsset,
                   width: iconWidth,
                   fit: BoxFit.contain,
-                  cacheWidth: cacheWidth,
                   filterQuality: FilterQuality.medium,
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickToolsGrid extends StatelessWidget {
+  const _QuickToolsGrid({required this.onTap});
+
+  final ValueChanged<String> onTap;
+
+  static const _tools = <({String label, String image})>[
+    (label: 'Trim', image: "assets/images/quickTools/trim.svg"),
+    (label: 'Compress', image: "assets/images/quickTools/compress.svg"),
+    (label: 'Video to MP3', image: "assets/images/quickTools/mp3.svg"),
+    (label: 'Reverse', image: "assets/images/quickTools/reverse.svg"),
+    (label: 'Music', image: "assets/images/quickTools/music.svg"),
+    (label: 'Merge', image: "assets/images/quickTools/merge.svg"),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
+    return GridView.builder(
+      padding: EdgeInsets.all(0),
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _tools.length,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisSpacing: rs.h(14),
+        crossAxisSpacing: rs.w(12),
+        // Soft rounded cards matching home mockup.
+        mainAxisExtent: rs.h(94),
+      ),
+      itemBuilder: (context, i) {
+        final tool = _tools[i];
+        return _QuickToolTile(
+          label: tool.label,
+          image: tool.image,
+          onTap: () => onTap(tool.label),
+        );
+      },
+    );
+  }
+}
+
+class _QuickToolTile extends StatelessWidget {
+  const _QuickToolTile({
+    required this.label,
+    required this.image,
+    required this.onTap,
+  });
+
+  final String label;
+  final String image;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final rs = AppResponsive.of(context);
+    final radius = rs.r(24);
+    final borderW = rs.r(1.6);
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(radius),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(radius),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            // Gradient border: stronger blue on top → soft/white at bottom.
+            gradient: const LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF32B9FD), Color(0xFFDCF3FF), Color(0xFFF1F0F0)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF64B5F6).withValues(alpha: 0.18),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Container(
+            margin: EdgeInsets.all(borderW),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(radius - borderW),
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: rs.w(8),
+              vertical: rs.h(4),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SvgPicture.asset(
+                  image,
+                  fit: BoxFit.contain,
+                  width: rs.r(52),
+                  height: rs.r(48),
+                ),
+                SizedBox(height: rs.h(1)),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: rs.sp(11),
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                    color: const Color(0xFF1A237E),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

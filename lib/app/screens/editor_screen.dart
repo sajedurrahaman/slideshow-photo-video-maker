@@ -2869,8 +2869,8 @@ class _EditorScreenState extends State<EditorScreen>
         backgroundColor: Colors.white,
         // Keep preview fixed; text sheet / keyboard overlay instead of resizing body.
         resizeToAvoidBottomInset: false,
-        appBar: AppBar(
-          title: const Text('Editor'),
+      appBar: AppBar(
+        title: const Text('Editor'),
           automaticallyImplyLeading: false,
           leading: _navbarToolActive
               ? null
@@ -2878,7 +2878,7 @@ class _EditorScreenState extends State<EditorScreen>
                   icon: const Icon(Icons.arrow_back),
                   onPressed: _savingDraft ? null : _saveDraftAndLeave,
                 ),
-          actions: [
+        actions: [
             // Photo/Music/Effects: Done check sits in timeline header — not AppBar.
             if (!_textToolsOpen &&
                 project.selectedPhotoIndex == null &&
@@ -2905,19 +2905,19 @@ class _EditorScreenState extends State<EditorScreen>
         body: Stack(
           children: [
             Column(
-              children: [
-                Expanded(
-                  child: Padding(
+        children: [
+          Expanded(
+            child: Padding(
                     padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
                     child: Center(
-                      child: AspectRatio(
+              child: AspectRatio(
                         aspectRatio: aspect,
-                        child: DecoratedBox(
+                child: DecoratedBox(
                           decoration: const BoxDecoration(color: Colors.black),
-                          child: ClipRRect(
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
+                  child: ClipRRect(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
                                 if (project.selectedPhotoIndex case final sel?
                                     when sel >= 0 &&
                                         sel < project.photos.length)
@@ -2946,8 +2946,8 @@ class _EditorScreenState extends State<EditorScreen>
                                         );
                                       }
                                     },
-                                  )
-                                else
+                          )
+                        else
                                   RepaintBoundary(
                                     child:
                                         ValueListenableBuilder<
@@ -3006,8 +3006,8 @@ class _EditorScreenState extends State<EditorScreen>
                                                   );
                                                 }
                                                 return const Center(
-                                                  child: Text(
-                                                    'No preview',
+                            child: Text(
+                              'No preview',
                                                     style: TextStyle(
                                                       color: Colors.white54,
                                                     ),
@@ -3016,12 +3016,12 @@ class _EditorScreenState extends State<EditorScreen>
                                               },
                                             );
                                           },
-                                        ),
-                                  ),
-                                if (project.selectedFrameAsset != null)
+                            ),
+                          ),
+                        if (project.selectedFrameAsset != null)
                                   IgnorePointer(
                                     child: Image.asset(
-                                      project.selectedFrameAsset!,
+                            project.selectedFrameAsset!,
                                       key: ValueKey(project.selectedFrameAsset),
                                       fit: BoxFit.fill,
                                       gaplessPlayback: false,
@@ -3119,37 +3119,37 @@ class _EditorScreenState extends State<EditorScreen>
                                     _effectPreviewLoading)
                                   const PreparingPreviewOverlay(),
                                 // Export-only progress.
-                                if (project.isProcessing)
-                                  Container(
-                                    color: Colors.black54,
-                                    child: Center(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          CircularProgressIndicator(
+                        if (project.isProcessing)
+                          Container(
+                            color: Colors.black54,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(
                                             color: AppColors.primary,
-                                            value: project.processProgress > 0
-                                                ? project.processProgress
-                                                : null,
-                                          ),
-                                          const SizedBox(height: 12),
-                                          Text(
+                                    value: project.processProgress > 0
+                                        ? project.processProgress
+                                        : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
                                             'Exporting ${(project.processProgress * 100).toInt()}%',
                                             style: const TextStyle(
                                               color: Colors.white,
                                             ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
                                   ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ),
+                      ],
                     ),
                   ),
+                ),
+              ),
+            ),
+          ),
                 ),
 
                 // Text sheet overlays — keep idle chrome underneath so preview size/position stays fixed.
@@ -3827,7 +3827,7 @@ class _MusicEditSheetState extends State<_MusicEditSheet> {
                   icon: const Icon(Icons.close, size: 20),
                 ),
                 Expanded(child: SheetTitle(music.title)),
-                Padding(
+          Padding(
                   padding: const EdgeInsets.only(right: 16, top: 4, bottom: 4),
                   child: TealPillButton(label: 'Save', onPressed: _commit),
                 ),
@@ -4202,8 +4202,8 @@ class _SelectedPhotoClipState extends State<_SelectedPhotoClip> {
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: _shellPadV),
-          child: Row(
-            children: [
+            child: Row(
+              children: [
               _handle(isStart: true),
               SizedBox(
                 width: clipW,
@@ -5452,7 +5452,7 @@ class _MusicSourceButton extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Row(
+      child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Image.asset(image, color: fg, width: 24),
@@ -5654,8 +5654,8 @@ class _EffectsPickerSheetState extends State<_EffectsPickerSheet> {
     final selected = widget.project.selectedOverlayEffect;
     return ColoredBox(
       color: Colors.white,
-      child: Column(
-        children: [
+            child: Column(
+              children: [
           SizedBox(
             height: 44,
             child: Row(
@@ -5764,7 +5764,7 @@ class _EffectOverlayTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                       style: const TextStyle(
-                        fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w600,
                         fontSize: 12,
                         color: Colors.white,
                       ),
@@ -5779,9 +5779,9 @@ class _EffectOverlayTile extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                       fontSize: 12,
                       color: AppColors.textDark,
-                    ),
                   ),
-          ],
+                ),
+              ],
         ),
       ),
     );
@@ -6054,7 +6054,7 @@ class _FilterPanel extends StatelessWidget {
                 width: 64,
                 height: 64,
                 child: PrimarySelectedBorder(
-                  selected: selected,
+          selected: selected,
                   borderRadius: 10,
                   width: 2,
                   backgroundColor: AppColors.surfaceAlt,
@@ -6261,7 +6261,7 @@ class _TextPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+        return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         children: [
@@ -6286,7 +6286,7 @@ class _TextPanel extends StatelessWidget {
             children: [
               for (final c in _colors)
                 Padding(
-                  padding: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.only(right: 8),
                   child: GestureDetector(
                     onTap: () {
                       if (controller.text.trim().isEmpty) return;
@@ -6740,9 +6740,9 @@ class _LiveClipPreviewState extends State<_LiveClipPreview>
                   );
                 }
                 return ClipRect(
-                  child: Stack(
+          child: Stack(
                     fit: StackFit.expand,
-                    children: [
+            children: [
                       ImageFiltered(
                         imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                         child: _photoImage(),
@@ -7208,7 +7208,7 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-                Positioned(
+              Positioned(
                   left: _handle / 2,
                   right: _handle / 2,
                   child: SizedBox(
@@ -7268,9 +7268,9 @@ class _InOutDurationBarState extends State<_InOutDurationBar> {
                     child: const _DurationArrow(
                       icon: Icons.chevron_left,
                       active: false,
-                    ),
-                  ),
-              ],
+                ),
+              ),
+            ],
             ),
           ),
         );

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import 'app/ads/admob_bootstrap.dart';
 import 'app/core/responsive/app_responsive.dart';
 import 'app/core/theme/app_theme.dart';

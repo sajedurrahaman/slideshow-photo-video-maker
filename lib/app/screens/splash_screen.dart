@@ -20,11 +20,8 @@ class _SplashScreenState extends State<SplashScreen>
 
   static const _brandCyan = Color(0xFF00C2E8);
 
+  /// Home hero slider was removed; only precache assets still used on home.
   static const _homeAssets = [
-    'assets/images/home/slider/slide_1.png',
-    'assets/images/home/slider/slide_2.png',
-    'assets/images/home/slider/slide_3.jpg',
-    'assets/images/home/slider/slide_4.png',
     'assets/images/slideshowbutton.png',
     'assets/images/slideshow.png',
     'assets/images/studiobutton.png',

@@ -24,6 +24,7 @@ dependencies:
   image: ^4.5.4
   intl: ^0.20.2
   google_fonts: ^9.0.0
+  flutter_svg: ^2.2.1
   lottie: ^3.8.0
   firebase_core: ^5.1.0
   firebase_crashlytics: ^6.0.1
@@ -67,8 +68,7 @@ flutter:
     - assets/music/
     - assets/effects/
     - assets/images/
-    - assets/images/home/
-    - assets/images/home/slider/
+    - assets/images/quickTools/
     - assets/images/editor/
     - assets/images/editor/photo_tools/
     - assets/images/editor/music_tools/
