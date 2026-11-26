@@ -1,8 +1,17 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_min_gpl/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/responsive/app_responsive.dart';
@@ -20,6 +29,135 @@ enum VideoEditorTool {
   background,
 }
 
+/// Tools shown when a timeline clip is selected (CapCut-style).
+enum _ClipEditTool { volume, animation, delete, speed, crop, replace }
+
+enum _VideoAnimPhase { inAnimation, outAnimation }
+
+/// CapCut-style opening reveal overlays (applied at clip start).
+class VideoRevealAnim {
+  const VideoRevealAnim({
+    required this.id,
+    required this.name,
+    required this.assetPath,
+    required this.thumbPath,
+    required this.durationSec,
+    this.portalReveal = false,
+    this.alphaMatteAssetPath,
+  });
+
+  final String id;
+  final String name;
+  final String assetPath;
+  final String thumbPath;
+  final double durationSec;
+
+  /// Green-screen portal asset (key green → black before Screen blend).
+  final bool portalReveal;
+
+  /// Separate grayscale alpha video; paired with [assetPath] for full-color
+  /// leaf art without green-screen spill.
+  final String? alphaMatteAssetPath;
+
+  /// CapCut In tab: black-bg FX overlays screen-blended at clip start.
+  static const catalog = <VideoRevealAnim>[
+    VideoRevealAnim(
+      id: 'autumn_reveal',
+      name: 'Leaf Reveal',
+      assetPath: 'assets/animations/autumn_reveal_color.mp4',
+      alphaMatteAssetPath: 'assets/animations/autumn_reveal_alpha.mp4',
+      thumbPath: 'assets/animations/autumn_reveal_thumb.png',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_01',
+      name: 'Fire Portal',
+      assetPath: 'assets/animations/fx_01_fire_portal.mp4',
+      thumbPath: 'assets/animations/fx_01_fire_portal_thumb.jpg',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_02',
+      name: 'Neon Iris',
+      assetPath: 'assets/animations/fx_02_neon_iris.mp4',
+      thumbPath: 'assets/animations/fx_02_neon_iris_thumb.jpg',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_03',
+      name: 'Gold Spark',
+      assetPath: 'assets/animations/fx_03_gold_spark.mp4',
+      thumbPath: 'assets/animations/fx_03_gold_spark_thumb.jpg',
+      durationSec: 2.2,
+    ),
+    VideoRevealAnim(
+      id: 'fx_04',
+      name: 'Electric Ring',
+      assetPath: 'assets/animations/fx_04_electric_ring.mp4',
+      thumbPath: 'assets/animations/fx_04_electric_ring_thumb.jpg',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_05',
+      name: 'Shockwave',
+      assetPath: 'assets/animations/fx_05_shockwave.mp4',
+      thumbPath: 'assets/animations/fx_05_shockwave_thumb.jpg',
+      durationSec: 1.8,
+    ),
+    VideoRevealAnim(
+      id: 'fx_06',
+      name: 'Plasma Swirl',
+      assetPath: 'assets/animations/fx_06_plasma_swirl.mp4',
+      thumbPath: 'assets/animations/fx_06_plasma_swirl_thumb.jpg',
+      durationSec: 2.2,
+    ),
+    VideoRevealAnim(
+      id: 'fx_07',
+      name: 'Ember Rain',
+      assetPath: 'assets/animations/fx_07_ember_rain.mp4',
+      thumbPath: 'assets/animations/fx_07_ember_rain_thumb.jpg',
+      durationSec: 2.4,
+    ),
+    VideoRevealAnim(
+      id: 'fx_08',
+      name: 'Ice Bloom',
+      assetPath: 'assets/animations/fx_08_ice_bloom.mp4',
+      thumbPath: 'assets/animations/fx_08_ice_bloom_thumb.jpg',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_09',
+      name: 'Laser Cross',
+      assetPath: 'assets/animations/fx_09_laser_cross.mp4',
+      thumbPath: 'assets/animations/fx_09_laser_cross_thumb.jpg',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_10',
+      name: 'Stardust',
+      assetPath: 'assets/animations/fx_10_stardust.mp4',
+      thumbPath: 'assets/animations/fx_10_stardust_thumb.jpg',
+      durationSec: 2.2,
+    ),
+    VideoRevealAnim(
+      id: 'fx_11',
+      name: 'Portal Burst',
+      assetPath: 'assets/animations/fx_11_portal_burst.mp4',
+      thumbPath: 'assets/animations/fx_11_portal_burst_thumb.jpg',
+      durationSec: 2.4,
+      portalReveal: true,
+    ),
+  ];
+
+  static VideoRevealAnim? byId(String? id) {
+    if (id == null) return null;
+    for (final a in catalog) {
+      if (a.id == id) return a;
+    }
+    return null;
+  }
+}
+
 /// CapCut-style video editor chrome with ClipCraft (slideshow) colors.
 class VideoEditorScreen extends StatefulWidget {
   const VideoEditorScreen({super.key, required this.videoPaths});
@@ -34,57 +172,245 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   late List<String> _clips;
   VideoPlayerController? _controller;
   int _activeIndex = 0;
+
+  /// Null = deselected (initial). Selected → CapCut white handles + clip tools bar.
+  int? _selectedClipIndex;
   bool _ready = false;
   bool _playing = false;
   VideoEditorTool? _tool;
+
+  /// Trim window per clip index (CapCut cut/resize). Null = natural edge.
+  final List<double?> _clipTrimIn = [];
+  final List<double?> _clipTrimOut = [];
+  double? _liveTrimIn;
+  double? _liveTrimOut;
+  bool _trimDragging = false;
+
+  /// Original clip audio level per index (0.0–1.0).
+  final List<double> _clipVolumes = [];
+
+  /// Opening reveal animation id per clip (null = none). CapCut “In”.
+  final List<String?> _clipRevealIds = [];
+  /// User duration for In-anim (CapCut slider). Null = asset default.
+  final List<double?> _clipRevealDurSec = [];
+  double? _revealDurDrag;
+  double _clipSpeed = 1.0;
+  bool _animSheetOpen = false;
+  _VideoAnimPhase _animPhase = _VideoAnimPhase.inAnimation;
+
+  /// CapCut In-anim: predecoded FX frames, alpha-preserved for matte assets.
+  final Map<String, String> _revealAssetFiles = {};
+  final Map<String, List<String>> _revealFrameFiles = {};
+  final Map<String, Future<List<String>>> _revealFrameJobs = {};
+  bool _revealOverlayActive = false;
+  String? _activeRevealId;
+  int _revealFrameIndex = 0;
+
+  void _ensureTrimSlots() {
+    while (_clipTrimIn.length < _clips.length) {
+      _clipTrimIn.add(null);
+      _clipTrimOut.add(null);
+    }
+    while (_clipTrimIn.length > _clips.length) {
+      _clipTrimIn.removeLast();
+      _clipTrimOut.removeLast();
+    }
+    while (_clipVolumes.length < _clips.length) {
+      _clipVolumes.add(1.0);
+    }
+    while (_clipVolumes.length > _clips.length) {
+      _clipVolumes.removeLast();
+    }
+    while (_clipRevealIds.length < _clips.length) {
+      _clipRevealIds.add(null);
+      _clipRevealDurSec.add(null);
+    }
+    while (_clipRevealIds.length > _clips.length) {
+      _clipRevealIds.removeLast();
+      if (_clipRevealDurSec.isNotEmpty) _clipRevealDurSec.removeLast();
+    }
+    while (_clipRevealDurSec.length < _clips.length) {
+      _clipRevealDurSec.add(null);
+    }
+    while (_clipRevealDurSec.length > _clips.length) {
+      _clipRevealDurSec.removeLast();
+    }
+  }
+
+  double _volumeFor(int index) {
+    _ensureTrimSlots();
+    if (index < 0 || index >= _clipVolumes.length) return 1.0;
+    return _clipVolumes[index].clamp(0.0, 1.0);
+  }
+
+  VideoRevealAnim? _revealFor(int index) {
+    _ensureTrimSlots();
+    if (index < 0 || index >= _clipRevealIds.length) return null;
+    return VideoRevealAnim.byId(_clipRevealIds[index]);
+  }
+
+  /// CapCut In duration: user slider, else asset length (clamped to clip).
+  double _revealDurationFor(int index) {
+    final anim = _revealFor(index);
+    if (anim == null) return 0;
+    final maxSec = math.max(0.5, _visibleDuration(index));
+    final raw = (_revealDurDrag != null && _selectedClipIndex == index)
+        ? _revealDurDrag!
+        : (_clipRevealDurSec[index] ?? anim.durationSec);
+    return raw.clamp(0.5, math.min(maxSec, 5.0)).toDouble();
+  }
+
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
-  Timer? _tick;
   double _aspectW = 9;
   double _aspectH = 16;
   int _filterIndex = 0;
   String? _musicTitle;
   String? _textOverlay;
   String? _stickerLabel;
+  String? _effectName; // null / 'None' = no effect lane
   Color _bgColor = Colors.black;
   late final TextEditingController _textFieldController;
+  bool _loadingClip = false;
+  bool _preparingProxy = false;
+
+  final _stripController = ScrollController();
+  bool _syncingStrip = false;
+  bool _userScrubbing = false;
+  Timer? _scrubTimer;
+  double _lastScrubSec = -1;
+  DateTime? _lastUiTick;
+
+  /// Max editable clip length (product limit). CapCut free is typically ~60 min;
+  /// we keep a conservative 5 min for v1 preview/export.
+  static const _maxClipSec = 5 * 60.0;
+
+  /// Per-clip duration (seconds).
+  final Map<String, double> _clipDurationSec = {};
+
+  /// Original path → downscaled proxy used for on-device preview (CapCut-style).
+  final Map<String, String> _previewProxyPath = {};
+
+  /// Filmstrip frame image paths per clip (1 frame ≈ 1s visual slot).
+  final Map<String, List<String>> _filmstripFrames = {};
+  final Set<String> _filmstripLoading = {};
+
+  /// Serialize FFmpeg so filmstrip doesn't fight preview proxy (CapCut-like).
+  Future<void> _ffmpegChain = Future.value();
+
+  Future<T> _runFfmpegJob<T>(Future<T> Function() job) {
+    final run = _ffmpegChain.then((_) => job());
+    _ffmpegChain = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  double get _pixelsPerSecond => AppResponsive.of(context).w(44);
+  double get _thumbH => AppResponsive.of(context).h(60);
+  double get _plusW => AppResponsive.of(context).w(52);
+  double get _stripPadLeft => AppResponsive.of(context).w(16);
+  double get _timelinePanelH => AppResponsive.of(context).h(200);
+  double get _timelineHeaderH => AppResponsive.of(context).h(48);
 
   static final _filters = <(String, ColorFilter?)>[
     ('Original', null),
     (
       'Warm',
       ColorFilter.matrix(<double>[
-        1.1, 0.05, 0, 0, 8,
-        0, 1.0, 0, 0, 4,
-        0, 0, 0.9, 0, 0,
-        0, 0, 0, 1, 0,
+        1.1,
+        0.05,
+        0,
+        0,
+        8,
+        0,
+        1.0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0.9,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
       ]),
     ),
     (
       'Cool',
       ColorFilter.matrix(<double>[
-        0.9, 0, 0.05, 0, 0,
-        0, 1.0, 0.05, 0, 0,
-        0.05, 0, 1.15, 0, 10,
-        0, 0, 0, 1, 0,
+        0.9,
+        0,
+        0.05,
+        0,
+        0,
+        0,
+        1.0,
+        0.05,
+        0,
+        0,
+        0.05,
+        0,
+        1.15,
+        0,
+        10,
+        0,
+        0,
+        0,
+        1,
+        0,
       ]),
     ),
     (
       'Mono',
       ColorFilter.matrix(<double>[
-        0.33, 0.33, 0.33, 0, 0,
-        0.33, 0.33, 0.33, 0, 0,
-        0.33, 0.33, 0.33, 0, 0,
-        0, 0, 0, 1, 0,
+        0.33,
+        0.33,
+        0.33,
+        0,
+        0,
+        0.33,
+        0.33,
+        0.33,
+        0,
+        0,
+        0.33,
+        0.33,
+        0.33,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
       ]),
     ),
     (
       'Vivid',
       ColorFilter.matrix(<double>[
-        1.2, 0, 0, 0, 0,
-        0, 1.15, 0, 0, 0,
-        0, 0, 1.1, 0, 0,
-        0, 0, 0, 1, 0,
+        1.2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1.15,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1.1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
       ]),
     ),
   ];
@@ -93,80 +419,484 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   void initState() {
     super.initState();
     _clips = List<String>.from(widget.videoPaths);
+    _ensureTrimSlots();
     _textFieldController = TextEditingController();
     if (_clips.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No videos selected')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('No videos selected')));
         context.pop();
       });
       return;
     }
-    _loadClip(0);
+    _stripController.addListener(_onStripScroll);
+    // Load active clip first — never open a second VideoPlayer on the same file
+    // (Oppo/MediaCodec OOM when probe + preview fight for the decoder).
+    unawaited(_bootstrapClips());
+  }
+
+  Future<void> _bootstrapClips() async {
+    await _loadClip(0);
+    if (!mounted) return;
+    // Other clips: duration via FFprobe only (no VideoPlayer).
+    for (var i = 1; i < _clips.length; i++) {
+      await _probeDurationOnly(_clips[i]);
+      if (!mounted) return;
+    }
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _tick?.cancel();
+    _scrubTimer?.cancel();
+    _stripController.removeListener(_onStripScroll);
+    _stripController.dispose();
     _textFieldController.dispose();
     _controller?.removeListener(_onVideoTick);
     _controller?.dispose();
+    _stopRevealOverlay();
     super.dispose();
   }
 
-  Future<void> _loadClip(int index) async {
+  Future<void> _probeDurationOnly(String path) async {
+    if (_clipDurationSec.containsKey(path)) return;
+    try {
+      final session = await FFprobeKit.getMediaInformation(path);
+      final info = session.getMediaInformation();
+      final sec = double.tryParse(info?.getDuration() ?? '') ?? 1.0;
+      _clipDurationSec[path] = math.max(0.1, sec);
+      // Filmstrip starts after preview opens — don't compete with player/proxy.
+    } catch (_) {
+      _clipDurationSec[path] = _clipDurationSec[path] ?? 1.0;
+    }
+  }
+
+  /// CapCut-style filmstrip: 1 thumbnail per second of source video.
+  Future<void> _ensureFilmstrip(String path) async {
+    final already = _filmstripFrames[path];
+    if (already != null && already.length > 1) return;
+    if (_filmstripLoading.contains(path)) return;
+    _filmstripLoading.add(path);
+    try {
+      final dur = _clipDurationSec[path] ?? 1.0;
+      final count = math.min(120, math.max(1, dur.ceil()));
+      final tmp = await getTemporaryDirectory();
+      final safe = path.hashCode.toRadixString(16);
+      final dir = Directory(p.join(tmp.path, 'vstrip2_$safe'));
+
+      if (await dir.exists()) {
+        final cached = await _listFilmstripJpgs(dir);
+        if (cached.length >= math.min(count, 2) ||
+            (count == 1 && cached.isNotEmpty)) {
+          _filmstripFrames[path] = cached;
+          if (mounted) setState(() {});
+          return;
+        }
+        try {
+          await dir.delete(recursive: true);
+        } catch (_) {}
+      }
+      await dir.create(recursive: true);
+
+      // Quick poster (queued) so strip isn't empty.
+      final poster = File(p.join(dir.path, 'f_0001.jpg'));
+      await _runFfmpegJob(() async {
+        final posterSession = await FFmpegKit.execute(
+          '-y -ss 0.1 -i "$path" -frames:v 1 -vf scale=120:-2 -q:v 6 '
+          '"${poster.path}"',
+        );
+        if (ReturnCode.isSuccess(await posterSession.getReturnCode()) &&
+            await poster.exists()) {
+          _filmstripFrames[path] = [poster.path];
+          if (mounted) setState(() {});
+        }
+      });
+
+      if (count <= 1) return;
+
+      // Full strip after preview is up — lower priority than proxy.
+      final pattern = p.join(dir.path, 'f_%04d.jpg');
+      await _runFfmpegJob(() async {
+        final session = await FFmpegKit.execute(
+          '-y -i "$path" -t ${dur.clamp(0.5, _maxClipSec)} '
+          '-vf "fps=1,scale=120:-2" -q:v 6 -frames:v $count "$pattern"',
+        );
+        final code = await session.getReturnCode();
+        if (!ReturnCode.isSuccess(code)) return;
+        final files = await _listFilmstripJpgs(dir);
+        if (files.isEmpty) return;
+        _filmstripFrames[path] = files;
+        if (mounted) setState(() {});
+      });
+    } catch (_) {
+      // Keep placeholders / poster.
+    } finally {
+      _filmstripLoading.remove(path);
+    }
+  }
+
+  Future<List<String>> _listFilmstripJpgs(Directory dir) async {
+    final files = <File>[];
+    await for (final e in dir.list()) {
+      if (e is File && e.path.toLowerCase().endsWith('.jpg')) {
+        files.add(e);
+      }
+    }
+    files.sort((a, b) => a.path.compareTo(b.path));
+    return [for (final f in files) f.path];
+  }
+
+  /// Light proxy only when hardware decode fails (CapCut opens original first).
+  Future<String?> _ensurePreviewProxy(String original) async {
+    final cached = _previewProxyPath[original];
+    if (cached != null && File(cached).existsSync()) return cached;
+
+    final tmp = await getTemporaryDirectory();
+    final out = File(
+      p.join(tmp.path, 'vproxy3_${original.hashCode.toRadixString(16)}.mp4'),
+    );
+    if (await out.exists() && await out.length() > 1024) {
+      _previewProxyPath[original] = out.path;
+      return out.path;
+    }
+
+    // Fast fallback: 540p @ 24fps, mono AAC — much quicker than full 720p re-encode.
+    return _runFfmpegJob(() async {
+      final session = await FFmpegKit.execute(
+        '-y -i "$original" -t $_maxClipSec '
+        '-vf "scale=\'min(540,iw)\':\'min(540,ih)\':force_original_aspect_ratio=decrease,fps=24" '
+        '-c:v libx264 -preset ultrafast -tune zerolatency -crf 32 -pix_fmt yuv420p '
+        '-c:a aac -ac 1 -ar 22050 -b:a 64k -movflags +faststart '
+        '"${out.path}"',
+      );
+      final code = await session.getReturnCode();
+      if (ReturnCode.isSuccess(code) && await out.exists()) {
+        _previewProxyPath[original] = out.path;
+        return out.path;
+      }
+      return null;
+    });
+  }
+
+  Future<bool> _openPlayer(
+    String path, {
+    required Duration seekTo,
+    required String originalPath,
+  }) async {
+    final next = VideoPlayerController.file(File(path));
+    try {
+      await next.initialize();
+      if (!mounted) {
+        await next.dispose();
+        return false;
+      }
+      next.addListener(_onVideoTick);
+      _controller = next;
+      final dur = next.value.duration;
+      _clipDurationSec[originalPath] = math.max(
+        0.1,
+        dur.inMilliseconds / 1000.0,
+      );
+      unawaited(_ensureFilmstrip(originalPath));
+      if (seekTo > Duration.zero && seekTo < dur) {
+        await next.seekTo(seekTo);
+      }
+      await next.setVolume(_volumeFor(_activeIndex));
+      await next.setPlaybackSpeed(_clipSpeed);
+      setState(() {
+        _ready = true;
+        _preparingProxy = false;
+        _duration = dur;
+        _position = next.value.position;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _syncStripToPlayhead();
+      });
+      return true;
+    } catch (_) {
+      try {
+        await next.dispose();
+      } catch (_) {}
+      return false;
+    }
+  }
+
+  Future<void> _loadClip(int index, {Duration seekTo = Duration.zero}) async {
     if (index < 0 || index >= _clips.length) return;
-    _tick?.cancel();
+    if (_loadingClip) return;
+    _loadingClip = true;
+    final original = _clips[index];
     final old = _controller;
     old?.removeListener(_onVideoTick);
     setState(() {
       _ready = false;
       _playing = false;
+      _preparingProxy = false;
       _activeIndex = index;
-      _position = Duration.zero;
+      _position = seekTo;
       _duration = Duration.zero;
     });
-    final next = VideoPlayerController.file(File(_clips[index]));
     try {
-      await next.initialize();
-      if (!mounted) {
-        await next.dispose();
+      await old?.dispose();
+    } catch (_) {}
+    _controller = null;
+
+    try {
+      // Probe in parallel with open — don't block first frame on ffprobe alone.
+      final probe = _probeDurationOnly(original);
+
+      // CapCut: open original immediately. Proxy only if decoder rejects it.
+      if (await _openPlayer(original, seekTo: seekTo, originalPath: original)) {
+        await probe;
+        final durSec =
+            _clipDurationSec[original] ?? _duration.inMilliseconds / 1000.0;
+        if (durSec > _maxClipSec + 0.5) {
+          await _controller?.dispose();
+          _controller = null;
+          if (!mounted) return;
+          setState(() => _ready = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please select a video of 5 minutes or less.'),
+            ),
+          );
+        }
         return;
       }
-      next.addListener(_onVideoTick);
-      await old?.dispose();
-      _controller = next;
-      setState(() {
-        _ready = true;
-        _duration = next.value.duration;
-        _position = next.value.position;
-      });
-    } catch (_) {
-      await next.dispose();
+
+      await probe;
       if (!mounted) return;
-      setState(() => _ready = false);
+      final durSec = _clipDurationSec[original] ?? 0;
+      if (durSec > _maxClipSec + 0.5) {
+        setState(() => _ready = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select a video of 5 minutes or less.'),
+          ),
+        );
+        return;
+      }
+
+      // Hardware decode failed → light proxy (shown as Preparing preview…).
+      setState(() => _preparingProxy = true);
+      final proxy = await _ensurePreviewProxy(original);
+      if (!mounted) return;
+      if (proxy != null &&
+          await _openPlayer(proxy, seekTo: seekTo, originalPath: original)) {
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _ready = false;
+        _preparingProxy = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open video')),
+        const SnackBar(
+          content: Text('Could not prepare this video for preview.'),
+        ),
       );
+    } finally {
+      _loadingClip = false;
+      if (mounted && _preparingProxy && !_ready) {
+        setState(() => _preparingProxy = false);
+      }
     }
+  }
+
+  double _sourceDuration(int index) {
+    final path = _clips[index];
+    final known = _clipDurationSec[path];
+    if (known != null && known > 0) return known;
+    // Active player may still be Duration.zero while proxy/init runs.
+    if (index == _activeIndex) {
+      final sec = _duration.inMilliseconds / 1000.0;
+      if (sec > 0) return sec;
+    }
+    return 1.0; // placeholder until duration is probed
+  }
+
+  double _trimIn(int index) {
+    _ensureTrimSlots();
+    if (_selectedClipIndex == index && _liveTrimIn != null) return _liveTrimIn!;
+    return _clipTrimIn[index] ?? 0;
+  }
+
+  double _trimOut(int index) {
+    _ensureTrimSlots();
+    if (_selectedClipIndex == index && _liveTrimOut != null) {
+      return _liveTrimOut!;
+    }
+    return _clipTrimOut[index] ?? _sourceDuration(index);
+  }
+
+  double _visibleDuration(int index) {
+    // Dart clamp requires lower <= upper; full can be 0 while loading.
+    final full = math.max(0.5, _sourceDuration(index));
+    final span = _trimOut(index) - _trimIn(index);
+    return span.clamp(0.5, full).toDouble();
+  }
+
+  double get _totalDurationSec {
+    var sum = 0.0;
+    for (var i = 0; i < _clips.length; i++) {
+      sum += _visibleDuration(i);
+    }
+    return math.max(0.1, sum);
+  }
+
+  double get _globalPositionSec {
+    var before = 0.0;
+    for (var i = 0; i < _activeIndex && i < _clips.length; i++) {
+      before += _visibleDuration(i);
+    }
+    final local = (_position.inMilliseconds / 1000.0) - _trimIn(_activeIndex);
+    return before + local.clamp(0.0, _visibleDuration(_activeIndex));
+  }
+
+  void _clearClipSelection() {
+    setState(() {
+      _selectedClipIndex = null;
+      _animSheetOpen = false;
+      _liveTrimIn = null;
+      _liveTrimOut = null;
+      _trimDragging = false;
+    });
+    _stopRevealOverlay();
+  }
+
+  void _selectClip(int index) {
+    setState(() {
+      _selectedClipIndex = index;
+      _tool = null;
+      _animSheetOpen = false;
+    });
+    if (_activeIndex != index) unawaited(_loadClip(index));
+  }
+
+  String _fmtSec(double sec) {
+    final s = sec.floor().clamp(0, 99999);
+    final m = (s ~/ 60).toString().padLeft(2, '0');
+    final r = (s % 60).toString().padLeft(2, '0');
+    return '$m:$r';
   }
 
   void _onVideoTick() {
     final c = _controller;
     if (c == null || !mounted) return;
     final v = c.value;
-    setState(() {
-      _position = v.position;
-      _duration = v.duration;
-      _playing = v.isPlaying;
-    });
+    final wasPlaying = _playing;
+    _position = v.position;
+    _duration = v.duration;
+    _playing = v.isPlaying;
+
+    // Slideshow-style: strip follows playhead while playing.
+    if (_playing && !_userScrubbing) {
+      _syncStripToPlayhead();
+    }
+
+    // CapCut In-anim: end overlay when past user duration.
+    _syncRevealOverlayFromMain();
+
+    final now = DateTime.now();
+    final dueUi =
+        _lastUiTick == null ||
+        now.difference(_lastUiTick!) >= const Duration(milliseconds: 50) ||
+        wasPlaying != _playing;
+    if (dueUi) {
+      _lastUiTick = now;
+      setState(() {});
+    }
+
+    final out = _trimOut(_activeIndex);
+    final posSec = v.position.inMilliseconds / 1000.0;
+    if (v.isInitialized && v.isPlaying && posSec >= out - 0.04) {
+      unawaited(_playNextOrStop());
+      return;
+    }
     if (v.isInitialized &&
         v.position >= v.duration &&
         v.duration > Duration.zero &&
         !v.isPlaying) {
-      _playNextOrStop();
+      unawaited(_playNextOrStop());
+    }
+  }
+
+  void _syncStripToPlayhead() {
+    if (!_stripController.hasClients) return;
+    final target = _globalPositionSec * _pixelsPerSecond;
+    final max = _stripController.position.maxScrollExtent;
+    if (max <= 0) return;
+    final next = target.clamp(0.0, max).toDouble();
+    if ((_stripController.offset - next).abs() < 0.5) return;
+    _syncingStrip = true;
+    _stripController.jumpTo(next);
+    // jumpTo may notify listeners after this returns — keep flag until next frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncingStrip = false;
+    });
+  }
+
+  void _onStripScroll() {
+    // Ignore programmatic jumps while video is driving the strip.
+    if (_syncingStrip || !_stripController.hasClients) return;
+    if (_playing) {
+      // User dragged while playing → pause then scrub (slideshow behavior).
+      unawaited(_controller?.pause());
+    }
+    _userScrubbing = true;
+    final t = (_stripController.offset / _pixelsPerSecond)
+        .clamp(0.0, _totalDurationSec)
+        .toDouble();
+    if ((t - _lastScrubSec).abs() < 0.04) return;
+    _lastScrubSec = t;
+    setState(() => _position = Duration(milliseconds: (t * 1000).round()));
+    _scrubTimer?.cancel();
+    _scrubTimer = Timer(const Duration(milliseconds: 50), () {
+      unawaited(_seekGlobal(t, fromScrub: true));
+    });
+  }
+
+  Future<void> _seekGlobal(double globalSec, {bool fromScrub = false}) async {
+    if (_clips.isEmpty) return;
+    _userScrubbing = fromScrub;
+    var remaining = globalSec;
+    var index = 0;
+    for (; index < _clips.length; index++) {
+      final d = _visibleDuration(index);
+      if (remaining <= d || index == _clips.length - 1) break;
+      remaining -= d;
+    }
+    final sourceLocal = _trimIn(index) + remaining;
+    final local = Duration(
+      milliseconds: (sourceLocal * 1000).round().clamp(0, 1 << 30),
+    );
+    if (index != _activeIndex) {
+      final wasPlaying = _playing;
+      await _loadClip(index, seekTo: local);
+      if (wasPlaying && !fromScrub) await _controller?.play();
+    } else {
+      await _controller?.seekTo(local);
+      if (mounted) {
+        setState(() => _position = local);
+      }
+    }
+    // CapCut: In-anim follows playhead while scrubbing.
+    final reveal = _revealFor(_activeIndex);
+    if (reveal != null) {
+      unawaited(
+        _ensureRevealFrames(reveal).then((_) {
+          if (mounted) _syncRevealOverlayFromMain();
+        }),
+      );
+    } else {
+      _syncRevealOverlayFromMain();
+    }
+    if (fromScrub) {
+      Future<void>.delayed(const Duration(milliseconds: 120), () {
+        if (mounted) _userScrubbing = false;
+      });
     }
   }
 
@@ -175,29 +905,258 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     if (c == null || !_ready) return;
     if (c.value.isPlaying) {
       await c.pause();
+      // CapCut: keep In-anim visible at playhead while paused.
+      _syncRevealOverlayFromMain();
     } else {
-      if (c.value.position >= c.value.duration &&
-          c.value.duration > Duration.zero) {
-        await c.seekTo(Duration.zero);
+      _userScrubbing = false;
+      _scrubTimer?.cancel();
+      final inn = _trimIn(_activeIndex);
+      final out = _trimOut(_activeIndex);
+      final pos = c.value.position.inMilliseconds / 1000.0;
+      // CapCut: In-anim only from clip start — restart if at/near start or ended.
+      final restartFromStart =
+          pos < inn + 0.15 || pos >= out - 0.05 || pos < inn;
+      if (restartFromStart) {
+        await c.seekTo(Duration(milliseconds: (inn * 1000).round()));
+      }
+      final reveal = _revealFor(_activeIndex);
+      final revealDur = _revealDurationFor(_activeIndex);
+      if (reveal != null && restartFromStart) {
+        await _startRevealOverlay(reveal);
+      } else if (reveal != null) {
+        final local = pos - inn;
+        if (local >= 0 && local < revealDur) {
+          await _startRevealOverlay(reveal, seekMainToStart: false);
+        } else {
+          _stopRevealOverlay();
+        }
+      } else {
+        _stopRevealOverlay();
       }
       await c.play();
+      _syncStripToPlayhead();
     }
   }
 
   Future<void> _playNextOrStop() async {
+    _stopRevealOverlay();
     if (_activeIndex + 1 < _clips.length) {
-      await _loadClip(_activeIndex + 1);
+      final next = _activeIndex + 1;
+      await _loadClip(
+        next,
+        seekTo: Duration(milliseconds: (_trimIn(next) * 1000).round()),
+      );
+      final reveal = _revealFor(next);
+      if (reveal != null) await _startRevealOverlay(reveal);
       await _controller?.play();
+      _syncStripToPlayhead();
     } else {
       await _controller?.pause();
-      await _controller?.seekTo(Duration.zero);
+      final inn = _trimIn(_activeIndex);
+      await _controller?.seekTo(Duration(milliseconds: (inn * 1000).round()));
     }
   }
 
-  String _fmt(Duration d) {
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$m:$s';
+  Future<String> _revealFilePath(VideoRevealAnim anim) async {
+    return _copyRevealAsset(anim.assetPath, 'vreveal_${anim.id}_color');
+  }
+
+  Future<String> _revealMatteFilePath(VideoRevealAnim anim) async {
+    final path = anim.alphaMatteAssetPath;
+    if (path == null) throw StateError('Reveal has no alpha matte');
+    return _copyRevealAsset(path, 'vreveal_${anim.id}_alpha');
+  }
+
+  Future<String> _copyRevealAsset(String assetPath, String cacheName) async {
+    final cached = _revealAssetFiles[assetPath];
+    if (cached != null && File(cached).existsSync()) return cached;
+    final tmp = await getTemporaryDirectory();
+    final out = File(p.join(tmp.path, '$cacheName.mp4'));
+    if (!await out.exists()) {
+      final data = await rootBundle.load(assetPath);
+      await out.writeAsBytes(data.buffer.asUint8List(), flush: true);
+    }
+    _revealAssetFiles[assetPath] = out.path;
+    return out.path;
+  }
+
+  Future<List<String>> _listRevealFrames(
+    Directory dir, {
+    required Set<String> exts,
+  }) async {
+    final files = <File>[];
+    await for (final e in dir.list()) {
+      if (e is! File) continue;
+      final lower = e.path.toLowerCase();
+      if (exts.any(lower.endsWith)) files.add(e);
+    }
+    files.sort((a, b) => a.path.compareTo(b.path));
+    return [for (final f in files) f.path];
+  }
+
+  /// Decode In-anim frames once. Alpha-matte assets stay RGBA PNGs; legacy
+  /// glow assets remain JPEGs for Screen blend.
+  Future<List<String>> _ensureRevealFrames(VideoRevealAnim anim) {
+    final hit = _revealFrameFiles[anim.id];
+    if (hit != null && hit.isNotEmpty) return Future.value(hit);
+    return _revealFrameJobs.putIfAbsent(anim.id, () async {
+      final path = await _revealFilePath(anim);
+      final mattePath = anim.alphaMatteAssetPath == null
+          ? null
+          : await _revealMatteFilePath(anim);
+      final tmp = await getTemporaryDirectory();
+      final isAlphaMatte = mattePath != null;
+      final extension = isAlphaMatte ? '.png' : '.jpg';
+      final dir = Directory(
+        p.join(
+          tmp.path,
+          isAlphaMatte
+              ? 'vreveal_frames_${anim.id}_v11_alpha'
+              : anim.portalReveal
+              ? 'vreveal_frames_${anim.id}_v11_portal'
+              : 'vreveal_frames_${anim.id}_v11',
+        ),
+      );
+      if (await dir.exists()) {
+        final existing = await _listRevealFrames(dir, exts: {extension});
+        if (existing.length >= 4) {
+          _revealFrameFiles[anim.id] = existing;
+          return existing;
+        }
+        try {
+          await dir.delete(recursive: true);
+        } catch (_) {}
+      }
+      await dir.create(recursive: true);
+      final pattern = p.join(dir.path, 'r_%04d$extension');
+      await _runFfmpegJob(() async {
+        if (mattePath != null) {
+          final session = await FFmpegKit.execute(
+            '-y -i "$path" -i "$mattePath" '
+            '-filter_complex "'
+            '[0:v]fps=24,scale=540:-2,setsar=1,format=rgb24[fg];'
+            '[1:v]fps=24,scale=540:-2,setsar=1,format=gray[matte];'
+            '[fg][matte]alphamerge,format=rgba[out]" '
+            '-map "[out]" -vsync 0 "$pattern"',
+          );
+          final code = await session.getReturnCode();
+          if (!ReturnCode.isSuccess(code)) {
+            final logs = await session.getAllLogsAsString();
+            throw Exception('Alpha reveal frame extraction failed: $logs');
+          }
+          return;
+        }
+        final vf = anim.portalReveal
+            ? 'fps=15,scale=540:-2,colorkey=0x00FF00:0.35:0.1,format=rgba,format=rgb24'
+            : 'fps=15,scale=540:-2';
+        final session = await FFmpegKit.execute(
+          '-y -i "$path" -vf "$vf" -q:v 5 "$pattern"',
+        );
+        final code = await session.getReturnCode();
+        if (!ReturnCode.isSuccess(code)) {
+          throw Exception('In-anim frame extract failed');
+        }
+      });
+      final files = await _listRevealFrames(dir, exts: {extension});
+      if (files.isEmpty) throw Exception('In-anim frames empty');
+      _revealFrameFiles[anim.id] = files;
+      return files;
+    });
+  }
+
+  /// CapCut In-anim: FX screen-blended over the original clip (like leaf overlay).
+  Widget _buildRevealOverlayLayer() {
+    final frames = _revealFrameFiles[_activeRevealId];
+    if (frames == null || frames.isEmpty) return const SizedBox.shrink();
+    final fi = _revealFrameIndex.clamp(0, frames.length - 1);
+    return _BlendMask(
+      blendMode: VideoRevealAnim.byId(_activeRevealId)?.alphaMatteAssetPath != null
+          ? BlendMode.srcOver
+          : BlendMode.screen,
+      child: Image.file(
+        File(frames[fi]),
+        key: ValueKey('reveal_$fi'),
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+      ),
+    );
+  }
+
+  void _stopRevealOverlay() {
+    if (!_revealOverlayActive && _activeRevealId == null) return;
+    _revealOverlayActive = false;
+    _activeRevealId = null;
+    _revealFrameIndex = 0;
+    if (mounted) setState(() {});
+  }
+
+  /// CapCut: show In-anim whenever playhead is inside the clip-start window.
+  void _syncRevealOverlayFromMain() {
+    final reveal = _revealFor(_activeIndex);
+    if (reveal == null) {
+      if (_revealOverlayActive) _stopRevealOverlay();
+      return;
+    }
+    final frames = _revealFrameFiles[reveal.id];
+    if (frames == null || frames.isEmpty) return;
+
+    final inn = _trimIn(_activeIndex);
+    final dur = _revealDurationFor(_activeIndex);
+    final local =
+        (_controller?.value.position.inMilliseconds ?? 0) / 1000.0 - inn;
+    if (local < -0.02 || local >= dur) {
+      if (_revealOverlayActive) _stopRevealOverlay();
+      return;
+    }
+
+    final idx =
+        (local / dur * frames.length).floor().clamp(0, frames.length - 1);
+    final needShow =
+        !_revealOverlayActive ||
+        _activeRevealId != reveal.id ||
+        idx != _revealFrameIndex;
+    if (!needShow) return;
+    _activeRevealId = reveal.id;
+    _revealOverlayActive = true;
+    _revealFrameIndex = idx;
+    if (mounted) setState(() {});
+  }
+
+  /// CapCut: arm In-anim at clip start (overlay stays while playhead in range).
+  Future<void> _startRevealOverlay(
+    VideoRevealAnim anim, {
+    bool seekMainToStart = true,
+  }) async {
+    final main = _controller;
+    if (main == null || !_ready) return;
+    try {
+      final frames = await _ensureRevealFrames(anim);
+      if (!mounted || frames.isEmpty) return;
+      if (seekMainToStart) {
+        final inn = _trimIn(_activeIndex);
+        await main.seekTo(Duration(milliseconds: (inn * 1000).round()));
+      }
+      _activeRevealId = anim.id;
+      _revealOverlayActive = true;
+      _revealFrameIndex = 0;
+      _syncRevealOverlayFromMain();
+      if (mounted) setState(() {});
+    } catch (_) {
+      _stopRevealOverlay();
+    }
+  }
+
+  /// Live preview when picking an In-anim (CapCut: seek start + play overlay).
+  Future<void> _playRevealAtClipStart(
+    VideoRevealAnim anim, {
+    required bool playMain,
+  }) async {
+    await _startRevealOverlay(anim, seekMainToStart: true);
+    if (playMain) {
+      await _controller?.play();
+      _syncStripToPlayhead();
+    }
   }
 
   void _selectTool(VideoEditorTool t) {
@@ -209,7 +1168,13 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       '/gallery?type=video&insert=1',
     );
     if (!mounted || result == null || result.isEmpty) return;
-    setState(() => _clips.addAll(result));
+    setState(() {
+      _clips.addAll(result);
+      _ensureTrimSlots();
+    });
+    for (final path in result) {
+      unawaited(_probeDurationOnly(path));
+    }
   }
 
   @override
@@ -232,9 +1197,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               label: 'Export',
               onPressed: () {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Video export coming soon'),
-                  ),
+                  const SnackBar(content: Text('Video export coming soon')),
                 );
               },
             ),
@@ -246,90 +1209,198 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           Expanded(
             child: ColoredBox(
               color: _bgColor,
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: _aspectW / _aspectH,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (_ready && _controller != null)
-                        _buildPlayer(filter)
-                      else
-                        const Center(
-                          child: CircularProgressIndicator(
+              // CapCut-style: full preview is canvas; video keeps native
+              // aspect (contain). In-anim / overlays clip to video rect only.
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  if (!_ready || _controller == null) {
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(
                             color: AppColors.primary,
                           ),
-                        ),
-                      if (_textOverlay != null && _textOverlay!.isNotEmpty)
-                        Align(
-                          alignment: Alignment.bottomCenter,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Text(
-                              _textOverlay!,
-                              textAlign: TextAlign.center,
+                          if (_preparingProxy) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Preparing preview…',
                               style: TextStyle(
-                                color: Colors.white,
-                                fontSize: rs.sp(22),
-                                fontWeight: FontWeight.w700,
-                                shadows: const [
-                                  Shadow(
-                                    blurRadius: 8,
-                                    color: Colors.black54,
-                                  ),
-                                ],
+                                color: Colors.white70,
+                                fontSize: rs.sp(13),
                               ),
                             ),
-                          ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }
+
+                  final videoSize = _controller!.value.size;
+                  final videoAr = (videoSize.width > 0 && videoSize.height > 0)
+                      ? videoSize.width / videoSize.height
+                      : (_aspectW / _aspectH);
+                  final maxW = constraints.maxWidth;
+                  final maxH = constraints.maxHeight;
+                  late final double frameW;
+                  late final double frameH;
+                  if (maxW / maxH > videoAr) {
+                    frameH = maxH;
+                    frameW = frameH * videoAr;
+                  } else {
+                    frameW = maxW;
+                    frameH = frameW / videoAr;
+                  }
+
+                  return Center(
+                    child: SizedBox(
+                      width: frameW,
+                      height: frameH,
+                      child: ClipRect(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          clipBehavior: Clip.hardEdge,
+                          children: [
+                            _buildPlayer(filter),
+                            // CapCut In-anim — keyed portal over clip (export look).
+                            if (_revealOverlayActive &&
+                                _activeRevealId != null &&
+                                (_revealFrameFiles[_activeRevealId]
+                                        ?.isNotEmpty ??
+                                    false))
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: _buildRevealOverlayLayer(),
+                                ),
+                              ),
+                            if (_textOverlay != null &&
+                                _textOverlay!.isNotEmpty)
+                              Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(
+                                    _textOverlay!,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: rs.sp(22),
+                                      fontWeight: FontWeight.w700,
+                                      shadows: const [
+                                        Shadow(
+                                          blurRadius: 8,
+                                          color: Colors.black54,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (_stickerLabel != null)
+                              Align(
+                                alignment: Alignment.topRight,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Text(
+                                    _stickerLabel!,
+                                    style: TextStyle(fontSize: rs.sp(36)),
+                                  ),
+                                ),
+                              ),
+                            // Selection outline (teal — avoid FX green-screen color).
+                            if (_selectedClipIndex != null)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: AppColors.primary,
+                                        width: 2,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                      if (_stickerLabel != null)
-                        Align(
-                          alignment: Alignment.topRight,
-                          child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Text(
-                              _stickerLabel!,
-                              style: TextStyle(fontSize: rs.sp(36)),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),
-          _buildPlaybackBar(rs),
-          _buildTimeline(rs),
-          if (_tool != null) _buildToolPanel(rs),
-          _buildBottomTools(rs),
+          if (_animSheetOpen)
+            _buildClipAnimationSheet(rs)
+          else
+            _buildTimelinePanel(rs),
+          if (_selectedClipIndex == null && _tool != null) _buildToolPanel(rs),
+          if (_selectedClipIndex != null)
+            _buildClipToolsNavbar(rs)
+          else
+            _buildBottomTools(rs),
         ],
       ),
     );
   }
 
+  /// Fills the already-sized video frame (native aspect, CapCut contain).
   Widget _buildPlayer(ColorFilter? filter) {
-    final player = FittedBox(
-      fit: BoxFit.contain,
-      child: SizedBox(
-        width: _controller!.value.size.width,
-        height: _controller!.value.size.height,
-        child: VideoPlayer(_controller!),
-      ),
-    );
+    final player = VideoPlayer(_controller!);
     if (filter == null) return player;
     return ColorFiltered(colorFilter: filter, child: player);
   }
 
-  Widget _buildPlaybackBar(AppResponsive rs) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(rs.w(12), rs.h(8), rs.w(12), rs.h(4)),
-      child: Row(
-        children: [
-          SizedBox(
-            width: rs.w(96),
+  /// Slideshow-style chrome: time/play/undo + center playhead filmstrip.
+  Widget _buildTimelinePanel(AppResponsive rs) {
+    return Container(
+      height: _timelinePanelH,
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final playheadX = constraints.maxWidth / 2;
+          return Stack(
+            children: [
+              Column(
+                children: [
+                  SizedBox(
+                    height: _timelineHeaderH,
+                    child: Padding(
+                      padding: EdgeInsets.only(left: rs.w(14), right: rs.w(6)),
+                      child: _timelineHeaderRow(rs),
+                    ),
+                  ),
+                  Expanded(child: _videoFilmstrip(rs, playheadX)),
+                ],
+              ),
+              Positioned(
+                left: playheadX - 1,
+                top: _timelineHeaderH - rs.h(6),
+                bottom: rs.h(36),
+                child: IgnorePointer(
+                  child: Container(width: 2, color: AppColors.primary),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _timelineHeaderRow(AppResponsive rs) {
+    return Row(
+      children: [
+        SizedBox(
+          width: rs.w(96),
+          child: Align(
+            alignment: Alignment.centerLeft,
             child: Text(
-              '${_fmt(_position)} / ${_fmt(_duration)}',
+              '${_fmtSec(_globalPositionSec)} / ${_fmtSec(_totalDurationSec)}',
               style: TextStyle(
                 fontSize: rs.sp(12),
                 color: AppColors.textMuted,
@@ -337,157 +1408,773 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               ),
             ),
           ),
-          Expanded(
-            child: Center(
-              child: IconButton(
-                onPressed: _ready ? _togglePlay : null,
-                icon: Icon(
-                  _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                  size: rs.r(32),
-                  color: Colors.black87,
-                ),
+        ),
+        Expanded(
+          child: Center(
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              onPressed: _ready ? _togglePlay : null,
+              icon: Icon(
+                _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: rs.r(32),
+                color: _ready ? Colors.black87 : Colors.black26,
               ),
             ),
           ),
-          SizedBox(
-            width: rs.w(96),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+        ),
+        SizedBox(
+          width: rs.w(96),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Icon(
+                Icons.undo_rounded,
+                color: AppColors.textMuted,
+                size: rs.r(22),
+              ),
+              SizedBox(width: rs.w(12)),
+              Icon(
+                Icons.redo_rounded,
+                color: AppColors.textMuted,
+                size: rs.r(22),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  bool get _hasMusicLane => _musicTitle != null;
+  bool get _hasEffectLane => _effectName != null && _effectName != 'None';
+
+  Widget _videoFilmstrip(AppResponsive rs, double playheadX) {
+    final leftPad = playheadX.clamp(0.0, 800.0).toDouble();
+    final pps = _pixelsPerSecond;
+    final thumbH = _thumbH;
+    final totalW = _totalDurationSec * pps;
+    final hasMusic = _hasMusicLane;
+    final hasEffect = _hasEffectLane;
+    final lineH = rs.h(6);
+    final rulerH = rs.h(18);
+    final gapH = rs.h(4);
+    final underH = (!hasMusic && !hasEffect)
+        ? 0.0
+        : (hasMusic && hasEffect ? lineH * 2 + rs.h(6) : lineH + rs.h(4));
+    const handleW = _SelectedVideoClip.handleW;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () {
+        if (_selectedClipIndex != null) _clearClipSelection();
+      },
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ListView(
+              controller: _stripController,
+              scrollDirection: Axis.horizontal,
+              physics: (_trimDragging)
+                  ? const NeverScrollableScrollPhysics()
+                  : const BouncingScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
               children: [
-                Icon(Icons.undo_rounded, color: AppColors.textMuted, size: rs.r(22)),
-                SizedBox(width: rs.w(12)),
-                Icon(Icons.redo_rounded, color: AppColors.textMuted, size: rs.r(22)),
+                SizedBox(
+                  width: totalW,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        height: rulerH,
+                        width: totalW,
+                        child: CustomPaint(
+                          painter: _TimelineRulerPainter(
+                            totalSec: _totalDurationSec,
+                            pixelsPerSecond: pps,
+                            labelStyle: TextStyle(
+                              fontSize: rs.sp(10),
+                              color: AppColors.textMuted,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: gapH),
+                      SizedBox(
+                        height: thumbH,
+                        width: totalW,
+                        child: Row(
+                          children: [
+                            for (var i = 0; i < _clips.length; i++)
+                              _clipFilmstripTile(
+                                index: i,
+                                width: _visibleDuration(i) * pps,
+                                height: thumbH,
+                                pps: pps,
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (underH > 0) ...[
+                        SizedBox(height: rs.h(4)),
+                        if (hasEffect)
+                          _collapsedLane(
+                            width: totalW,
+                            height: lineH,
+                            color: const Color(0xFF7C4DFF),
+                            onTap: () => _selectTool(VideoEditorTool.effects),
+                          ),
+                        if (hasEffect && hasMusic) SizedBox(height: rs.h(2)),
+                        if (hasMusic)
+                          _collapsedLane(
+                            width: totalW,
+                            height: lineH,
+                            color: AppColors.primary,
+                            onTap: () => _selectTool(VideoEditorTool.music),
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
+          // Selection chrome sits outside ListView (slideshow pattern) so
+          // scroll is applied once via leftPad + startPx - scroll.
+          if (_selectedClipIndex != null)
+            ListenableBuilder(
+              listenable: _stripController,
+              builder: (context, _) {
+                final sel = _selectedClipIndex!;
+                if (sel < 0 || sel >= _clips.length) {
+                  return const SizedBox.shrink();
+                }
+                var startPx = 0.0;
+                for (var i = 0; i < sel; i++) {
+                  startPx += _visibleDuration(i) * pps;
+                }
+                final clipW = _visibleDuration(sel) * pps;
+                final scroll = _stripController.hasClients
+                    ? _stripController.offset
+                    : 0.0;
+                final left = leftPad + startPx - scroll - handleW;
+                return Positioned(
+                  left: left,
+                  top: rulerH + gapH,
+                  width: clipW + handleW * 2,
+                  height: thumbH,
+                  child: _SelectedVideoClip(
+                    height: thumbH,
+                    durationSec: _visibleDuration(sel),
+                    pixelsPerSecond: pps,
+                    thumbBuilder: (w, h) => _clipThumbContent(sel, w, h, pps),
+                    // Trim handles: pan strip with finger, don't scrub-seek.
+                    onScrollTimeline: (dx) {
+                      if (!_stripController.hasClients) return;
+                      final next = (_stripController.offset - dx).clamp(
+                        0.0,
+                        _stripController.position.maxScrollExtent,
+                      );
+                      _syncingStrip = true;
+                      _stripController.jumpTo(next);
+                      _syncingStrip = false;
+                    },
+                    // Body drag: CapCut scrub — move timeline + seek playhead.
+                    onPanScrub: (dx) {
+                      if (!_stripController.hasClients) return;
+                      if (_playing) unawaited(_controller?.pause());
+                      final next = (_stripController.offset - dx).clamp(
+                        0.0,
+                        _stripController.position.maxScrollExtent,
+                      );
+                      _userScrubbing = true;
+                      _stripController.jumpTo(next);
+                      final t = (next / pps)
+                          .clamp(0.0, _totalDurationSec)
+                          .toDouble();
+                      _scrubTimer?.cancel();
+                      _scrubTimer = Timer(const Duration(milliseconds: 40), () {
+                        unawaited(_seekGlobal(t, fromScrub: true));
+                      });
+                    },
+                    onDragStart: () {
+                      setState(() => _trimDragging = true);
+                    },
+                    onLiveTrim: (inn, out) {
+                      setState(() {
+                        _liveTrimIn = inn;
+                        _liveTrimOut = out;
+                      });
+                    },
+                    onDragEnd: () {
+                      setState(() {
+                        _trimDragging = false;
+                        _liveTrimIn = null;
+                        _liveTrimOut = null;
+                      });
+                    },
+                    onCommitTrim: (inn, out) {
+                      _ensureTrimSlots();
+                      setState(() {
+                        _clipTrimIn[sel] = inn;
+                        _clipTrimOut[sel] = out;
+                      });
+                      unawaited(
+                        _controller?.seekTo(
+                          Duration(milliseconds: (inn * 1000).round()),
+                        ),
+                      );
+                    },
+                    sourceIn: _trimIn(sel),
+                    sourceOut: _trimOut(sel),
+                    sourceDuration: _sourceDuration(sel),
+                  ),
+                );
+              },
+            ),
+          if (_selectedClipIndex == null)
+            Positioned(
+              left: _stripPadLeft,
+              top: rulerH + gapH,
+              height: thumbH,
+              child: GestureDetector(
+                onTap: _addMoreClips,
+                child: Container(
+                  width: _plusW,
+                  height: thumbH,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: AppColors.primaryGradient,
+                    borderRadius: BorderRadius.circular(4),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x22000000),
+                        blurRadius: 6,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.add, color: Colors.white, size: 28),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildTimeline(AppResponsive rs) {
-    final trackH = rs.h(56);
-    return Container(
-      height: rs.h(118),
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: AppColors.border)),
+  Widget _collapsedLane({
+    required double width,
+    required double height,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(3),
+        ),
       ),
-      child: Column(
-        children: [
-          Expanded(
-            child: Stack(
+    );
+  }
+
+  Widget _clipThumbContent(int index, double width, double height, double pps) {
+    final path = _clips[index];
+    final frames = _filmstripFrames[path] ?? const <String>[];
+    final slots = math.min(120, math.max(1, (width / pps).ceil()));
+    final inn = _trimIn(index);
+    final reveal = _revealFor(index);
+    // CapCut: solid white In-anim block at clip start (width = anim duration).
+    final animDur = reveal == null ? 0.0 : _revealDurationFor(index);
+    final markerW = reveal == null
+        ? 0.0
+        : (animDur * pps).clamp(10.0, math.max(10.0, width)).toDouble();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Row(
               children: [
-                ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: rs.w(12),
-                    vertical: rs.h(8),
-                  ),
-                  children: [
-                    GestureDetector(
-                      onTap: _addMoreClips,
-                      child: Container(
-                        width: trackH,
-                        height: trackH,
-                        margin: EdgeInsets.only(right: rs.w(8)),
-                        decoration: BoxDecoration(
-                          gradient: AppColors.primaryGradient,
-                          borderRadius: BorderRadius.circular(rs.r(8)),
+                for (var s = 0; s < slots; s++)
+                  Expanded(
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          right: BorderSide(color: Colors.white70, width: 1),
                         ),
-                        child: const Icon(Icons.add, color: Colors.white, size: 28),
+                        color: Color(0xFF1C1C1E),
+                      ),
+                      child: Builder(
+                        builder: (_) {
+                          if (frames.isEmpty) {
+                            return const Center(
+                              child: Icon(
+                                Icons.videocam_rounded,
+                                color: Colors.white38,
+                                size: 18,
+                              ),
+                            );
+                          }
+                          final srcSec = (inn + s).floor();
+                          final fi = srcSec.clamp(0, frames.length - 1);
+                          return Image.file(
+                            File(frames[fi]),
+                            fit: BoxFit.cover,
+                            filterQuality: FilterQuality.low,
+                            gaplessPlayback: true,
+                            errorBuilder: (_, _, _) =>
+                                const ColoredBox(color: Color(0xFF1C1C1E)),
+                          );
+                        },
                       ),
                     ),
-                    for (var i = 0; i < _clips.length; i++) ...[
-                      if (i > 0)
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: rs.w(4)),
-                          child: CircleAvatar(
-                            radius: rs.r(10),
-                            backgroundColor: AppColors.surfaceAlt,
-                            child: Icon(
-                              Icons.swap_horiz,
-                              size: rs.r(12),
-                              color: AppColors.primary,
+                  ),
+              ],
+            ),
+            // CapCut In-marker: white rounded block + duration (e.g. 1.0s).
+            if (markerW > 0)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: markerW,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    borderRadius: const BorderRadius.horizontal(
+                      right: Radius.circular(6),
+                    ),
+                  ),
+                  padding: const EdgeInsets.only(left: 4, top: 3, right: 4),
+                  alignment: Alignment.topLeft,
+                  child: Text(
+                    '${animDur.toStringAsFixed(1)}s',
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: const TextStyle(
+                      color: Color(0xFF111111),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _clipFilmstripTile({
+    required int index,
+    required double width,
+    required double height,
+    required double pps,
+  }) {
+    // Deselected by default — no cyan/blur border. Selection chrome is overlay.
+    return GestureDetector(
+      onTap: () => _selectClip(index),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: _clipThumbContent(index, width, height, pps),
+      ),
+    );
+  }
+
+  /// CapCut Animation page: In/Out + FX thumbs + duration slider.
+  Widget _buildClipAnimationSheet(AppResponsive rs) {
+    final sel = _selectedClipIndex;
+    final selectedId = (sel != null && sel < _clipRevealIds.length)
+        ? _clipRevealIds[sel]
+        : null;
+    final options = _animPhase == _VideoAnimPhase.inAnimation
+        ? VideoRevealAnim.catalog
+        : const <VideoRevealAnim>[];
+    final hasAnim = selectedId != null;
+    final durSec = (sel != null && hasAnim) ? _revealDurationFor(sel) : 0.0;
+    final maxDur = (sel != null)
+        ? math.min(5.0, math.max(0.5, _visibleDuration(sel)))
+        : 5.0;
+
+    return SectionSheet(
+      title: 'Animation',
+      height: rs.h(210),
+      compactHeader: true,
+      onClose: () {
+        setState(() {
+          _animSheetOpen = false;
+          _revealDurDrag = null;
+        });
+        _stopRevealOverlay();
+      },
+      onConfirm: () {
+        setState(() {
+          _animSheetOpen = false;
+          _revealDurDrag = null;
+        });
+        _stopRevealOverlay();
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 8, 0),
+            child: Row(
+              children: [
+                for (final phase in _VideoAnimPhase.values)
+                  InkWell(
+                    onTap: () => setState(() => _animPhase = phase),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Column(
+                        children: [
+                          Text(
+                            switch (phase) {
+                              _VideoAnimPhase.inAnimation => 'In',
+                              _VideoAnimPhase.outAnimation => 'Out',
+                            },
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: _animPhase == phase
+                                  ? AppColors.textDark
+                                  : AppColors.textMuted,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                        ),
-                      GestureDetector(
-                        onTap: () => _loadClip(i),
-                        child: Container(
-                          width: rs.w(88),
-                          height: trackH,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(rs.r(8)),
-                            border: Border.all(
-                              color: i == _activeIndex
-                                  ? AppColors.primary
-                                  : AppColors.border,
-                              width: i == _activeIndex ? 2 : 1,
-                            ),
-                            color: AppColors.surfaceAlt,
+                          Container(
+                            width: 18,
+                            height: 2,
+                            color: _animPhase == phase
+                                ? AppColors.textDark
+                                : Colors.transparent,
                           ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Stack(
-                            fit: StackFit.expand,
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 2),
+          Expanded(
+            child: _animPhase == _VideoAnimPhase.outAnimation
+                ? const Center(
+                    child: Text(
+                      'Out animations coming soon',
+                      style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(8, 0, 12, 2),
+                    itemCount: options.length + 1,
+                    separatorBuilder: (_, _) => const SizedBox(width: 0),
+                    itemBuilder: (context, i) {
+                      if (i == 0) {
+                        final isSelected = selectedId == null;
+                        return InkWell(
+                          onTap: () {
+                            if (sel == null) return;
+                            _ensureTrimSlots();
+                            setState(() {
+                              _clipRevealIds[sel] = null;
+                              _clipRevealDurSec[sel] = null;
+                            });
+                            _stopRevealOverlay();
+                          },
+                          child: SizedBox(
+                            width: 78,
+                            child: Column(
+                              children: [
+                                SizedBox(
+                                  width: 56,
+                                  height: 56,
+                                  child: PrimarySelectedBorder(
+                                    selected: isSelected,
+                                    borderRadius: 4,
+                                    width: 2,
+                                    unselectedColor: Colors.transparent,
+                                    unselectedWidth: 0,
+                                    child: const ColoredBox(
+                                      color: Color(0xFFF2F2F2),
+                                      child: Center(
+                                        child: Icon(
+                                          Icons.block,
+                                          color: Color(0xFF9E9E9E),
+                                          size: 28,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const Text(
+                                  'None',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: AppColors.textDark,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+                      final anim = options[i - 1];
+                      final isSelected = selectedId == anim.id;
+                      return InkWell(
+                        onTap: () {
+                          if (sel == null) return;
+                          _ensureTrimSlots();
+                          setState(() {
+                            _clipRevealIds[sel] = anim.id;
+                            // CapCut: each In pick uses that FX’s default duration.
+                            _clipRevealDurSec[sel] = anim.durationSec;
+                          });
+                          // CapCut: seek clip start + live Screen-blend preview.
+                          if (_activeIndex != sel) {
+                            unawaited(
+                              _loadClip(sel).then((_) {
+                                unawaited(
+                                  _playRevealAtClipStart(anim, playMain: true),
+                                );
+                              }),
+                            );
+                          } else {
+                            unawaited(
+                              _playRevealAtClipStart(anim, playMain: true),
+                            );
+                          }
+                        },
+                        child: SizedBox(
+                          width: 78,
+                          child: Column(
                             children: [
-                              const ColoredBox(color: Color(0xFF1C1C1E)),
-                              Center(
-                                child: Icon(
-                                  Icons.videocam_rounded,
-                                  color: Colors.white54,
-                                  size: rs.r(22),
+                              SizedBox(
+                                width: 56,
+                                height: 56,
+                                child: PrimarySelectedBorder(
+                                  selected: isSelected,
+                                  borderRadius: 4,
+                                  width: 2,
+                                  unselectedColor: Colors.transparent,
+                                  unselectedWidth: 0,
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: ColoredBox(
+                                      color: Colors.black,
+                                      child: Image.asset(
+                                        anim.thumbPath,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) => const Center(
+                                          child: Icon(
+                                            Icons.movie_filter_rounded,
+                                            color: Colors.white54,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
-                              Positioned(
-                                left: 4,
-                                bottom: 4,
-                                child: Text(
-                                  'Clip ${i + 1}',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: rs.sp(10),
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                              Text(
+                                anim.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.textDark,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                    ],
-                  ],
-                ),
-                Align(
-                  alignment: Alignment.center,
-                  child: Container(
-                    width: 2,
-                    height: trackH + rs.h(8),
-                    color: AppColors.primary,
+                      );
+                    },
                   ),
-                ),
+          ),
+          // CapCut: duration slider under In thumbs (e.g. 2.6s).
+          if (_animPhase == _VideoAnimPhase.inAnimation && hasAnim && sel != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 40,
+                    child: Text(
+                      '${durSec.toStringAsFixed(1)}s',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        activeTrackColor: AppColors.primary,
+                        thumbColor: AppColors.primary,
+                        inactiveTrackColor: AppColors.border,
+                        trackHeight: 3,
+                        overlayShape: SliderComponentShape.noOverlay,
+                      ),
+                      child: Slider(
+                        value: durSec.clamp(0.5, maxDur),
+                        min: 0.5,
+                        max: maxDur,
+                        onChanged: (v) {
+                          setState(() => _revealDurDrag = v);
+                        },
+                        onChangeEnd: (v) {
+                          _ensureTrimSlots();
+                          setState(() {
+                            _clipRevealDurSec[sel] = v;
+                            _revealDurDrag = null;
+                          });
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClipToolsNavbar(AppResponsive rs) {
+    // Prefer editor assets. Speed: temporary Icon until photo_tools/speed.png.
+    const actions = <(_ClipEditTool, String, IconData?, String?)>[
+      (
+        _ClipEditTool.volume,
+        'Volume',
+        null,
+        'assets/images/editor/music_tools/volume.png',
+      ),
+      (
+        _ClipEditTool.animation,
+        'Animation',
+        null,
+        'assets/images/editor/photo_tools/animation.png',
+      ),
+      (
+        _ClipEditTool.delete,
+        'Delete',
+        null,
+        'assets/images/editor/photo_tools/delete.png',
+      ),
+      // TODO: replace Icon when asset provided → photo_tools/speed.png
+      (_ClipEditTool.speed, 'Speed', Icons.speed_rounded, null),
+      (
+        _ClipEditTool.crop,
+        'Crop',
+        null,
+        'assets/images/editor/photo_tools/crop.png',
+      ),
+      (
+        _ClipEditTool.replace,
+        'Replace',
+        null,
+        'assets/images/editor/photo_tools/replace.png',
+      ),
+    ];
+
+    // Match slideshow `_photoEditorToolbar` icon size / spacing / chrome.
+    return Container(
+      height: rs.h(72),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(left: 54, right: 6),
+              children: [
+                for (final a in actions)
+                  SizedBox(
+                    width: 72,
+                    child: InkWell(
+                      onTap: () => _handleClipTool(a.$1),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Builder(
+                        builder: (context) {
+                          final asset = a.$4;
+                          final isAnim =
+                              asset != null && asset.endsWith('animation.png');
+                          return Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(height: isAnim ? 4 : 0),
+                              if (asset != null)
+                                Image.asset(
+                                  asset,
+                                  width: 28,
+                                  height: isAnim ? 23 : 28,
+                                  color: AppColors.iconNormal,
+                                  colorBlendMode: BlendMode.srcIn,
+                                )
+                              else
+                                Icon(
+                                  a.$3,
+                                  size: 26,
+                                  color: AppColors.iconNormal,
+                                ),
+                              SizedBox(height: isAnim ? 6 : 4),
+                              Text(
+                                a.$2,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.textMuted,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(rs.w(12), 0, rs.w(12), rs.h(8)),
-            child: Row(
-              children: [
-                _laneChip(
-                  rs,
-                  icon: Icons.music_note_outlined,
-                  label: _musicTitle ?? '+ Add audio',
-                  onTap: () => _selectTool(VideoEditorTool.music),
+          Positioned(
+            left: 10,
+            top: 10,
+            bottom: 10,
+            child: Material(
+              color: AppColors.surfaceAlt,
+              elevation: 3,
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 38,
+                child: IconButton(
+                  tooltip: 'Back to editor tools',
+                  onPressed: _clearClipSelection,
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
                 ),
-                SizedBox(width: rs.w(8)),
-                _laneChip(
-                  rs,
-                  icon: Icons.text_fields,
-                  label: _textOverlay ?? '+ Add text',
-                  onTap: () => _selectTool(VideoEditorTool.text),
-                ),
-              ],
+              ),
             ),
           ),
         ],
@@ -495,45 +2182,222 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     );
   }
 
-  Widget _laneChip(
-    AppResponsive rs, {
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(rs.r(8)),
-        child: Container(
-          height: rs.h(28),
-          padding: EdgeInsets.symmetric(horizontal: rs.w(8)),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceAlt,
-            borderRadius: BorderRadius.circular(rs.r(8)),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: rs.r(14), color: AppColors.textMuted),
-              SizedBox(width: rs.w(6)),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: rs.sp(11),
-                    color: AppColors.textMuted,
-                    fontWeight: FontWeight.w500,
-                  ),
+  /// Adjust original clip audio. Close = discard, check = apply (screenshot).
+  Future<void> _openClipVolumeSheet(int index) async {
+    _ensureTrimSlots();
+    final committed = _volumeFor(index);
+    var draft = committed;
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModal) {
+            void preview(double v) {
+              draft = v.clamp(0.0, 1.0);
+              setModal(() {});
+              if (_activeIndex == index) {
+                unawaited(_controller?.setVolume(draft));
+              }
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          icon: const Icon(
+                            Icons.close,
+                            color: AppColors.textDark,
+                          ),
+                        ),
+                        const Expanded(
+                          child: Text(
+                            'Volume',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          icon: const Icon(
+                            Icons.check,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.volume_up_outlined,
+                            color: AppColors.textMuted,
+                          ),
+                          Expanded(
+                            child: Slider(
+                              value: draft * 100,
+                              min: 0,
+                              max: 100,
+                              divisions: 100,
+                              activeColor: AppColors.primary,
+                              onChanged: (v) => preview(v / 100),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 36,
+                            child: Text(
+                              '${(draft * 100).round()}',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textDark,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
+
+    if (!mounted) return;
+    if (confirmed == true) {
+      setState(() => _clipVolumes[index] = draft);
+      if (_activeIndex == index) {
+        unawaited(_controller?.setVolume(draft));
+      }
+    } else {
+      // Close / dismiss → restore committed original-clip volume.
+      if (_activeIndex == index) {
+        unawaited(_controller?.setVolume(committed));
+      }
+    }
+  }
+
+  Future<void> _handleClipTool(_ClipEditTool tool) async {
+    final sel = _selectedClipIndex;
+    if (sel == null || sel >= _clips.length) return;
+
+    switch (tool) {
+      case _ClipEditTool.volume:
+        if (!mounted) return;
+        await _openClipVolumeSheet(sel);
+      case _ClipEditTool.animation:
+        setState(() {
+          _animSheetOpen = true;
+          _animPhase = _VideoAnimPhase.inAnimation;
+          _tool = null;
+        });
+      case _ClipEditTool.delete:
+        if (_clips.length <= 1) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Keep at least one clip')),
+          );
+          return;
+        }
+        setState(() {
+          _clips.removeAt(sel);
+          if (sel < _clipTrimIn.length) {
+            _clipTrimIn.removeAt(sel);
+            _clipTrimOut.removeAt(sel);
+          }
+          if (sel < _clipVolumes.length) {
+            _clipVolumes.removeAt(sel);
+          }
+          if (sel < _clipRevealIds.length) {
+            _clipRevealIds.removeAt(sel);
+          }
+          if (sel < _clipRevealDurSec.length) {
+            _clipRevealDurSec.removeAt(sel);
+          }
+          _ensureTrimSlots();
+          _animSheetOpen = false;
+          _selectedClipIndex = null;
+        });
+        await _loadClip(sel.clamp(0, _clips.length - 1));
+      case _ClipEditTool.speed:
+        if (!mounted) return;
+        const speeds = <double>[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+        await showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: Colors.white,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (ctx) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Speed',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final s in speeds)
+                        ChoiceChip(
+                          label: Text('${s}x'),
+                          selected: _clipSpeed == s,
+                          onSelected: (_) {
+                            setState(() => _clipSpeed = s);
+                            unawaited(_controller?.setPlaybackSpeed(s));
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      case _ClipEditTool.crop:
+        _clearClipSelection();
+        _selectTool(VideoEditorTool.aspectRatio);
+      case _ClipEditTool.replace:
+        final result = await context.push<List<String>>(
+          '/gallery?type=video&insert=1',
+        );
+        if (!mounted || result == null || result.isEmpty) return;
+        setState(() {
+          _clips[sel] = result.first;
+          _ensureTrimSlots();
+          _clipVolumes[sel] = 1.0;
+          _clipRevealIds[sel] = null;
+          _clipRevealDurSec[sel] = null;
+          _clipTrimIn[sel] = null;
+          _clipTrimOut[sel] = null;
+        });
+        unawaited(_probeDurationOnly(result.first));
+        await _loadClip(sel);
+    }
   }
 
   Widget _buildBottomTools(AppResponsive rs) {
@@ -561,37 +2425,37 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   }
 
   String _toolLabel(VideoEditorTool t) => switch (t) {
-        VideoEditorTool.edit => 'Edit',
-        VideoEditorTool.text => 'Text',
-        VideoEditorTool.music => 'Music',
-        VideoEditorTool.effects => 'Effects',
-        VideoEditorTool.filters => 'Filters',
-        VideoEditorTool.sticker => 'Sticker',
-        VideoEditorTool.aspectRatio => 'Aspect Ratio',
-        VideoEditorTool.background => 'Background',
-      };
+    VideoEditorTool.edit => 'Edit',
+    VideoEditorTool.text => 'Text',
+    VideoEditorTool.music => 'Music',
+    VideoEditorTool.effects => 'Effects',
+    VideoEditorTool.filters => 'Filters',
+    VideoEditorTool.sticker => 'Sticker',
+    VideoEditorTool.aspectRatio => 'Aspect Ratio',
+    VideoEditorTool.background => 'Background',
+  };
 
   String? _toolAsset(VideoEditorTool t) => switch (t) {
-        VideoEditorTool.edit => null,
-        VideoEditorTool.text => 'assets/images/editor/text.png',
-        VideoEditorTool.music => 'assets/images/editor/music.png',
-        VideoEditorTool.effects => 'assets/images/editor/effects.png',
-        VideoEditorTool.filters => 'assets/images/editor/filter.png',
-        VideoEditorTool.sticker => 'assets/images/editor/sticker.png',
-        VideoEditorTool.aspectRatio => null,
-        VideoEditorTool.background => 'assets/images/editor/bg.png',
-      };
+    VideoEditorTool.edit => null,
+    VideoEditorTool.text => 'assets/images/editor/text.png',
+    VideoEditorTool.music => 'assets/images/editor/music.png',
+    VideoEditorTool.effects => 'assets/images/editor/effects.png',
+    VideoEditorTool.filters => 'assets/images/editor/filter.png',
+    VideoEditorTool.sticker => 'assets/images/editor/sticker.png',
+    VideoEditorTool.aspectRatio => null,
+    VideoEditorTool.background => 'assets/images/editor/bg.png',
+  };
 
   IconData _toolIcon(VideoEditorTool t) => switch (t) {
-        VideoEditorTool.edit => Icons.content_cut_rounded,
-        VideoEditorTool.text => Icons.text_fields,
-        VideoEditorTool.music => Icons.music_note_outlined,
-        VideoEditorTool.effects => Icons.auto_awesome,
-        VideoEditorTool.filters => Icons.filter_vintage_outlined,
-        VideoEditorTool.sticker => Icons.emoji_emotions_outlined,
-        VideoEditorTool.aspectRatio => Icons.aspect_ratio,
-        VideoEditorTool.background => Icons.format_color_fill_outlined,
-      };
+    VideoEditorTool.edit => Icons.content_cut_rounded,
+    VideoEditorTool.text => Icons.text_fields,
+    VideoEditorTool.music => Icons.music_note_outlined,
+    VideoEditorTool.effects => Icons.auto_awesome,
+    VideoEditorTool.filters => Icons.filter_vintage_outlined,
+    VideoEditorTool.sticker => Icons.emoji_emotions_outlined,
+    VideoEditorTool.aspectRatio => Icons.aspect_ratio,
+    VideoEditorTool.background => Icons.format_color_fill_outlined,
+  };
 
   Widget _buildToolPanel(AppResponsive rs) {
     return Container(
@@ -640,35 +2504,53 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   Widget _editPanel(AppResponsive rs) {
     final actions = [
-      (Icons.content_cut, 'Split', () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Split coming soon')),
-        );
-      }),
-      (Icons.content_copy_outlined, 'Duplicate', () {
-        if (_clips.isEmpty) return;
-        setState(() => _clips.insert(_activeIndex + 1, _clips[_activeIndex]));
-      }),
-      (Icons.delete_outline, 'Delete', () async {
-        if (_clips.length <= 1) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Keep at least one clip')),
-          );
-          return;
-        }
-        setState(() => _clips.removeAt(_activeIndex));
-        await _loadClip(_activeIndex.clamp(0, _clips.length - 1));
-      }),
-      (Icons.speed, 'Speed', () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Speed coming soon')),
-        );
-      }),
-      (Icons.volume_up_outlined, 'Volume', () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Volume coming soon')),
-        );
-      }),
+      (
+        Icons.content_cut,
+        'Split',
+        () {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('Split coming soon')));
+        },
+      ),
+      (
+        Icons.content_copy_outlined,
+        'Duplicate',
+        () {
+          if (_clips.isEmpty) return;
+          setState(() => _clips.insert(_activeIndex + 1, _clips[_activeIndex]));
+        },
+      ),
+      (
+        Icons.delete_outline,
+        'Delete',
+        () async {
+          if (_clips.length <= 1) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Keep at least one clip')),
+            );
+            return;
+          }
+          setState(() => _clips.removeAt(_activeIndex));
+          await _loadClip(_activeIndex.clamp(0, _clips.length - 1));
+        },
+      ),
+      (
+        Icons.speed,
+        'Speed',
+        () {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('Speed coming soon')));
+        },
+      ),
+      (
+        Icons.volume_up_outlined,
+        'Volume',
+        () {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Volume coming soon')));
+        },
+      ),
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -727,9 +2609,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                 borderSide: BorderSide.none,
               ),
             ),
-            onChanged: (v) => setState(
-              () => _textOverlay = v.trim().isEmpty ? null : v,
-            ),
+            onChanged: (v) =>
+                setState(() => _textOverlay = v.trim().isEmpty ? null : v),
           ),
         ),
       ],
@@ -750,7 +2631,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                   onPressed: () async {
                     await context.push('/music');
                     if (!mounted) return;
-                    setState(() => _musicTitle ??= 'Background music');
+                    setState(() => _musicTitle = 'Background music');
                   },
                 ),
               ),
@@ -758,7 +2639,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                 SizedBox(width: rs.w(10)),
                 IconButton(
                   onPressed: () => setState(() => _musicTitle = null),
-                  icon: const Icon(Icons.delete_outline, color: AppColors.danger),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: AppColors.danger,
+                  ),
                 ),
               ],
             ],
@@ -781,32 +2665,48 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             itemCount: effects.length,
             separatorBuilder: (_, _) => SizedBox(width: rs.w(10)),
             itemBuilder: (context, i) {
-              final selected = i == 0;
-              return Column(
-                children: [
-                  Container(
-                    width: rs.w(64),
-                    height: rs.w(64),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(rs.r(10)),
-                      gradient: selected ? null : AppColors.primaryGradient,
-                      color: selected ? AppColors.surfaceAlt : null,
-                      border: Border.all(
-                        color: selected ? AppColors.primary : Colors.transparent,
-                        width: 2,
+              final name = effects[i];
+              final selected = (_effectName ?? 'None') == name;
+              return GestureDetector(
+                onTap: () =>
+                    setState(() => _effectName = name == 'None' ? null : name),
+                child: Column(
+                  children: [
+                    Container(
+                      width: rs.w(64),
+                      height: rs.w(64),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(rs.r(10)),
+                        gradient: selected && name != 'None'
+                            ? AppColors.primaryGradient
+                            : null,
+                        color: name == 'None' || !selected
+                            ? AppColors.surfaceAlt
+                            : null,
+                        border: Border.all(
+                          color: selected
+                              ? AppColors.primary
+                              : AppColors.border,
+                          width: selected ? 2 : 1,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.auto_awesome,
+                        color: selected && name != 'None'
+                            ? Colors.white
+                            : AppColors.textMuted,
                       ),
                     ),
-                    child: Icon(
-                      Icons.auto_awesome,
-                      color: selected ? AppColors.textMuted : Colors.white,
+                    SizedBox(height: rs.h(4)),
+                    Text(
+                      name,
+                      style: TextStyle(
+                        fontSize: rs.sp(11),
+                        color: AppColors.textMuted,
+                      ),
                     ),
-                  ),
-                  SizedBox(height: rs.h(4)),
-                  Text(
-                    effects[i],
-                    style: TextStyle(fontSize: rs.sp(11), color: AppColors.textMuted),
-                  ),
-                ],
+                  ],
+                ),
               );
             },
           ),
@@ -838,7 +2738,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(rs.r(10)),
                         border: Border.all(
-                          color: selected ? AppColors.primary : AppColors.border,
+                          color: selected
+                              ? AppColors.primary
+                              : AppColors.border,
                           width: selected ? 2 : 1,
                         ),
                         gradient: i == 0 ? null : AppColors.primaryGradient,
@@ -894,7 +2796,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                           borderRadius: BorderRadius.circular(rs.r(10)),
                           border: Border.all(color: AppColors.border),
                         ),
-                        child: Text('None', style: TextStyle(fontSize: rs.sp(11))),
+                        child: Text(
+                          'None',
+                          style: TextStyle(fontSize: rs.sp(11)),
+                        ),
                       ),
                     ],
                   ),
@@ -961,7 +2866,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                       color: selected ? AppColors.primary : AppColors.border,
                       width: selected ? 2 : 1,
                     ),
-                    color: selected ? AppColors.primarySoft : AppColors.surfaceAlt,
+                    color: selected
+                        ? AppColors.primarySoft
+                        : AppColors.surfaceAlt,
                   ),
                   child: Text(
                     r.$1,
@@ -1025,3 +2932,300 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     );
   }
 }
+
+/// CapCut/slideshow-style selected clip: white shell + trim handles.
+class _SelectedVideoClip extends StatefulWidget {
+  const _SelectedVideoClip({
+    required this.height,
+    required this.durationSec,
+    required this.pixelsPerSecond,
+    required this.thumbBuilder,
+    required this.onScrollTimeline,
+    required this.onPanScrub,
+    required this.onDragStart,
+    required this.onLiveTrim,
+    required this.onDragEnd,
+    required this.onCommitTrim,
+    required this.sourceIn,
+    required this.sourceOut,
+    required this.sourceDuration,
+  });
+
+  static const handleW = 22.0;
+
+  final double height;
+  final double durationSec;
+  final double pixelsPerSecond;
+  final Widget Function(double width, double height) thumbBuilder;
+  final ValueChanged<double> onScrollTimeline;
+
+  /// Body drag → scrub timeline under playhead (CapCut).
+  final ValueChanged<double> onPanScrub;
+  final VoidCallback onDragStart;
+  final void Function(double inn, double out) onLiveTrim;
+  final VoidCallback onDragEnd;
+  final void Function(double inn, double out) onCommitTrim;
+  final double sourceIn;
+  final double sourceOut;
+  final double sourceDuration;
+
+  @override
+  State<_SelectedVideoClip> createState() => _SelectedVideoClipState();
+}
+
+class _SelectedVideoClipState extends State<_SelectedVideoClip> {
+  static const _minVisible = 0.5;
+  static const _shellPadV = 3.0;
+
+  double? _liveIn;
+  double? _liveOut;
+  bool _dragging = false;
+
+  double get _inn => _liveIn ?? widget.sourceIn;
+  double get _out => _liveOut ?? widget.sourceOut;
+  double get _visible =>
+      (_out - _inn).clamp(_minVisible, widget.sourceDuration);
+
+  void _begin() {
+    if (_dragging) return;
+    _dragging = true;
+    _liveIn = widget.sourceIn;
+    _liveOut = widget.sourceOut;
+    widget.onDragStart();
+    widget.onLiveTrim(_inn, _out);
+  }
+
+  void _end() {
+    if (!_dragging) return;
+    final inn = _inn;
+    final out = _out;
+    _dragging = false;
+    _liveIn = null;
+    _liveOut = null;
+    widget.onCommitTrim(inn, out);
+    widget.onDragEnd();
+  }
+
+  Widget _handle({required bool isStart}) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) => widget.onDragStart(),
+      onPointerUp: (_) {
+        if (!_dragging) widget.onDragEnd();
+      },
+      onPointerCancel: (_) {
+        if (!_dragging) widget.onDragEnd();
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        dragStartBehavior: DragStartBehavior.down,
+        onHorizontalDragStart: (_) {
+          HapticFeedback.selectionClick();
+          _begin();
+        },
+        onHorizontalDragUpdate: (d) {
+          if (d.delta.dx == 0) return;
+          final deltaSec = d.delta.dx / widget.pixelsPerSecond;
+          setState(() {
+            if (isStart) {
+              // Drag right → trim more from start.
+              final next = (_inn + deltaSec)
+                  .clamp(0.0, _out - _minVisible)
+                  .toDouble();
+              _liveIn = next;
+            } else {
+              final next = (_out + deltaSec)
+                  .clamp(_inn + _minVisible, widget.sourceDuration)
+                  .toDouble();
+              _liveOut = next;
+            }
+          });
+          widget.onLiveTrim(_inn, _out);
+          widget.onScrollTimeline(-d.delta.dx);
+        },
+        onHorizontalDragEnd: (_) => _end(),
+        onHorizontalDragCancel: _end,
+        child: SizedBox(
+          width: _SelectedVideoClip.handleW,
+          height: double.infinity,
+          child: Icon(
+            isStart ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+            size: 20,
+            color: Colors.black87,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final clipW = _visible * widget.pixelsPerSecond;
+    final totalW = clipW + _SelectedVideoClip.handleW * 2;
+    final thumbH = widget.height - _shellPadV * 2;
+
+    return SizedBox(
+      width: totalW,
+      height: widget.height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 6,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: _shellPadV),
+          child: Row(
+            children: [
+              _handle(isStart: true),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {}, // keep selection
+                onHorizontalDragUpdate: (d) {
+                  if (d.delta.dx == 0) return;
+                  widget.onPanScrub(d.delta.dx);
+                },
+                child: SizedBox(
+                  width: clipW,
+                  height: thumbH,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      widget.thumbBuilder(clipW, thumbH),
+                      if (clipW >= 48)
+                        Positioned(
+                          left: 4,
+                          top: 2,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              gradient: AppColors.primaryGradient,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${_visible.toStringAsFixed(1)}s',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              _handle(isStart: false),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Time ruler: labels every 2s (00:00, 00:02, 00:04 …), minor tick each 1s.
+class _TimelineRulerPainter extends CustomPainter {
+  _TimelineRulerPainter({
+    required this.totalSec,
+    required this.pixelsPerSecond,
+    required this.labelStyle,
+  });
+
+  final double totalSec;
+  final double pixelsPerSecond;
+  final TextStyle labelStyle;
+
+  static const _labelEvery = 2.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    );
+    final tickPaint = Paint()
+      ..color = AppColors.textMuted.withValues(alpha: 0.55)
+      ..strokeWidth = 1;
+
+    final end = totalSec.ceil();
+    for (var t = 0; t <= end; t++) {
+      final x = t * pixelsPerSecond;
+      if (x > size.width + 1) break;
+      final isMajor = t % _labelEvery == 0;
+      final h = isMajor ? size.height * 0.55 : size.height * 0.28;
+      canvas.drawLine(
+        Offset(x, size.height - h),
+        Offset(x, size.height),
+        tickPaint,
+      );
+      if (isMajor) {
+        final m = t ~/ 60;
+        final s = t % 60;
+        final label =
+            '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+        textPainter.text = TextSpan(text: label, style: labelStyle);
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(x + 2, (size.height - textPainter.height) / 2 - 1),
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _TimelineRulerPainter oldDelegate) {
+    return oldDelegate.totalSec != totalSec ||
+        oldDelegate.pixelsPerSecond != pixelsPerSecond;
+  }
+}
+
+/// CapCut In-anim: Screen blend so black FX becomes transparent over the clip.
+class _BlendMask extends SingleChildRenderObjectWidget {
+  const _BlendMask({required this.blendMode, super.child});
+
+  final BlendMode blendMode;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderBlendMask(blendMode);
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderBlendMask renderObject,
+  ) {
+    renderObject.blendMode = blendMode;
+  }
+}
+
+class _RenderBlendMask extends RenderProxyBox {
+  _RenderBlendMask(this._blendMode);
+
+  BlendMode _blendMode;
+  set blendMode(BlendMode value) {
+    if (_blendMode == value) return;
+    _blendMode = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    context.canvas.saveLayer(offset & size, Paint()..blendMode = _blendMode);
+    super.paint(context, offset);
+    context.canvas.restore();
+  }
+}
+

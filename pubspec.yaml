@@ -67,6 +67,7 @@ flutter:
     - assets/frames/
     - assets/music/
     - assets/effects/
+    - assets/animations/
     - assets/images/
     - assets/images/quickTools/
     - assets/images/editor/
