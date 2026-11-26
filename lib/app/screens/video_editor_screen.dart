@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path/path.dart' as p;
@@ -62,33 +62,26 @@ class VideoRevealAnim {
   /// CapCut In tab: black-bg FX overlays screen-blended at clip start.
   static const catalog = <VideoRevealAnim>[
     VideoRevealAnim(
-      id: 'autumn_reveal',
-      name: 'Leaf Reveal',
-      assetPath: 'assets/animations/autumn_reveal_color.mp4',
-      alphaMatteAssetPath: 'assets/animations/autumn_reveal_alpha.mp4',
-      thumbPath: 'assets/animations/autumn_reveal_thumb.png',
-      durationSec: 2.0,
-    ),
-    VideoRevealAnim(
       id: 'fx_01',
-      name: 'Fire Portal',
-      assetPath: 'assets/animations/fx_01_fire_portal.mp4',
-      thumbPath: 'assets/animations/fx_01_fire_portal_thumb.jpg',
+      name: 'Leaf Reveal',
+      assetPath: 'assets/animations/fx_01_leaf_reveal.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_01_leaf_reveal_alpha.mp4',
+      thumbPath: 'assets/animations/fx_01_leaf_reveal_thumb.png',
       durationSec: 2.0,
     ),
     VideoRevealAnim(
       id: 'fx_02',
-      name: 'Neon Iris',
-      assetPath: 'assets/animations/fx_02_neon_iris.mp4',
-      thumbPath: 'assets/animations/fx_02_neon_iris_thumb.jpg',
+      name: 'Fire Portal',
+      assetPath: 'assets/animations/fx_02_fire_portal.mp4',
+      thumbPath: 'assets/animations/fx_02_fire_portal_thumb.jpg',
       durationSec: 2.0,
     ),
     VideoRevealAnim(
       id: 'fx_03',
-      name: 'Gold Spark',
-      assetPath: 'assets/animations/fx_03_gold_spark.mp4',
-      thumbPath: 'assets/animations/fx_03_gold_spark_thumb.jpg',
-      durationSec: 2.2,
+      name: 'Neon Iris',
+      assetPath: 'assets/animations/fx_03_neon_iris.mp4',
+      thumbPath: 'assets/animations/fx_03_neon_iris_thumb.jpg',
+      durationSec: 2.0,
     ),
     VideoRevealAnim(
       id: 'fx_04',
@@ -106,44 +99,23 @@ class VideoRevealAnim {
     ),
     VideoRevealAnim(
       id: 'fx_06',
-      name: 'Plasma Swirl',
-      assetPath: 'assets/animations/fx_06_plasma_swirl.mp4',
-      thumbPath: 'assets/animations/fx_06_plasma_swirl_thumb.jpg',
-      durationSec: 2.2,
+      name: 'Ice Bloom',
+      assetPath: 'assets/animations/fx_06_ice_bloom.mp4',
+      thumbPath: 'assets/animations/fx_06_ice_bloom_thumb.jpg',
+      durationSec: 2.0,
     ),
     VideoRevealAnim(
       id: 'fx_07',
-      name: 'Ember Rain',
-      assetPath: 'assets/animations/fx_07_ember_rain.mp4',
-      thumbPath: 'assets/animations/fx_07_ember_rain_thumb.jpg',
-      durationSec: 2.4,
-    ),
-    VideoRevealAnim(
-      id: 'fx_08',
-      name: 'Ice Bloom',
-      assetPath: 'assets/animations/fx_08_ice_bloom.mp4',
-      thumbPath: 'assets/animations/fx_08_ice_bloom_thumb.jpg',
-      durationSec: 2.0,
-    ),
-    VideoRevealAnim(
-      id: 'fx_09',
-      name: 'Laser Cross',
-      assetPath: 'assets/animations/fx_09_laser_cross.mp4',
-      thumbPath: 'assets/animations/fx_09_laser_cross_thumb.jpg',
-      durationSec: 2.0,
-    ),
-    VideoRevealAnim(
-      id: 'fx_10',
       name: 'Stardust',
-      assetPath: 'assets/animations/fx_10_stardust.mp4',
-      thumbPath: 'assets/animations/fx_10_stardust_thumb.jpg',
+      assetPath: 'assets/animations/fx_07_stardust.mp4',
+      thumbPath: 'assets/animations/fx_07_stardust_thumb.jpg',
       durationSec: 2.2,
     ),
     VideoRevealAnim(
-      id: 'fx_11',
+      id: 'fx_08',
       name: 'Portal Burst',
-      assetPath: 'assets/animations/fx_11_portal_burst.mp4',
-      thumbPath: 'assets/animations/fx_11_portal_burst_thumb.jpg',
+      assetPath: 'assets/animations/fx_08_portal_burst.mp4',
+      thumbPath: 'assets/animations/fx_08_portal_burst_thumb.jpg',
       durationSec: 2.4,
       portalReveal: true,
     ),
@@ -198,13 +170,17 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   bool _animSheetOpen = false;
   _VideoAnimPhase _animPhase = _VideoAnimPhase.inAnimation;
 
-  /// CapCut In-anim: predecoded FX frames, alpha-preserved for matte assets.
+  /// CapCut In-anim: disk frames + decoded ui.Images (smooth, no Image.file blink).
   final Map<String, String> _revealAssetFiles = {};
   final Map<String, List<String>> _revealFrameFiles = {};
   final Map<String, Future<List<String>>> _revealFrameJobs = {};
+  final Map<String, List<ui.Image>> _revealImages = {};
+  final Map<String, Future<List<ui.Image>>> _revealImageJobs = {};
   bool _revealOverlayActive = false;
   String? _activeRevealId;
   int _revealFrameIndex = 0;
+  /// Frame index only — avoids rebuilding the whole editor every FX tick.
+  final ValueNotifier<int> _revealFrameTick = ValueNotifier(0);
 
   void _ensureTrimSlots() {
     while (_clipTrimIn.length < _clips.length) {
@@ -456,6 +432,13 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     _controller?.removeListener(_onVideoTick);
     _controller?.dispose();
     _stopRevealOverlay();
+    _revealFrameTick.dispose();
+    for (final images in _revealImages.values) {
+      for (final img in images) {
+        img.dispose();
+      }
+    }
+    _revealImages.clear();
     super.dispose();
   }
 
@@ -886,7 +869,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final reveal = _revealFor(_activeIndex);
     if (reveal != null) {
       unawaited(
-        _ensureRevealFrames(reveal).then((_) {
+        _ensureRevealImages(reveal).then((_) {
           if (mounted) _syncRevealOverlayFromMain();
         }),
       );
@@ -1064,22 +1047,44 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     });
   }
 
-  /// CapCut In-anim: FX screen-blended over the original clip (like leaf overlay).
+  /// Decode FX frames into GPU-ready images once (fixes blink from Image.file).
+  Future<List<ui.Image>> _ensureRevealImages(VideoRevealAnim anim) {
+    final hit = _revealImages[anim.id];
+    if (hit != null && hit.isNotEmpty) return Future.value(hit);
+    return _revealImageJobs.putIfAbsent(anim.id, () async {
+      final files = await _ensureRevealFrames(anim);
+      final decoded = <ui.Image>[];
+      for (final path in files) {
+        final bytes = await File(path).readAsBytes();
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        decoded.add(frame.image);
+      }
+      if (decoded.isEmpty) throw Exception('In-anim decode empty');
+      _revealImages[anim.id] = decoded;
+      return decoded;
+    });
+  }
+
+  /// CapCut In-anim: paint predecoded frame (Screen or srcOver). No widget rebuild blink.
   Widget _buildRevealOverlayLayer() {
-    final frames = _revealFrameFiles[_activeRevealId];
-    if (frames == null || frames.isEmpty) return const SizedBox.shrink();
-    final fi = _revealFrameIndex.clamp(0, frames.length - 1);
-    return _BlendMask(
-      blendMode: VideoRevealAnim.byId(_activeRevealId)?.alphaMatteAssetPath != null
-          ? BlendMode.srcOver
-          : BlendMode.screen,
-      child: Image.file(
-        File(frames[fi]),
-        key: ValueKey('reveal_$fi'),
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
-      ),
+    final id = _activeRevealId;
+    final images = id == null ? null : _revealImages[id];
+    if (images == null || images.isEmpty) return const SizedBox.shrink();
+    final useAlpha =
+        VideoRevealAnim.byId(id)?.alphaMatteAssetPath != null;
+    return ListenableBuilder(
+      listenable: _revealFrameTick,
+      builder: (context, _) {
+        final fi = _revealFrameIndex.clamp(0, images.length - 1);
+        return CustomPaint(
+          painter: _RevealFxPainter(
+            image: images[fi],
+            blendMode: useAlpha ? BlendMode.srcOver : BlendMode.screen,
+          ),
+          child: const SizedBox.expand(),
+        );
+      },
     );
   }
 
@@ -1088,6 +1093,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     _revealOverlayActive = false;
     _activeRevealId = null;
     _revealFrameIndex = 0;
+    _revealFrameTick.value = 0;
     if (mounted) setState(() {});
   }
 
@@ -1098,8 +1104,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       if (_revealOverlayActive) _stopRevealOverlay();
       return;
     }
-    final frames = _revealFrameFiles[reveal.id];
-    if (frames == null || frames.isEmpty) return;
+    final images = _revealImages[reveal.id];
+    if (images == null || images.isEmpty) return;
 
     final inn = _trimIn(_activeIndex);
     final dur = _revealDurationFor(_activeIndex);
@@ -1111,16 +1117,16 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     }
 
     final idx =
-        (local / dur * frames.length).floor().clamp(0, frames.length - 1);
-    final needShow =
-        !_revealOverlayActive ||
-        _activeRevealId != reveal.id ||
-        idx != _revealFrameIndex;
-    if (!needShow) return;
+        (local / dur * images.length).floor().clamp(0, images.length - 1);
+    final wasActive = _revealOverlayActive && _activeRevealId == reveal.id;
     _activeRevealId = reveal.id;
     _revealOverlayActive = true;
-    _revealFrameIndex = idx;
-    if (mounted) setState(() {});
+    if (idx != _revealFrameIndex) {
+      _revealFrameIndex = idx;
+      _revealFrameTick.value = idx;
+    }
+    // Only rebuild tree when overlay appears / switches FX — not every frame.
+    if (!wasActive && mounted) setState(() {});
   }
 
   /// CapCut: arm In-anim at clip start (overlay stays while playhead in range).
@@ -1131,8 +1137,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final main = _controller;
     if (main == null || !_ready) return;
     try {
-      final frames = await _ensureRevealFrames(anim);
-      if (!mounted || frames.isEmpty) return;
+      final images = await _ensureRevealImages(anim);
+      if (!mounted || images.isEmpty) return;
       if (seekMainToStart) {
         final inn = _trimIn(_activeIndex);
         await main.seekTo(Duration(milliseconds: (inn * 1000).round()));
@@ -1140,6 +1146,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _activeRevealId = anim.id;
       _revealOverlayActive = true;
       _revealFrameIndex = 0;
+      _revealFrameTick.value = 0;
       _syncRevealOverlayFromMain();
       if (mounted) setState(() {});
     } catch (_) {
@@ -1262,11 +1269,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                           clipBehavior: Clip.hardEdge,
                           children: [
                             _buildPlayer(filter),
-                            // CapCut In-anim — keyed portal over clip (export look).
+                            // CapCut In-anim — predecoded frames (no blink).
                             if (_revealOverlayActive &&
                                 _activeRevealId != null &&
-                                (_revealFrameFiles[_activeRevealId]
-                                        ?.isNotEmpty ??
+                                (_revealImages[_activeRevealId]?.isNotEmpty ??
                                     false))
                               Positioned.fill(
                                 child: IgnorePointer(
@@ -3191,41 +3197,27 @@ class _TimelineRulerPainter extends CustomPainter {
   }
 }
 
-/// CapCut In-anim: Screen blend so black FX becomes transparent over the clip.
-class _BlendMask extends SingleChildRenderObjectWidget {
-  const _BlendMask({required this.blendMode, super.child});
+/// CapCut In-anim: paints one predecoded FX frame (smooth, no Image.file blink).
+class _RevealFxPainter extends CustomPainter {
+  _RevealFxPainter({required this.image, required this.blendMode});
 
+  final ui.Image image;
   final BlendMode blendMode;
 
   @override
-  RenderObject createRenderObject(BuildContext context) {
-    return _RenderBlendMask(blendMode);
+  void paint(Canvas canvas, Size size) {
+    paintImage(
+      canvas: canvas,
+      rect: Offset.zero & size,
+      image: image,
+      fit: BoxFit.cover,
+      blendMode: blendMode,
+      filterQuality: FilterQuality.low,
+    );
   }
 
   @override
-  void updateRenderObject(
-    BuildContext context,
-    covariant _RenderBlendMask renderObject,
-  ) {
-    renderObject.blendMode = blendMode;
-  }
-}
-
-class _RenderBlendMask extends RenderProxyBox {
-  _RenderBlendMask(this._blendMode);
-
-  BlendMode _blendMode;
-  set blendMode(BlendMode value) {
-    if (_blendMode == value) return;
-    _blendMode = value;
-    markNeedsPaint();
-  }
-
-  @override
-  void paint(PaintingContext context, Offset offset) {
-    context.canvas.saveLayer(offset & size, Paint()..blendMode = _blendMode);
-    super.paint(context, offset);
-    context.canvas.restore();
-  }
+  bool shouldRepaint(covariant _RevealFxPainter oldDelegate) =>
+      oldDelegate.image != image || oldDelegate.blendMode != blendMode;
 }
 
