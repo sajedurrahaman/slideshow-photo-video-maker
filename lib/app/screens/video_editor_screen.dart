@@ -52,14 +52,13 @@ class VideoRevealAnim {
   final String thumbPath;
   final double durationSec;
 
-  /// Green-screen portal asset (key green → black before Screen blend).
+  /// Legacy flag (unused — all In FX use color + alpha matte like Leaf Reveal).
   final bool portalReveal;
 
-  /// Separate grayscale alpha video; paired with [assetPath] for full-color
-  /// leaf art without green-screen spill.
+  /// Grayscale alpha matte paired with [assetPath] (Leaf Reveal pattern).
   final String? alphaMatteAssetPath;
 
-  /// CapCut In tab: black-bg FX overlays screen-blended at clip start.
+  /// CapCut In tab: color + alpha matte → srcOver over the clip.
   static const catalog = <VideoRevealAnim>[
     VideoRevealAnim(
       id: 'fx_01',
@@ -71,59 +70,76 @@ class VideoRevealAnim {
     ),
     VideoRevealAnim(
       id: 'fx_02',
-      name: 'Fire Portal',
-      assetPath: 'assets/animations/fx_02_fire_portal.mp4',
-      thumbPath: 'assets/animations/fx_02_fire_portal_thumb.jpg',
-      durationSec: 2.0,
+      name: 'Portal Burst',
+      assetPath: 'assets/animations/fx_02_portal_burst.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_02_portal_burst_alpha.mp4',
+      thumbPath: 'assets/animations/fx_02_portal_burst_thumb.jpg',
+      // Black cover outside + transparent hole inside + fire ring (portal reveal).
+      portalReveal: true,
+      durationSec: 2.3,
     ),
     VideoRevealAnim(
       id: 'fx_03',
-      name: 'Neon Iris',
-      assetPath: 'assets/animations/fx_03_neon_iris.mp4',
-      thumbPath: 'assets/animations/fx_03_neon_iris_thumb.jpg',
-      durationSec: 2.0,
-    ),
-    VideoRevealAnim(
-      id: 'fx_04',
-      name: 'Electric Ring',
-      assetPath: 'assets/animations/fx_04_electric_ring.mp4',
-      thumbPath: 'assets/animations/fx_04_electric_ring_thumb.jpg',
-      durationSec: 2.0,
-    ),
-    VideoRevealAnim(
-      id: 'fx_05',
-      name: 'Shockwave',
-      assetPath: 'assets/animations/fx_05_shockwave.mp4',
-      thumbPath: 'assets/animations/fx_05_shockwave_thumb.jpg',
-      durationSec: 1.8,
-    ),
-    VideoRevealAnim(
-      id: 'fx_06',
-      name: 'Ice Bloom',
-      assetPath: 'assets/animations/fx_06_ice_bloom.mp4',
-      thumbPath: 'assets/animations/fx_06_ice_bloom_thumb.jpg',
-      durationSec: 2.0,
-    ),
-    VideoRevealAnim(
-      id: 'fx_07',
-      name: 'Stardust',
-      assetPath: 'assets/animations/fx_07_stardust.mp4',
-      thumbPath: 'assets/animations/fx_07_stardust_thumb.jpg',
+      name: 'Balloon Rise',
+      assetPath: 'assets/animations/fx_03_balloon_rise.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_03_balloon_rise_alpha.mp4',
+      thumbPath: 'assets/animations/fx_03_balloon_rise_thumb.png',
+      // Full-screen balloons → float up → clear.
       durationSec: 2.2,
     ),
     VideoRevealAnim(
-      id: 'fx_08',
-      name: 'Portal Burst',
-      assetPath: 'assets/animations/fx_08_portal_burst.mp4',
-      thumbPath: 'assets/animations/fx_08_portal_burst_thumb.jpg',
-      durationSec: 2.4,
-      portalReveal: true,
+      id: 'fx_04',
+      name: 'Dollar Rain',
+      assetPath: 'assets/animations/fx_04_dollar_rain.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_04_dollar_rain_alpha.mp4',
+      thumbPath: 'assets/animations/fx_04_dollar_rain_thumb.png',
+      // Full-screen dollars → fall down → clear.
+      durationSec: 2.2,
+    ),
+  ];
+
+  /// CapCut Out tab: play at clip end (clear → cover).
+  static const outCatalog = <VideoRevealAnim>[
+    VideoRevealAnim(
+      id: 'fx_out_01',
+      name: 'Glitch Static',
+      assetPath: 'assets/animations/fx_out_01_glitch_static.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_out_01_glitch_static_alpha.mp4',
+      thumbPath: 'assets/animations/fx_out_01_glitch_static_thumb.png',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_out_02',
+      name: 'Valentine',
+      assetPath: 'assets/animations/fx_out_02_valentine.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_out_02_valentine_alpha.mp4',
+      thumbPath: 'assets/animations/fx_out_02_valentine_thumb.png',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_out_03',
+      name: 'New Year',
+      assetPath: 'assets/animations/fx_out_03_new_year.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_out_03_new_year_alpha.mp4',
+      thumbPath: 'assets/animations/fx_out_03_new_year_thumb.png',
+      durationSec: 2.0,
+    ),
+    VideoRevealAnim(
+      id: 'fx_out_04',
+      name: 'Leaf Cover',
+      assetPath: 'assets/animations/fx_out_04_leaf_cover.mp4',
+      alphaMatteAssetPath: 'assets/animations/fx_out_04_leaf_cover_alpha.mp4',
+      thumbPath: 'assets/animations/fx_out_04_leaf_cover_thumb.png',
+      durationSec: 2.0,
     ),
   ];
 
   static VideoRevealAnim? byId(String? id) {
     if (id == null) return null;
     for (final a in catalog) {
+      if (a.id == id) return a;
+    }
+    for (final a in outCatalog) {
       if (a.id == id) return a;
     }
     return null;
@@ -163,8 +179,15 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   /// Opening reveal animation id per clip (null = none). CapCut “In”.
   final List<String?> _clipRevealIds = [];
+
   /// User duration for In-anim (CapCut slider). Null = asset default.
   final List<double?> _clipRevealDurSec = [];
+
+  /// Ending reveal animation id per clip (null = none). CapCut “Out”.
+  final List<String?> _clipOutRevealIds = [];
+
+  /// User duration for Out-anim. Null = asset default.
+  final List<double?> _clipOutRevealDurSec = [];
   double? _revealDurDrag;
   double _clipSpeed = 1.0;
   bool _animSheetOpen = false;
@@ -179,8 +202,12 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   bool _revealOverlayActive = false;
   String? _activeRevealId;
   int _revealFrameIndex = 0;
+
   /// Frame index only — avoids rebuilding the whole editor every FX tick.
   final ValueNotifier<int> _revealFrameTick = ValueNotifier(0);
+
+  /// True after last clip finishes — stay on last frame (don't loop seek→In).
+  bool _stoppedAtClipEnd = false;
 
   void _ensureTrimSlots() {
     while (_clipTrimIn.length < _clips.length) {
@@ -211,6 +238,20 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     while (_clipRevealDurSec.length > _clips.length) {
       _clipRevealDurSec.removeLast();
     }
+    while (_clipOutRevealIds.length < _clips.length) {
+      _clipOutRevealIds.add(null);
+      _clipOutRevealDurSec.add(null);
+    }
+    while (_clipOutRevealIds.length > _clips.length) {
+      _clipOutRevealIds.removeLast();
+      if (_clipOutRevealDurSec.isNotEmpty) _clipOutRevealDurSec.removeLast();
+    }
+    while (_clipOutRevealDurSec.length < _clips.length) {
+      _clipOutRevealDurSec.add(null);
+    }
+    while (_clipOutRevealDurSec.length > _clips.length) {
+      _clipOutRevealDurSec.removeLast();
+    }
   }
 
   double _volumeFor(int index) {
@@ -225,14 +266,37 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     return VideoRevealAnim.byId(_clipRevealIds[index]);
   }
 
+  VideoRevealAnim? _outRevealFor(int index) {
+    _ensureTrimSlots();
+    if (index < 0 || index >= _clipOutRevealIds.length) return null;
+    return VideoRevealAnim.byId(_clipOutRevealIds[index]);
+  }
+
   /// CapCut In duration: user slider, else asset length (clamped to clip).
   double _revealDurationFor(int index) {
     final anim = _revealFor(index);
     if (anim == null) return 0;
     final maxSec = math.max(0.5, _visibleDuration(index));
-    final raw = (_revealDurDrag != null && _selectedClipIndex == index)
+    final raw =
+        (_revealDurDrag != null &&
+            _selectedClipIndex == index &&
+            _animPhase == _VideoAnimPhase.inAnimation)
         ? _revealDurDrag!
         : (_clipRevealDurSec[index] ?? anim.durationSec);
+    return raw.clamp(0.5, math.min(maxSec, 5.0)).toDouble();
+  }
+
+  /// CapCut Out duration at clip end.
+  double _outRevealDurationFor(int index) {
+    final anim = _outRevealFor(index);
+    if (anim == null) return 0;
+    final maxSec = math.max(0.5, _visibleDuration(index));
+    final raw =
+        (_revealDurDrag != null &&
+            _selectedClipIndex == index &&
+            _animPhase == _VideoAnimPhase.outAnimation)
+        ? _revealDurDrag!
+        : (_clipOutRevealDurSec[index] ?? anim.durationSec);
     return raw.clamp(0.5, math.min(maxSec, 5.0)).toDouble();
   }
 
@@ -739,6 +803,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   }
 
   void _clearClipSelection() {
+    unawaited(_pausePreview());
     setState(() {
       _selectedClipIndex = null;
       _animSheetOpen = false;
@@ -750,6 +815,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   }
 
   void _selectClip(int index) {
+    unawaited(_pausePreview());
     setState(() {
       _selectedClipIndex = index;
       _tool = null;
@@ -798,7 +864,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       unawaited(_playNextOrStop());
       return;
     }
+    // Native EOF only while we haven't already parked on the last frame.
     if (v.isInitialized &&
+        !_stoppedAtClipEnd &&
         v.position >= v.duration &&
         v.duration > Duration.zero &&
         !v.isPlaying) {
@@ -843,6 +911,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   Future<void> _seekGlobal(double globalSec, {bool fromScrub = false}) async {
     if (_clips.isEmpty) return;
+    _stoppedAtClipEnd = false;
     _userScrubbing = fromScrub;
     var remaining = globalSec;
     var index = 0;
@@ -865,14 +934,15 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         setState(() => _position = local);
       }
     }
-    // CapCut: In-anim follows playhead while scrubbing.
+    // CapCut: In/Out anim follows playhead while scrubbing.
     final reveal = _revealFor(_activeIndex);
-    if (reveal != null) {
-      unawaited(
-        _ensureRevealImages(reveal).then((_) {
-          if (mounted) _syncRevealOverlayFromMain();
-        }),
-      );
+    final outReveal = _outRevealFor(_activeIndex);
+    if (reveal != null || outReveal != null) {
+      unawaited(() async {
+        if (reveal != null) await _ensureRevealImages(reveal);
+        if (outReveal != null) await _ensureRevealImages(outReveal);
+        if (mounted) _syncRevealOverlayFromMain();
+      }());
     } else {
       _syncRevealOverlayFromMain();
     }
@@ -896,23 +966,45 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       final inn = _trimIn(_activeIndex);
       final out = _trimOut(_activeIndex);
       final pos = c.value.position.inMilliseconds / 1000.0;
-      // CapCut: In-anim only from clip start — restart if at/near start or ended.
-      final restartFromStart =
-          pos < inn + 0.15 || pos >= out - 0.05 || pos < inn;
+      // CapCut: restart from start if near begin or past / parked at clip end.
+      final restartFromStart = _stoppedAtClipEnd ||
+          pos < inn + 0.15 ||
+          pos >= out - 0.05 ||
+          pos < inn;
+      _stoppedAtClipEnd = false;
       if (restartFromStart) {
         await c.seekTo(Duration(milliseconds: (inn * 1000).round()));
       }
       final reveal = _revealFor(_activeIndex);
       final revealDur = _revealDurationFor(_activeIndex);
+      final outReveal = _outRevealFor(_activeIndex);
+      final outDur = _outRevealDurationFor(_activeIndex);
+      final outStart = out - outDur;
       if (reveal != null && restartFromStart) {
         await _startRevealOverlay(reveal);
       } else if (reveal != null) {
         final local = pos - inn;
         if (local >= 0 && local < revealDur) {
           await _startRevealOverlay(reveal, seekMainToStart: false);
+        } else if (outReveal != null &&
+            pos >= outStart - 0.05 &&
+            pos <= out + 0.05) {
+          await _startRevealOverlay(
+            outReveal,
+            seekMainToStart: false,
+            seekToSec: pos.clamp(outStart, out),
+          );
         } else {
           _stopRevealOverlay();
         }
+      } else if (outReveal != null &&
+          pos >= outStart - 0.05 &&
+          pos <= out + 0.05) {
+        await _startRevealOverlay(
+          outReveal,
+          seekMainToStart: false,
+          seekToSec: pos.clamp(outStart, out),
+        );
       } else {
         _stopRevealOverlay();
       }
@@ -922,8 +1014,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   }
 
   Future<void> _playNextOrStop() async {
-    _stopRevealOverlay();
     if (_activeIndex + 1 < _clips.length) {
+      _stoppedAtClipEnd = false;
+      _stopRevealOverlay();
       final next = _activeIndex + 1;
       await _loadClip(
         next,
@@ -933,21 +1026,44 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       if (reveal != null) await _startRevealOverlay(reveal);
       await _controller?.play();
       _syncStripToPlayhead();
-    } else {
-      await _controller?.pause();
-      final inn = _trimIn(_activeIndex);
-      await _controller?.seekTo(Duration(milliseconds: (inn * 1000).round()));
+      return;
     }
+
+    // Last clip finished: pause on last frame (Out final frame if set).
+    // Do NOT seek back to trimIn — that wrongly shows the In effect.
+    if (_stoppedAtClipEnd) return;
+    _stoppedAtClipEnd = true;
+    final c = _controller;
+    if (c == null) return;
+    final out = _trimOut(_activeIndex);
+    final durMs = c.value.duration.inMilliseconds;
+    final outMs = (out * 1000).round();
+    // Stay just inside the clip so the decoder still has a valid last frame.
+    final seekMs = durMs > 0
+        ? math.min(outMs, math.max(0, durMs - 30))
+        : math.max(0, outMs - 30);
+    await c.pause();
+    await c.seekTo(Duration(milliseconds: seekMs));
+    if (!mounted) return;
+    setState(() {
+      _playing = false;
+      _position = c.value.position;
+    });
+    _syncRevealOverlayFromMain();
+    _syncStripToPlayhead();
   }
 
   Future<String> _revealFilePath(VideoRevealAnim anim) async {
-    return _copyRevealAsset(anim.assetPath, 'vreveal_${anim.id}_color');
+    // Include asset basename so reused ids (e.g. fx_02) never keep a stale file.
+    final base = p.basenameWithoutExtension(anim.assetPath);
+    return _copyRevealAsset(anim.assetPath, 'vreveal_${anim.id}_${base}_color');
   }
 
   Future<String> _revealMatteFilePath(VideoRevealAnim anim) async {
     final path = anim.alphaMatteAssetPath;
     if (path == null) throw StateError('Reveal has no alpha matte');
-    return _copyRevealAsset(path, 'vreveal_${anim.id}_alpha');
+    final base = p.basenameWithoutExtension(path);
+    return _copyRevealAsset(path, 'vreveal_${anim.id}_${base}');
   }
 
   Future<String> _copyRevealAsset(String assetPath, String cacheName) async {
@@ -955,9 +1071,11 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     if (cached != null && File(cached).existsSync()) return cached;
     final tmp = await getTemporaryDirectory();
     final out = File(p.join(tmp.path, '$cacheName.mp4'));
-    if (!await out.exists()) {
-      final data = await rootBundle.load(assetPath);
-      await out.writeAsBytes(data.buffer.asUint8List(), flush: true);
+    final data = await rootBundle.load(assetPath);
+    final bytes = data.buffer.asUint8List();
+    // Rewrite when missing or size-mismatched (stale cache after asset swap).
+    if (!await out.exists() || await out.length() != bytes.length) {
+      await out.writeAsBytes(bytes, flush: true);
     }
     _revealAssetFiles[assetPath] = out.path;
     return out.path;
@@ -983,37 +1101,34 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final hit = _revealFrameFiles[anim.id];
     if (hit != null && hit.isNotEmpty) return Future.value(hit);
     return _revealFrameJobs.putIfAbsent(anim.id, () async {
-      final path = await _revealFilePath(anim);
-      final mattePath = anim.alphaMatteAssetPath == null
-          ? null
-          : await _revealMatteFilePath(anim);
-      final tmp = await getTemporaryDirectory();
-      final isAlphaMatte = mattePath != null;
-      final extension = isAlphaMatte ? '.png' : '.jpg';
-      final dir = Directory(
-        p.join(
-          tmp.path,
-          isAlphaMatte
-              ? 'vreveal_frames_${anim.id}_v11_alpha'
-              : anim.portalReveal
-              ? 'vreveal_frames_${anim.id}_v11_portal'
-              : 'vreveal_frames_${anim.id}_v11',
-        ),
-      );
-      if (await dir.exists()) {
-        final existing = await _listRevealFrames(dir, exts: {extension});
-        if (existing.length >= 4) {
-          _revealFrameFiles[anim.id] = existing;
-          return existing;
+      try {
+        final path = await _revealFilePath(anim);
+        final mattePath = anim.alphaMatteAssetPath == null
+            ? null
+            : await _revealMatteFilePath(anim);
+        final tmp = await getTemporaryDirectory();
+        // Leaf Reveal pattern: color + alpha → RGBA PNG.
+        // v21: Valentine hearts-only, New Year no-year, Leaf Cover Out.
+        final base = p.basenameWithoutExtension(anim.assetPath);
+        final dir = Directory(
+          p.join(tmp.path, 'vreveal_frames_${anim.id}_${base}_v21_alpha'),
+        );
+        if (await dir.exists()) {
+          final existing = await _listRevealFrames(dir, exts: {'.png'});
+          if (existing.length >= 4) {
+            _revealFrameFiles[anim.id] = existing;
+            return existing;
+          }
+          try {
+            await dir.delete(recursive: true);
+          } catch (_) {}
         }
-        try {
-          await dir.delete(recursive: true);
-        } catch (_) {}
-      }
-      await dir.create(recursive: true);
-      final pattern = p.join(dir.path, 'r_%04d$extension');
-      await _runFfmpegJob(() async {
-        if (mattePath != null) {
+        await dir.create(recursive: true);
+        final pattern = p.join(dir.path, 'r_%04d.png');
+        await _runFfmpegJob(() async {
+          if (mattePath == null) {
+            throw Exception('${anim.id} missing alpha matte asset');
+          }
           final session = await FFmpegKit.execute(
             '-y -i "$path" -i "$mattePath" '
             '-filter_complex "'
@@ -1027,23 +1142,15 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             final logs = await session.getAllLogsAsString();
             throw Exception('Alpha reveal frame extraction failed: $logs');
           }
-          return;
-        }
-        final vf = anim.portalReveal
-            ? 'fps=15,scale=540:-2,colorkey=0x00FF00:0.35:0.1,format=rgba,format=rgb24'
-            : 'fps=15,scale=540:-2';
-        final session = await FFmpegKit.execute(
-          '-y -i "$path" -vf "$vf" -q:v 5 "$pattern"',
-        );
-        final code = await session.getReturnCode();
-        if (!ReturnCode.isSuccess(code)) {
-          throw Exception('In-anim frame extract failed');
-        }
-      });
-      final files = await _listRevealFrames(dir, exts: {extension});
-      if (files.isEmpty) throw Exception('In-anim frames empty');
-      _revealFrameFiles[anim.id] = files;
-      return files;
+        });
+        final files = await _listRevealFrames(dir, exts: {'.png'});
+        if (files.isEmpty) throw Exception('In-anim frames empty');
+        _revealFrameFiles[anim.id] = files;
+        return files;
+      } catch (e) {
+        _revealFrameJobs.remove(anim.id);
+        rethrow;
+      }
     });
   }
 
@@ -1052,27 +1159,30 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final hit = _revealImages[anim.id];
     if (hit != null && hit.isNotEmpty) return Future.value(hit);
     return _revealImageJobs.putIfAbsent(anim.id, () async {
-      final files = await _ensureRevealFrames(anim);
-      final decoded = <ui.Image>[];
-      for (final path in files) {
-        final bytes = await File(path).readAsBytes();
-        final codec = await ui.instantiateImageCodec(bytes);
-        final frame = await codec.getNextFrame();
-        decoded.add(frame.image);
+      try {
+        final files = await _ensureRevealFrames(anim);
+        final decoded = <ui.Image>[];
+        for (final path in files) {
+          final bytes = await File(path).readAsBytes();
+          final codec = await ui.instantiateImageCodec(bytes);
+          final frame = await codec.getNextFrame();
+          decoded.add(frame.image);
+        }
+        if (decoded.isEmpty) throw Exception('In-anim decode empty');
+        _revealImages[anim.id] = decoded;
+        return decoded;
+      } catch (e) {
+        _revealImageJobs.remove(anim.id);
+        rethrow;
       }
-      if (decoded.isEmpty) throw Exception('In-anim decode empty');
-      _revealImages[anim.id] = decoded;
-      return decoded;
     });
   }
 
-  /// CapCut In-anim: paint predecoded frame (Screen or srcOver). No widget rebuild blink.
+  /// CapCut In-anim: paint predecoded RGBA frame (Leaf Reveal srcOver pattern).
   Widget _buildRevealOverlayLayer() {
     final id = _activeRevealId;
     final images = id == null ? null : _revealImages[id];
     if (images == null || images.isEmpty) return const SizedBox.shrink();
-    final useAlpha =
-        VideoRevealAnim.byId(id)?.alphaMatteAssetPath != null;
     return ListenableBuilder(
       listenable: _revealFrameTick,
       builder: (context, _) {
@@ -1080,7 +1190,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         return CustomPaint(
           painter: _RevealFxPainter(
             image: images[fi],
-            blendMode: useAlpha ? BlendMode.srcOver : BlendMode.screen,
+            blendMode: BlendMode.srcOver,
           ),
           child: const SizedBox.expand(),
         );
@@ -1097,27 +1207,61 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     if (mounted) setState(() {});
   }
 
-  /// CapCut: show In-anim whenever playhead is inside the clip-start window.
+  /// CapCut: show In at clip start, Out at clip end.
   void _syncRevealOverlayFromMain() {
-    final reveal = _revealFor(_activeIndex);
+    final pos =
+        (_controller?.value.position.inMilliseconds ?? 0) / 1000.0;
+    final inn = _trimIn(_activeIndex);
+    final out = _trimOut(_activeIndex);
+
+    final inAnim = _revealFor(_activeIndex);
+    final inDur = _revealDurationFor(_activeIndex);
+    final inLocal = pos - inn;
+    final inActive =
+        inAnim != null && inLocal >= -0.02 && inLocal < inDur;
+
+    final outAnim = _outRevealFor(_activeIndex);
+    final outDur = _outRevealDurationFor(_activeIndex);
+    final outStart = out - outDur;
+    final outLocal = pos - outStart;
+    final outActive =
+        outAnim != null &&
+        outDur > 0 &&
+        pos >= outStart - 0.02 &&
+        pos <= out + 0.05;
+
+    VideoRevealAnim? reveal;
+    double local = 0;
+    double dur = 0;
+    if (inActive) {
+      reveal = inAnim;
+      local = inLocal;
+      dur = inDur;
+    } else if (outActive) {
+      reveal = outAnim;
+      local = outLocal.clamp(0.0, outDur);
+      dur = outDur;
+    }
+
     if (reveal == null) {
       if (_revealOverlayActive) _stopRevealOverlay();
       return;
     }
     final images = _revealImages[reveal.id];
-    if (images == null || images.isEmpty) return;
-
-    final inn = _trimIn(_activeIndex);
-    final dur = _revealDurationFor(_activeIndex);
-    final local =
-        (_controller?.value.position.inMilliseconds ?? 0) / 1000.0 - inn;
-    if (local < -0.02 || local >= dur) {
-      if (_revealOverlayActive) _stopRevealOverlay();
+    if (images == null || images.isEmpty) {
+      // Prefetch when playhead enters In/Out window.
+      unawaited(
+        _ensureRevealImages(reveal).then((_) {
+          if (mounted) _syncRevealOverlayFromMain();
+        }),
+      );
       return;
     }
 
-    final idx =
-        (local / dur * images.length).floor().clamp(0, images.length - 1);
+    final idx = (local / dur * images.length).floor().clamp(
+      0,
+      images.length - 1,
+    );
     final wasActive = _revealOverlayActive && _activeRevealId == reveal.id;
     _activeRevealId = reveal.id;
     _revealOverlayActive = true;
@@ -1125,21 +1269,25 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _revealFrameIndex = idx;
       _revealFrameTick.value = idx;
     }
-    // Only rebuild tree when overlay appears / switches FX — not every frame.
     if (!wasActive && mounted) setState(() {});
   }
 
-  /// CapCut: arm In-anim at clip start (overlay stays while playhead in range).
+  /// CapCut: arm reveal overlay (In at start, or Out at custom seek).
   Future<void> _startRevealOverlay(
     VideoRevealAnim anim, {
     bool seekMainToStart = true,
+    double? seekToSec,
   }) async {
     final main = _controller;
     if (main == null || !_ready) return;
     try {
       final images = await _ensureRevealImages(anim);
       if (!mounted || images.isEmpty) return;
-      if (seekMainToStart) {
+      if (seekToSec != null) {
+        await main.seekTo(
+          Duration(milliseconds: (seekToSec * 1000).round()),
+        );
+      } else if (seekMainToStart) {
         final inn = _trimIn(_activeIndex);
         await main.seekTo(Duration(milliseconds: (inn * 1000).round()));
       }
@@ -1149,7 +1297,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _revealFrameTick.value = 0;
       _syncRevealOverlayFromMain();
       if (mounted) setState(() {});
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('Reveal overlay failed (${anim.id}): $e\n$st');
       _stopRevealOverlay();
     }
   }
@@ -1166,8 +1315,27 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     }
   }
 
+  /// Live preview when picking an Out-anim (CapCut: seek end window + play).
+  Future<void> _playRevealAtClipEnd(
+    VideoRevealAnim anim, {
+    required bool playMain,
+  }) async {
+    final out = _trimOut(_activeIndex);
+    final dur = anim.durationSec.clamp(0.5, math.max(0.5, _visibleDuration(_activeIndex)));
+    final start = math.max(_trimIn(_activeIndex), out - dur);
+    await _startRevealOverlay(anim, seekMainToStart: false, seekToSec: start);
+    if (playMain) {
+      await _controller?.play();
+      _syncStripToPlayhead();
+    }
+  }
+
   void _selectTool(VideoEditorTool t) {
-    setState(() => _tool = _tool == t ? null : t);
+    unawaited(_pausePreview());
+    setState(() {
+      _tool = _tool == t ? null : t;
+      _animSheetOpen = false;
+    });
   }
 
   Future<void> _addMoreClips() async {
@@ -1336,18 +1504,31 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               ),
             ),
           ),
+          // Fixed play / time / undo row (never jumps when Animation opens).
+          _buildPlaybackBar(rs),
+          // Green area: filmstrip+tools OR Animation bottom sheet.
           if (_animSheetOpen)
             _buildClipAnimationSheet(rs)
           else
-            _buildTimelinePanel(rs),
+            _buildTimelineFilmstripPanel(rs),
           if (_selectedClipIndex == null && _tool != null) _buildToolPanel(rs),
-          if (_selectedClipIndex != null)
+          // CapCut: hide clip tools while Animation sheet fills that space.
+          if (_selectedClipIndex != null && !_animSheetOpen)
             _buildClipToolsNavbar(rs)
-          else
+          else if (_selectedClipIndex == null)
             _buildBottomTools(rs),
         ],
       ),
     );
+  }
+
+  /// CapCut: pause preview when opening tools / Animation.
+  Future<void> _pausePreview() async {
+    final c = _controller;
+    if (c == null || !_ready || !c.value.isPlaying) return;
+    await c.pause();
+    _syncRevealOverlayFromMain();
+    if (mounted) setState(() {});
   }
 
   /// Fills the already-sized video frame (native aspect, CapCut contain).
@@ -1357,35 +1538,36 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     return ColorFiltered(colorFilter: filter, child: player);
   }
 
-  /// Slideshow-style chrome: time/play/undo + center playhead filmstrip.
-  Widget _buildTimelinePanel(AppResponsive rs) {
+  /// Fixed chrome under preview: time + play/pause + undo/redo.
+  Widget _buildPlaybackBar(AppResponsive rs) {
     return Container(
-      height: _timelinePanelH,
+      height: _timelineHeaderH,
       width: double.infinity,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
+      padding: EdgeInsets.only(left: rs.w(14), right: rs.w(6)),
+      child: _timelineHeaderRow(rs),
+    );
+  }
+
+  /// Filmstrip + playhead only (playback bar is fixed above).
+  Widget _buildTimelineFilmstripPanel(AppResponsive rs) {
+    final bodyH = _timelinePanelH - _timelineHeaderH;
+    return Container(
+      height: bodyH,
+      width: double.infinity,
+      color: Colors.white,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final playheadX = constraints.maxWidth / 2;
           return Stack(
             children: [
-              Column(
-                children: [
-                  SizedBox(
-                    height: _timelineHeaderH,
-                    child: Padding(
-                      padding: EdgeInsets.only(left: rs.w(14), right: rs.w(6)),
-                      child: _timelineHeaderRow(rs),
-                    ),
-                  ),
-                  Expanded(child: _videoFilmstrip(rs, playheadX)),
-                ],
-              ),
+              Positioned.fill(child: _videoFilmstrip(rs, playheadX)),
               Positioned(
                 left: playheadX - 1,
-                top: _timelineHeaderH - rs.h(6),
+                top: 0,
                 bottom: rs.h(36),
                 child: IgnorePointer(
                   child: Container(width: 2, color: AppColors.primary),
@@ -1694,11 +1876,16 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final slots = math.min(120, math.max(1, (width / pps).ceil()));
     final inn = _trimIn(index);
     final reveal = _revealFor(index);
-    // CapCut: solid white In-anim block at clip start (width = anim duration).
+    final outReveal = _outRevealFor(index);
+    // CapCut: white In block at start, Out block at end.
     final animDur = reveal == null ? 0.0 : _revealDurationFor(index);
     final markerW = reveal == null
         ? 0.0
         : (animDur * pps).clamp(10.0, math.max(10.0, width)).toDouble();
+    final outDur = outReveal == null ? 0.0 : _outRevealDurationFor(index);
+    final outMarkerW = outReveal == null
+        ? 0.0
+        : (outDur * pps).clamp(10.0, math.max(10.0, width)).toDouble();
     return ClipRRect(
       borderRadius: BorderRadius.circular(4),
       child: SizedBox(
@@ -1774,6 +1961,35 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                   ),
                 ),
               ),
+            // CapCut Out-marker at clip end.
+            if (outMarkerW > 0)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: outMarkerW,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    borderRadius: const BorderRadius.horizontal(
+                      left: Radius.circular(6),
+                    ),
+                  ),
+                  padding: const EdgeInsets.only(left: 4, top: 3, right: 4),
+                  alignment: Alignment.topRight,
+                  child: Text(
+                    '${outDur.toStringAsFixed(1)}s',
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: const TextStyle(
+                      color: Color(0xFF111111),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -1800,22 +2016,25 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   /// CapCut Animation page: In/Out + FX thumbs + duration slider.
   Widget _buildClipAnimationSheet(AppResponsive rs) {
     final sel = _selectedClipIndex;
-    final selectedId = (sel != null && sel < _clipRevealIds.length)
-        ? _clipRevealIds[sel]
-        : null;
-    final options = _animPhase == _VideoAnimPhase.inAnimation
-        ? VideoRevealAnim.catalog
-        : const <VideoRevealAnim>[];
-    final hasAnim = selectedId != null;
-    final durSec = (sel != null && hasAnim) ? _revealDurationFor(sel) : 0.0;
-    final maxDur = (sel != null)
-        ? math.min(5.0, math.max(0.5, _visibleDuration(sel)))
-        : 5.0;
+    final isOut = _animPhase == _VideoAnimPhase.outAnimation;
+    final selectedId = sel == null
+        ? null
+        : (isOut
+              ? (sel < _clipOutRevealIds.length
+                    ? _clipOutRevealIds[sel]
+                    : null)
+              : (sel < _clipRevealIds.length ? _clipRevealIds[sel] : null));
+    final options = isOut
+        ? VideoRevealAnim.outCatalog
+        : VideoRevealAnim.catalog;
 
+    // Fills green area (filmstrip + clip tools). Playback bar stays fixed above.
+    final sheetH = (_timelinePanelH - _timelineHeaderH) + rs.h(72);
     return SectionSheet(
       title: 'Animation',
-      height: rs.h(210),
+      height: sheetH,
       compactHeader: true,
+      showTopDivider: false,
       onClose: () {
         setState(() {
           _animSheetOpen = false;
@@ -1839,7 +2058,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               children: [
                 for (final phase in _VideoAnimPhase.values)
                   InkWell(
-                    onTap: () => setState(() => _animPhase = phase),
+                    onTap: () => setState(() {
+                      _animPhase = phase;
+                      _revealDurDrag = null;
+                    }),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: Column(
@@ -1871,196 +2093,148 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: 8),
           Expanded(
-            child: _animPhase == _VideoAnimPhase.outAnimation
-                ? const Center(
-                    child: Text(
-                      'Out animations coming soon',
-                      style: TextStyle(
-                        color: AppColors.textMuted,
-                        fontSize: 12,
-                      ),
-                    ),
-                  )
-                : ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.fromLTRB(8, 0, 12, 2),
-                    itemCount: options.length + 1,
-                    separatorBuilder: (_, _) => const SizedBox(width: 0),
-                    itemBuilder: (context, i) {
-                      if (i == 0) {
-                        final isSelected = selectedId == null;
-                        return InkWell(
-                          onTap: () {
-                            if (sel == null) return;
-                            _ensureTrimSlots();
-                            setState(() {
-                              _clipRevealIds[sel] = null;
-                              _clipRevealDurSec[sel] = null;
-                            });
-                            _stopRevealOverlay();
-                          },
-                          child: SizedBox(
-                            width: 78,
-                            child: Column(
-                              children: [
-                                SizedBox(
-                                  width: 56,
-                                  height: 56,
-                                  child: PrimarySelectedBorder(
-                                    selected: isSelected,
-                                    borderRadius: 4,
-                                    width: 2,
-                                    unselectedColor: Colors.transparent,
-                                    unselectedWidth: 0,
-                                    child: const ColoredBox(
-                                      color: Color(0xFFF2F2F2),
-                                      child: Center(
-                                        child: Icon(
-                                          Icons.block,
-                                          color: Color(0xFF9E9E9E),
-                                          size: 28,
-                                        ),
-                                      ),
-                                    ),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(8, 0, 12, 2),
+              itemCount: options.length + 1,
+              separatorBuilder: (_, _) => const SizedBox(width: 0),
+              itemBuilder: (context, i) {
+                if (i == 0) {
+                  final isSelected = selectedId == null;
+                  return InkWell(
+                    onTap: () {
+                      if (sel == null) return;
+                      _ensureTrimSlots();
+                      setState(() {
+                        if (isOut) {
+                          _clipOutRevealIds[sel] = null;
+                          _clipOutRevealDurSec[sel] = null;
+                        } else {
+                          _clipRevealIds[sel] = null;
+                          _clipRevealDurSec[sel] = null;
+                        }
+                      });
+                      _stopRevealOverlay();
+                    },
+                    child: SizedBox(
+                      width: 78,
+                      child: Column(
+                        children: [
+                          SizedBox(
+                            width: 56,
+                            height: 56,
+                            child: PrimarySelectedBorder(
+                              selected: isSelected,
+                              borderRadius: 4,
+                              width: 2,
+                              unselectedColor: Colors.transparent,
+                              unselectedWidth: 0,
+                              child: const ColoredBox(
+                                color: Color(0xFFF2F2F2),
+                                child: Center(
+                                  child: Icon(
+                                    Icons.block,
+                                    color: Color(0xFF9E9E9E),
+                                    size: 28,
                                   ),
                                 ),
-                                const Text(
-                                  'None',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: AppColors.textDark,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
                           ),
-                        );
+                          const Text(
+                            'None',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: AppColors.textDark,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                final anim = options[i - 1];
+                final isSelected = selectedId == anim.id;
+                return InkWell(
+                  onTap: () {
+                    if (sel == null) return;
+                    _ensureTrimSlots();
+                    setState(() {
+                      if (isOut) {
+                        _clipOutRevealIds[sel] = anim.id;
+                        _clipOutRevealDurSec[sel] = anim.durationSec;
+                      } else {
+                        _clipRevealIds[sel] = anim.id;
+                        _clipRevealDurSec[sel] = anim.durationSec;
                       }
-                      final anim = options[i - 1];
-                      final isSelected = selectedId == anim.id;
-                      return InkWell(
-                        onTap: () {
-                          if (sel == null) return;
-                          _ensureTrimSlots();
-                          setState(() {
-                            _clipRevealIds[sel] = anim.id;
-                            // CapCut: each In pick uses that FX’s default duration.
-                            _clipRevealDurSec[sel] = anim.durationSec;
-                          });
-                          // CapCut: seek clip start + live Screen-blend preview.
-                          if (_activeIndex != sel) {
-                            unawaited(
-                              _loadClip(sel).then((_) {
-                                unawaited(
-                                  _playRevealAtClipStart(anim, playMain: true),
-                                );
-                              }),
-                            );
-                          } else {
-                            unawaited(
-                              _playRevealAtClipStart(anim, playMain: true),
-                            );
-                          }
-                        },
-                        child: SizedBox(
-                          width: 78,
-                          child: Column(
-                            children: [
-                              SizedBox(
-                                width: 56,
-                                height: 56,
-                                child: PrimarySelectedBorder(
-                                  selected: isSelected,
-                                  borderRadius: 4,
-                                  width: 2,
-                                  unselectedColor: Colors.transparent,
-                                  unselectedWidth: 0,
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: ColoredBox(
-                                      color: Colors.black,
-                                      child: Image.asset(
-                                        anim.thumbPath,
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, _, _) => const Center(
-                                          child: Icon(
-                                            Icons.movie_filter_rounded,
-                                            color: Colors.white54,
-                                          ),
-                                        ),
-                                      ),
+                    });
+                    Future<void> preview() async {
+                      if (isOut) {
+                        await _playRevealAtClipEnd(anim, playMain: true);
+                      } else {
+                        await _playRevealAtClipStart(anim, playMain: true);
+                      }
+                    }
+
+                    if (_activeIndex != sel) {
+                      unawaited(_loadClip(sel).then((_) => preview()));
+                    } else {
+                      unawaited(preview());
+                    }
+                  },
+                  child: SizedBox(
+                    width: 78,
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          width: 56,
+                          height: 56,
+                          child: PrimarySelectedBorder(
+                            selected: isSelected,
+                            borderRadius: 4,
+                            width: 2,
+                            unselectedColor: Colors.transparent,
+                            unselectedWidth: 0,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: ColoredBox(
+                                color: Colors.black,
+                                child: Image.asset(
+                                  anim.thumbPath,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => const Center(
+                                    child: Icon(
+                                      Icons.movie_filter_rounded,
+                                      color: Colors.white54,
                                     ),
                                   ),
                                 ),
                               ),
-                              Text(
-                                anim.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: AppColors.textDark,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         ),
-                      );
-                    },
-                  ),
-          ),
-          // CapCut: duration slider under In thumbs (e.g. 2.6s).
-          if (_animPhase == _VideoAnimPhase.inAnimation && hasAnim && sel != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 40,
-                    child: Text(
-                      '${durSec.toStringAsFixed(1)}s',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textDark,
-                      ),
+                        Text(
+                          anim.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: AppColors.textDark,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        activeTrackColor: AppColors.primary,
-                        thumbColor: AppColors.primary,
-                        inactiveTrackColor: AppColors.border,
-                        trackHeight: 3,
-                        overlayShape: SliderComponentShape.noOverlay,
-                      ),
-                      child: Slider(
-                        value: durSec.clamp(0.5, maxDur),
-                        min: 0.5,
-                        max: maxDur,
-                        onChanged: (v) {
-                          setState(() => _revealDurDrag = v);
-                        },
-                        onChangeEnd: (v) {
-                          _ensureTrimSlots();
-                          setState(() {
-                            _clipRevealDurSec[sel] = v;
-                            _revealDurDrag = null;
-                          });
-                        },
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                );
+              },
             ),
+          ),
         ],
       ),
     );
@@ -2305,6 +2479,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   Future<void> _handleClipTool(_ClipEditTool tool) async {
     final sel = _selectedClipIndex;
     if (sel == null || sel >= _clips.length) return;
+    await _pausePreview();
 
     switch (tool) {
       case _ClipEditTool.volume:
@@ -2317,6 +2492,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           _tool = null;
         });
       case _ClipEditTool.delete:
+        if (!mounted) return;
         if (_clips.length <= 1) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Keep at least one clip')),
@@ -2338,6 +2514,12 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           if (sel < _clipRevealDurSec.length) {
             _clipRevealDurSec.removeAt(sel);
           }
+          if (sel < _clipOutRevealIds.length) {
+            _clipOutRevealIds.removeAt(sel);
+          }
+          if (sel < _clipOutRevealDurSec.length) {
+            _clipOutRevealDurSec.removeAt(sel);
+          }
           _ensureTrimSlots();
           _animSheetOpen = false;
           _selectedClipIndex = null;
@@ -2346,8 +2528,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       case _ClipEditTool.speed:
         if (!mounted) return;
         const speeds = <double>[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+        final speedCtx = context;
         await showModalBottomSheet<void>(
-          context: context,
+          context: speedCtx,
           backgroundColor: Colors.white,
           shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -2398,6 +2581,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           _clipVolumes[sel] = 1.0;
           _clipRevealIds[sel] = null;
           _clipRevealDurSec[sel] = null;
+          _clipOutRevealIds[sel] = null;
+          _clipOutRevealDurSec[sel] = null;
           _clipTrimIn[sel] = null;
           _clipTrimOut[sel] = null;
         });
@@ -3220,4 +3405,3 @@ class _RevealFxPainter extends CustomPainter {
   bool shouldRepaint(covariant _RevealFxPainter oldDelegate) =>
       oldDelegate.image != image || oldDelegate.blendMode != blendMode;
 }
-
