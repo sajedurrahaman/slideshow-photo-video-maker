@@ -98,7 +98,7 @@ class VideoEditorExportService {
       final sourceDuration = math.max(0.1, clip.sourceDurationSec);
       final start = clip.trimInSec.clamp(0.0, sourceDuration - 0.05);
       final end = clip.trimOutSec.clamp(start + 0.05, sourceDuration);
-      final speed = clip.speed.clamp(0.5, 2.0);
+      final speed = clip.speed.clamp(0.1, 100.0);
       final outputDuration = (end - start) / speed;
       durations.add(outputDuration);
 
@@ -156,10 +156,12 @@ class VideoEditorExportService {
 
       final audioLabel = 'audio$i';
       if (audioInputs[i]) {
+        // atempo only accepts 0.5–2.0; chain filters for CapCut 0.1x–100x.
+        final tempoChain = _atempoChain(speed);
         graph.add(
           '[${clipInputs[i]}:a:0]'
           'atrim=start=${_n(start)}:end=${_n(end)},'
-          'asetpts=PTS-STARTPTS,atempo=${_n(speed)},'
+          'asetpts=PTS-STARTPTS,$tempoChain,'
           'volume=${_n(clip.volume.clamp(0.0, 1.0))},'
           'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo'
           '[$audioLabel]',
@@ -237,6 +239,23 @@ class VideoEditorExportService {
   }
 
   static String _n(num value) => value.toStringAsFixed(5);
+
+  /// Build chained `atempo` filters (each step must stay in 0.5–2.0).
+  static String _atempoChain(double speed) {
+    var remaining = speed.clamp(0.1, 100.0);
+    final parts = <String>[];
+    // Speed up: multiply by ≤2 repeatedly. Slow down: multiply by ≥0.5.
+    while (remaining > 2.0 + 1e-6) {
+      parts.add('atempo=2.0');
+      remaining /= 2.0;
+    }
+    while (remaining < 0.5 - 1e-6) {
+      parts.add('atempo=0.5');
+      remaining /= 0.5;
+    }
+    parts.add('atempo=${_n(remaining)}');
+    return parts.join(',');
+  }
 
   static String _escape(String value) =>
       value.replaceAll('\\', r'\\').replaceAll('"', r'\"');

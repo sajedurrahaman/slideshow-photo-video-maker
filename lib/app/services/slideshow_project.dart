@@ -18,6 +18,7 @@ import '../models/models.dart';
 import 'effect_overlay_service.dart';
 import 'frame_compositor.dart';
 import 'photo_animation_engine.dart';
+import 'text_overlay_host.dart';
 import 'transition_engine.dart';
 
 class _PreparedPhotoLayers {
@@ -227,7 +228,7 @@ Map<String, Object> _renderTransitionBatchInWorker(Map<String, Object> args) {
   return {'frames': rendered};
 }
 
-class SlideshowProject extends ChangeNotifier {
+class SlideshowProject extends ChangeNotifier implements TextOverlayHost {
   final List<SlideshowPhoto> photos = [];
   SlideTheme selectedTheme = AppThemes.all.first;
   bool isEffectOverlayEnabled = false;
@@ -262,6 +263,7 @@ class SlideshowProject extends ChangeNotifier {
   PhotoFilterPreset globalFilter = PhotoFilterPreset.original;
   TitleCard? startingCard;
   TitleCard? endingCard;
+  @override
   final List<SlideOverlay> overlays = [];
 
   /// When set, back-save updates this draft instead of creating a new one.
@@ -3126,6 +3128,7 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   void addOverlay(SlideOverlay overlay) {
     overlays.add(overlay);
     // Text/FX overlays are live-composited — never wipe JPEG/strip caches
@@ -3133,6 +3136,7 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   void updateOverlay(SlideOverlay overlay) {
     final i = overlays.indexWhere((e) => e.id == overlay.id);
     if (i < 0) return;
@@ -3140,6 +3144,7 @@ class SlideshowProject extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
   void removeOverlay(String id) {
     overlays.removeWhere((e) => e.id == id);
     notifyListeners();

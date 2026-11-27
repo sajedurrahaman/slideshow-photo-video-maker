@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
-import '../services/slideshow_project.dart';
+import '../services/text_overlay_host.dart';
 import 'text_overlay_paint.dart';
 
 enum TextToolsMainTab { fontStyle, colorStyle }
@@ -27,7 +27,7 @@ class TextToolsSheet extends StatefulWidget {
     this.compactKeyboardPhase = false,
   });
 
-  final SlideshowProject project;
+  final TextOverlayHost project;
   final TextEditingController controller;
   final FocusNode focusNode;
   final String? selectedOverlayId;
@@ -1273,7 +1273,7 @@ class LiveTextOverlaysLayer extends StatefulWidget {
     this.onEditOverlay,
   });
 
-  final SlideshowProject project;
+  final TextOverlayHost project;
   final String? selectedOverlayId;
   final ValueChanged<String?> onSelectedOverlayId;
   /// True while text bottom sheet is open.
