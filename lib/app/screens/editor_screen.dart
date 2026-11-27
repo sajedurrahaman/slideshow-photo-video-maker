@@ -5069,8 +5069,13 @@ class _LiveEffectOverlayLayerState extends State<_LiveEffectOverlayLayer> {
     _disposeFrames();
     if (mounted) setState(() {});
     try {
+      // Match video editor: 720 max — 360 looked soft when scaled to preview.
       final (pw, ph) = widget.project.previewSize;
-      final (w, h) = EffectOverlayService.cappedSize(pw, ph, maxSide: 360);
+      final (w, h) = EffectOverlayService.cappedSize(
+        math.max(pw, 720),
+        math.max(ph, 1280),
+        maxSide: 720,
+      );
       final files = await EffectOverlayService.previewFrames(
         effect: effect,
         width: w,
@@ -5099,12 +5104,16 @@ class _LiveEffectOverlayLayerState extends State<_LiveEffectOverlayLayer> {
       _frames
         ..clear()
         ..addAll(decoded);
-      widget.project.setOverlaySourceDuration(
-        _frames.length / EffectOverlayService.previewFps,
-      );
+      final sourceDur = _frames.length / EffectOverlayService.previewFps;
       setState(() => _ready = true);
       _syncToClock();
-      widget.onFramesReady?.call(effect.id);
+      // Provider notify must not land mid-build (e.g. cached frames resume
+      // while the effects Expanded sheet is still mounting).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || gen != _loadGen) return;
+        widget.project.setOverlaySourceDuration(sourceDur);
+        widget.onFramesReady?.call(effect.id);
+      });
     } catch (_) {
       if (mounted && gen == _loadGen) {
         setState(() => _ready = false);
@@ -5160,7 +5169,7 @@ class _ScreenEffectPainter extends CustomPainter {
         image: image,
         fit: BoxFit.cover,
         blendMode: BlendMode.screen,
-        filterQuality: FilterQuality.low,
+        filterQuality: FilterQuality.medium,
       );
       return;
     }
@@ -5170,7 +5179,7 @@ class _ScreenEffectPainter extends CustomPainter {
       image: image,
       fit: BoxFit.cover,
       blendMode: BlendMode.screen,
-      filterQuality: FilterQuality.low,
+      filterQuality: FilterQuality.medium,
     );
   }
 
@@ -5644,8 +5653,13 @@ class _EffectsPickerSheetState extends State<_EffectsPickerSheet> {
   @override
   void initState() {
     super.initState();
-    // Ensure slideshow preview is not fighting effect-list VideoPlayers.
-    widget.project.stopPreviewPlayback();
+    // Defer — stopPreviewPlayback notifies the provider; calling it while the
+    // parent Expanded is still mounting this sheet triggers
+    // "setState() during build" on InheritedProviderScope.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.project.stopPreviewPlayback();
+    });
   }
 
   @override

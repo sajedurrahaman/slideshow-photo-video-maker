@@ -23,6 +23,7 @@ import '../services/effect_overlay_service.dart';
 import '../services/text_overlay_host.dart';
 import '../widgets/editTool_sheet.dart';
 import '../widgets/editor_media_sheets.dart';
+import '../widgets/music_edit_sheet.dart';
 import '../widgets/preparing_preview_overlay.dart';
 import '../widgets/text_tools_sheet.dart';
 import 'video_resize_screen.dart';
@@ -113,7 +114,8 @@ class VideoRevealAnim {
       id: 'fx_out_01',
       name: 'Glitch Static',
       assetPath: 'assets/animations/fx_out_01_glitch_static.mp4',
-      alphaMatteAssetPath: 'assets/animations/fx_out_01_glitch_static_alpha.mp4',
+      alphaMatteAssetPath:
+          'assets/animations/fx_out_01_glitch_static_alpha.mp4',
       thumbPath: 'assets/animations/fx_out_01_glitch_static_thumb.png',
       durationSec: 2.0,
     ),
@@ -208,6 +210,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   final List<double?> _clipOutRevealDurSec = [];
   double? _revealDurDrag;
   bool _animSheetOpen = false;
+
   /// CapCut Speed sheet — same inline green-area pattern as Animation.
   bool _speedSheetOpen = false;
   double _speedDraft = 1.0;
@@ -405,11 +408,14 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   double _aspectW = 9;
   double _aspectH = 16;
   int _filterIndex = 0;
+
   /// Committed music on the timeline (after Music ✓).
   MusicTrack? _music;
+
   /// Draft selection while the Music picker is open (audition only).
   MusicTrack? _musicDraft;
   final List<MusicTrack> _localMusicTracks = [];
+
   /// Don't steal Android audio focus from [VideoPlayer] (or video pauses).
   final AudioPlayer _bgmPlayer = AudioPlayer(
     handleInterruptions: false,
@@ -419,8 +425,13 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   bool _musicToolsOpen = false;
   bool _musicTrackSelected = false;
   bool _musicVolumeOpen = false;
+  bool _musicEditOpen = false;
+
+  /// True while dragging music trim handles (locks filmstrip scroll).
+  bool _musicTrimDragging = false;
   String? _stickerLabel;
   OverlayEffect? _overlayEffect;
+
   /// Effect span on the project timeline (CapCut clip start/end).
   double _effectStartSec = 0;
   double? _effectEndSec;
@@ -436,6 +447,21 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   bool get _mediaToolSheetOpen =>
       _tool == VideoEditorTool.music || _tool == VideoEditorTool.effects;
+
+  /// Clip Edit / Music / Effects / Text tools open — AppBar back + Export hide.
+  bool get _navbarToolActive =>
+      _selectedClipIndex != null ||
+      _musicToolsOpen ||
+      _effectsToolsOpen ||
+      _textToolsOpen ||
+      _clipEditorSheetOpen ||
+      _musicEditOpen ||
+      _musicVolumeOpen ||
+      _mediaToolSheetOpen ||
+      _tool == VideoEditorTool.edit ||
+      _tool == VideoEditorTool.text ||
+      _tool == VideoEditorTool.music ||
+      _tool == VideoEditorTool.effects;
   bool _loadingClip = false;
   bool _preparingProxy = false;
 
@@ -445,6 +471,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   Timer? _scrubTimer;
   double _lastScrubSec = -1;
   DateTime? _lastUiTick;
+
   /// Bumps on each play/pause so a stale async play branch can't resume video
   /// after the user already paused (BGM load race).
   int _playToggleGen = 0;
@@ -462,6 +489,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   /// Filmstrip frame image paths per clip (dense strip → short transitions visible).
   final Map<String, List<String>> _filmstripFrames = {};
   final Set<String> _filmstripLoading = {};
+
   /// In-flight filmstrip jobs so Speed ✓ can await full strip before play.
   final Map<String, Future<void>> _filmstripJobs = {};
 
@@ -665,8 +693,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _filmstripLoading.add(path);
       try {
         final dur = _clipDurationSec[path] ?? 1.0;
-        final count =
-            math.min(360, math.max(1, (dur * _filmstripFps).ceil()));
+        final count = math.min(360, math.max(1, (dur * _filmstripFps).ceil()));
         final tmp = await getTemporaryDirectory();
         final safe = path.hashCode.toRadixString(16);
         // vstrip4 = 4fps cache (invalidates older vstrip2/3).
@@ -979,6 +1006,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _effectsToolsOpen = false;
       _musicToolsOpen = false;
       _musicVolumeOpen = false;
+      _musicEditOpen = false;
       _musicTrackSelected = false;
       _textToolsOpen = false;
       _selectedTextOverlayId = null;
@@ -1155,18 +1183,12 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final c = _controller;
     if (c == null || !_ready || !_animPreviewReady) return;
     final isOut = _animPhase == _VideoAnimPhase.outAnimation;
-    final anim = isOut
-        ? _outRevealFor(_activeIndex)
-        : _revealFor(_activeIndex);
+    final anim = isOut ? _outRevealFor(_activeIndex) : _revealFor(_activeIndex);
     if (anim == null) return;
 
     _stoppedAtClipEnd = false;
     final start = _animPreviewStartSec();
-    await _startRevealOverlay(
-      anim,
-      seekMainToStart: false,
-      seekToSec: start,
-    );
+    await _startRevealOverlay(anim, seekMainToStart: false, seekToSec: start);
     if (!mounted) return;
     _animPreviewPlaying = true;
     await c.play();
@@ -1226,7 +1248,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   void _onStripScroll() {
     // Ignore programmatic jumps while video is driving the strip.
     if (_syncingStrip || _stripController.positions.length != 1) return;
-    if (_playing || (_controller?.value.isPlaying ?? false) || _bgmPlayer.playing) {
+    if (_playing ||
+        (_controller?.value.isPlaying ?? false) ||
+        _bgmPlayer.playing) {
       // User dragged while playing → pause then scrub (slideshow behavior).
       _playToggleGen++;
       unawaited(_controller?.pause());
@@ -1367,8 +1391,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     }
 
     // Pause if UI, video, or BGM is active (keeps them in lockstep).
-    final wantPause =
-        _playing || c.value.isPlaying || _bgmPlayer.playing;
+    final wantPause = _playing || c.value.isPlaying || _bgmPlayer.playing;
     if (wantPause) {
       await c.pause();
       await _pauseBgm();
@@ -1383,8 +1406,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     _userScrubbing = false;
     _scrubTimer?.cancel();
     // CapCut: restart from clip start if near begin or past / parked at clip end.
-    final restartFromStart =
-        pos < inn + 0.15 || pos >= out - 0.05 || pos < inn;
+    final restartFromStart = pos < inn + 0.15 || pos >= out - 0.05 || pos < inn;
     _stoppedAtClipEnd = false;
     if (restartFromStart) {
       await c.seekTo(Duration(milliseconds: (inn * 1000).round()));
@@ -1662,16 +1684,14 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   /// CapCut: show In at clip start, Out at clip end.
   void _syncRevealOverlayFromMain() {
-    final pos =
-        (_controller?.value.position.inMilliseconds ?? 0) / 1000.0;
+    final pos = (_controller?.value.position.inMilliseconds ?? 0) / 1000.0;
     final inn = _trimIn(_activeIndex);
     final out = _trimOut(_activeIndex);
 
     final inAnim = _revealFor(_activeIndex);
     final inDur = _revealDurationFor(_activeIndex);
     final inLocal = pos - inn;
-    final inActive =
-        inAnim != null && inLocal >= -0.02 && inLocal < inDur;
+    final inActive = inAnim != null && inLocal >= -0.02 && inLocal < inDur;
 
     final outAnim = _outRevealFor(_activeIndex);
     final outDur = _outRevealDurationFor(_activeIndex);
@@ -1737,9 +1757,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       final images = await _ensureRevealImages(anim);
       if (!mounted || images.isEmpty) return;
       if (seekToSec != null) {
-        await main.seekTo(
-          Duration(milliseconds: (seekToSec * 1000).round()),
-        );
+        await main.seekTo(Duration(milliseconds: (seekToSec * 1000).round()));
       } else if (seekMainToStart) {
         final inn = _trimIn(_activeIndex);
         await main.seekTo(Duration(milliseconds: (inn * 1000).round()));
@@ -1774,7 +1792,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     required bool playMain,
   }) async {
     final out = _trimOut(_activeIndex);
-    final dur = anim.durationSec.clamp(0.5, math.max(0.5, _visibleDuration(_activeIndex)));
+    final dur = anim.durationSec.clamp(
+      0.5,
+      math.max(0.5, _visibleDuration(_activeIndex)),
+    );
     final start = math.max(_trimIn(_activeIndex), out - dur);
     await _startRevealOverlay(anim, seekMainToStart: false, seekToSec: start);
     if (playMain) {
@@ -1811,6 +1832,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         _musicToolsOpen = true;
         _musicTrackSelected = true;
         _musicVolumeOpen = false;
+        _musicEditOpen = false;
         _effectsToolsOpen = false;
         _animSheetOpen = false;
         _speedSheetOpen = false;
@@ -1904,8 +1926,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           final end = _effectEndSec ?? _totalDurationSec;
           if (_effectStartSec <= 0.001) return;
           setState(() {
-            _effectStartSec =
-                (_effectStartSec - step).clamp(0.0, end - 0.5);
+            _effectStartSec = (_effectStartSec - step).clamp(0.0, end - 0.5);
           });
           return;
         }
@@ -1916,8 +1937,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           final curEnd = _effectEndSec ?? videoEnd;
           if (curEnd >= videoEnd - 0.001) return;
           setState(() {
-            _effectEndSec =
-                (curEnd + step).clamp(_effectStartSec + 0.5, videoEnd);
+            _effectEndSec = (curEnd + step).clamp(
+              _effectStartSec + 0.5,
+              videoEnd,
+            );
           });
           return;
         }
@@ -1927,7 +1950,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   void _openTextTools({String? editOverlayId}) {
     unawaited(_pausePreview());
     if (editOverlayId != null) {
-      final o = _textOverlays.overlays.where((e) => e.id == editOverlayId).firstOrNull;
+      final o = _textOverlays.overlays
+          .where((e) => e.id == editOverlayId)
+          .firstOrNull;
       _textFieldController.text = o?.text ?? '';
       _selectedTextOverlayId = editOverlayId;
     } else {
@@ -1961,8 +1986,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   /// Filmstrip body + bottom navbar — fixed so preview never jumps on sheet open/close.
   double get _bottomWorkspaceH =>
-      (_timelinePanelH - _timelineHeaderH) +
-      AppResponsive.of(context).h(72);
+      (_timelinePanelH - _timelineHeaderH) + AppResponsive.of(context).h(72);
 
   double get _mediaToolSheetHeight => _bottomWorkspaceH;
 
@@ -1990,225 +2014,249 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       resizeToAvoidBottomInset: false,
       backgroundColor: Colors.white,
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => context.pop(),
-        ),
+        automaticallyImplyLeading: false,
+        // Clip Edit / Music / Effects / Text: Done is in timeline header — hide back.
+        leading: _navbarToolActive
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+                onPressed: () => context.pop(),
+              ),
         title: const Text('Editor'),
         actions: [
-          Padding(
-            padding: EdgeInsets.only(right: rs.w(12)),
-            child: TealPillButton(
-              label: 'Export',
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Video export coming soon')),
-                );
-              },
+          // Same tool states: Done lives in header — hide Export.
+          if (!_navbarToolActive)
+            Padding(
+              padding: EdgeInsets.only(
+                right: rs.w(12),
+                top: rs.w(8),
+                bottom: rs.w(8),
+              ),
+              child: TealPillButton(
+                label: 'Export',
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Video export coming soon')),
+                  );
+                },
+              ),
             ),
-          ),
         ],
       ),
       body: Stack(
         children: [
           Column(
             children: [
-          Expanded(
-            child: ColoredBox(
-              color: _bgColor,
-              // CapCut-style: full preview is canvas; video keeps native
-              // aspect (contain). In-anim / overlays clip to video rect only.
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  if (!_ready || _controller == null) {
-                    return const PreparingPreviewOverlay();
-                  }
+              Expanded(
+                child: ColoredBox(
+                  color: _bgColor,
+                  // CapCut-style: full preview is canvas; video keeps native
+                  // aspect (contain). In-anim / overlays clip to video rect only.
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      if (!_ready || _controller == null) {
+                        return const PreparingPreviewOverlay();
+                      }
 
-                  final videoSize = _controller!.value.size;
-                  final nativeAr = (videoSize.width > 0 && videoSize.height > 0)
-                      ? videoSize.width / videoSize.height
-                      : (_aspectW / _aspectH);
-                  // After Resize, preview frame follows crop window aspect.
-                  final crop = _cropFor(_activeIndex);
-                  final videoAr = (crop != null &&
-                          !crop.isIdentity &&
-                          crop.height > 0 &&
-                          videoSize.width > 0 &&
-                          videoSize.height > 0)
-                      ? (crop.width * videoSize.width) /
-                          (crop.height * videoSize.height)
-                      : nativeAr;
-                  final maxW = constraints.maxWidth;
-                  final maxH = constraints.maxHeight;
-                  late final double frameW;
-                  late final double frameH;
-                  if (maxW / maxH > videoAr) {
-                    frameH = maxH;
-                    frameW = frameH * videoAr;
-                  } else {
-                    frameW = maxW;
-                    frameH = frameW / videoAr;
-                  }
+                      final videoSize = _controller!.value.size;
+                      final nativeAr =
+                          (videoSize.width > 0 && videoSize.height > 0)
+                          ? videoSize.width / videoSize.height
+                          : (_aspectW / _aspectH);
+                      // After Resize, preview frame follows crop window aspect.
+                      final crop = _cropFor(_activeIndex);
+                      final videoAr =
+                          (crop != null &&
+                              !crop.isIdentity &&
+                              crop.height > 0 &&
+                              videoSize.width > 0 &&
+                              videoSize.height > 0)
+                          ? (crop.width * videoSize.width) /
+                                (crop.height * videoSize.height)
+                          : nativeAr;
+                      final maxW = constraints.maxWidth;
+                      final maxH = constraints.maxHeight;
+                      late final double frameW;
+                      late final double frameH;
+                      if (maxW / maxH > videoAr) {
+                        frameH = maxH;
+                        frameW = frameH * videoAr;
+                      } else {
+                        frameW = maxW;
+                        frameH = frameW / videoAr;
+                      }
 
-                  return Center(
-                    child: SizedBox(
-                      width: frameW,
-                      height: frameH,
-                      child: ClipRect(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          clipBehavior: Clip.hardEdge,
-                          children: [
-                            _buildPlayer(filter),
-                            // CapCut In-anim — predecoded frames (no blink).
-                            if (_revealOverlayActive &&
-                                _activeRevealId != null &&
-                                (_revealImages[_activeRevealId]?.isNotEmpty ??
-                                    false))
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: _buildRevealOverlayLayer(),
-                                ),
-                              ),
-                            // CapCut live FX overlay (screen-blend frames).
-                            if (_overlayEffect != null)
-                              Positioned.fill(
-                                child: _VideoLiveEffectOverlay(
-                                  effect: _overlayEffect!,
-                                  positionSec: _globalPositionSec,
-                                  startSec: _effectStartSec,
-                                  endSec: _effectEndSec ?? _totalDurationSec,
-                                  onFramesReady: (_) {
-                                    if (_effectPreviewLoading && mounted) {
-                                      setState(
-                                        () => _effectPreviewLoading = false,
-                                      );
-                                    }
-                                  },
-                                ),
-                              ),
-                            if (_effectPreviewLoading)
-                              const Positioned.fill(
-                                child: PreparingPreviewOverlay(),
-                              ),
-                            // CapCut live text: move / rotate / scale handles.
-                            LiveTextOverlaysLayer(
-                              project: _textOverlays,
-                              selectedOverlayId: _selectedTextOverlayId,
-                              onSelectedOverlayId: (id) {
-                                setState(() {
-                                  _selectedTextOverlayId = id;
-                                  if (id != null) {
-                                    final o = _textOverlays.overlays
-                                        .where((e) => e.id == id)
-                                        .firstOrNull;
-                                    if (o?.text != null) {
-                                      _textFieldController.text = o!.text!;
-                                    }
-                                  }
-                                });
-                              },
-                              onEditOverlay: (id) => _openTextTools(
-                                editOverlayId: id,
-                              ),
-                              editing: _textToolsOpen,
-                            ),
-                            if (_stickerLabel != null)
-                              Align(
-                                alignment: Alignment.topRight,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(20),
-                                  child: Text(
-                                    _stickerLabel!,
-                                    style: TextStyle(fontSize: rs.sp(36)),
+                      return Center(
+                        child: SizedBox(
+                          width: frameW,
+                          height: frameH,
+                          child: ClipRect(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              clipBehavior: Clip.hardEdge,
+                              children: [
+                                _buildPlayer(filter),
+                                // CapCut In-anim — predecoded frames (no blink).
+                                if (_revealOverlayActive &&
+                                    _activeRevealId != null &&
+                                    (_revealImages[_activeRevealId]
+                                            ?.isNotEmpty ??
+                                        false))
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: _buildRevealOverlayLayer(),
+                                    ),
                                   ),
+                                // CapCut live FX overlay (screen-blend frames).
+                                if (_overlayEffect != null)
+                                  Positioned.fill(
+                                    child: _VideoLiveEffectOverlay(
+                                      effect: _overlayEffect!,
+                                      positionSec: _globalPositionSec,
+                                      startSec: _effectStartSec,
+                                      endSec:
+                                          _effectEndSec ?? _totalDurationSec,
+                                      onFramesReady: (_) {
+                                        if (_effectPreviewLoading && mounted) {
+                                          setState(
+                                            () => _effectPreviewLoading = false,
+                                          );
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                if (_effectPreviewLoading)
+                                  const Positioned.fill(
+                                    child: PreparingPreviewOverlay(),
+                                  ),
+                                // CapCut live text: move / rotate / scale handles.
+                                LiveTextOverlaysLayer(
+                                  project: _textOverlays,
+                                  selectedOverlayId: _selectedTextOverlayId,
+                                  onSelectedOverlayId: (id) {
+                                    setState(() {
+                                      _selectedTextOverlayId = id;
+                                      if (id != null) {
+                                        final o = _textOverlays.overlays
+                                            .where((e) => e.id == id)
+                                            .firstOrNull;
+                                        if (o?.text != null) {
+                                          _textFieldController.text = o!.text!;
+                                        }
+                                      }
+                                    });
+                                  },
+                                  onEditOverlay: (id) =>
+                                      _openTextTools(editOverlayId: id),
+                                  editing: _textToolsOpen,
                                 ),
-                              ),
-                            // Selection outline (teal — avoid FX green-screen color).
-                            if (_selectedClipIndex != null)
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: AppColors.primary,
-                                        width: 2,
+                                if (_stickerLabel != null)
+                                  Align(
+                                    alignment: Alignment.topRight,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(20),
+                                      child: Text(
+                                        _stickerLabel!,
+                                        style: TextStyle(fontSize: rs.sp(36)),
                                       ),
                                     ),
                                   ),
-                                ),
-                              ),
-                            // CapCut: loading while decoding selected In/Out FX
-                            // or preparing a new playback speed.
-                            if (_animPreviewLoading || _speedPreviewLoading)
-                              const Positioned.fill(
-                                child: PreparingPreviewOverlay(),
-                              ),
+                                // Selection outline (teal — avoid FX green-screen color).
+                                if (_selectedClipIndex != null)
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color: AppColors.primary,
+                                            width: 2,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                // CapCut: loading while decoding selected In/Out FX
+                                // or preparing a new playback speed.
+                                if (_animPreviewLoading || _speedPreviewLoading)
+                                  const Positioned.fill(
+                                    child: PreparingPreviewOverlay(),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              // Fixed play / time / undo row (never jumps when Animation/Speed opens).
+              _buildPlaybackBar(rs),
+              // Fixed height: Animation close must not resize the preview ("bari").
+              SizedBox(
+                height: _bottomWorkspaceH,
+                width: double.infinity,
+                // No AnimatedSwitcher cross-fade: keeping the outgoing timeline
+                // mounted attaches `_stripController` to two ListViews → assert.
+                child: _clipEditorSheetOpen || _mediaToolSheetOpen
+                    ? KeyedSubtree(
+                        key: ValueKey(
+                          _animSheetOpen
+                              ? 'anim_sheet'
+                              : _speedSheetOpen
+                              ? 'speed_sheet'
+                              : _tool == VideoEditorTool.music
+                              ? 'music_sheet'
+                              : 'effects_sheet',
+                        ),
+                        child: _animSheetOpen
+                            ? _buildClipAnimationSheet(rs)
+                            : _speedSheetOpen
+                            ? _buildClipSpeedSheet(rs)
+                            : _tool == VideoEditorTool.music
+                            ? _buildMusicToolSheet(rs)
+                            : _buildEffectsToolSheet(rs),
+                      )
+                    : KeyedSubtree(
+                        key: const ValueKey('timeline_workspace'),
+                        child: Column(
+                          children: [
+                            // Volume / Edit replace the timeline area; navbar stays.
+                            Expanded(
+                              child:
+                                  _musicToolsOpen &&
+                                      _musicEditOpen &&
+                                      _music != null
+                                  ? MusicEditSheet(
+                                      music: _music!,
+                                      onClose: () => setState(
+                                        () => _musicEditOpen = false,
+                                      ),
+                                      onSave: _onMusicEditSaved,
+                                    )
+                                  : _musicToolsOpen && _musicVolumeOpen
+                                  ? _buildMusicVolumeSheet(rs)
+                                  : _buildTimelineFilmstripPanel(rs),
+                            ),
+                            if (_selectedClipIndex != null)
+                              _buildClipToolsNavbar(rs)
+                            else if (_musicToolsOpen)
+                              _buildMusicEditorToolbar(rs)
+                            else if (_effectsToolsOpen)
+                              _buildEffectsEditorToolbar(rs)
+                            else
+                              _buildBottomTools(rs),
                           ],
                         ),
                       ),
-                    ),
-                  );
-                },
               ),
-            ),
-          ),
-          // Fixed play / time / undo row (never jumps when Animation/Speed opens).
-          _buildPlaybackBar(rs),
-          // Fixed height: Animation close must not resize the preview ("bari").
-          SizedBox(
-            height: _bottomWorkspaceH,
-            width: double.infinity,
-            // No AnimatedSwitcher cross-fade: keeping the outgoing timeline
-            // mounted attaches `_stripController` to two ListViews → assert.
-            child: _clipEditorSheetOpen || _mediaToolSheetOpen
-                ? KeyedSubtree(
-                    key: ValueKey(
-                      _animSheetOpen
-                          ? 'anim_sheet'
-                          : _speedSheetOpen
-                              ? 'speed_sheet'
-                              : _tool == VideoEditorTool.music
-                                  ? 'music_sheet'
-                                  : 'effects_sheet',
-                    ),
-                    child: _animSheetOpen
-                        ? _buildClipAnimationSheet(rs)
-                        : _speedSheetOpen
-                            ? _buildClipSpeedSheet(rs)
-                            : _tool == VideoEditorTool.music
-                                ? _buildMusicToolSheet(rs)
-                                : _buildEffectsToolSheet(rs),
-                  )
-                : KeyedSubtree(
-                    key: const ValueKey('timeline_workspace'),
-                    child: Column(
-                      children: [
-                        // Volume UI replaces the timeline (red area); navbar stays.
-                        Expanded(
-                          child: _musicToolsOpen && _musicVolumeOpen
-                              ? _buildMusicVolumeSheet(rs)
-                              : _buildTimelineFilmstripPanel(rs),
-                        ),
-                        if (_selectedClipIndex != null)
-                          _buildClipToolsNavbar(rs)
-                        else if (_musicToolsOpen)
-                          _buildMusicEditorToolbar(rs)
-                        else if (_effectsToolsOpen)
-                          _buildEffectsEditorToolbar(rs)
-                        else
-                          _buildBottomTools(rs),
-                      ],
-                    ),
-                  ),
-          ),
-          // Filter/sticker/… panels stay below (optional extra chrome).
-          if (_selectedClipIndex == null &&
-              _tool != null &&
-              !_mediaToolSheetOpen &&
-              !_textToolsOpen &&
-              !_clipEditorSheetOpen)
-            _buildToolPanel(rs),
+              // Filter/sticker/… panels stay below (optional extra chrome).
+              if (_selectedClipIndex == null &&
+                  _tool != null &&
+                  !_mediaToolSheetOpen &&
+                  !_textToolsOpen &&
+                  !_clipEditorSheetOpen)
+                _buildToolPanel(rs),
             ],
           ),
           // Slideshow-identical TextToolsSheet overlay (keyboard lifts sheet only).
@@ -2222,8 +2270,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                 builder: (context, _) {
                   final keyboard = MediaQuery.viewInsetsOf(context).bottom;
                   final safeBottom = MediaQuery.paddingOf(context).bottom;
-                  final keyboardOpen =
-                      keyboard > 0 || _textFocusNode.hasFocus;
+                  final keyboardOpen = keyboard > 0 || _textFocusNode.hasFocus;
                   final hasOverlay = _selectedTextOverlayId != null;
                   final bodyH = (hasOverlay && !keyboardOpen)
                       ? TextToolsSheet.sheetBodyHeight
@@ -2329,7 +2376,32 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     }
   }
 
-  /// Mix committed music with video — plays once, no loop past music end.
+  void _scrollStripByDx(double dx) {
+    if (_stripController.positions.length != 1) return;
+    final next = (_stripController.offset - dx).clamp(
+      0.0,
+      _stripController.position.maxScrollExtent,
+    );
+    _syncingStrip = true;
+    _stripController.jumpTo(next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncingStrip = false;
+    });
+  }
+
+  void _commitMusicTimelineRange(double start, double end) {
+    final m = _music;
+    if (m == null) return;
+    final total = _totalDurationSec;
+    const minLen = 0.5;
+    final s = start.clamp(0.0, total - minLen);
+    final e = end.clamp(s + minLen, total);
+    setState(() {
+      _music = m.copyWith(timelineStartSec: s, timelineEndSec: e);
+    });
+  }
+
+  /// Mix committed music with video. Timeline longer than clip → loop.
   Future<void> _syncBgmToPlayhead({bool forceSeek = true}) async {
     final m = _music;
     if (m == null || _stoppedAtClipEnd) {
@@ -2356,21 +2428,30 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         }
         _bgmPath = m.path;
       }
-      await _bgmPlayer.setVolume((m.volume / 100.0).clamp(0.0, 1.0));
       final clipStart = m.clipStartSec;
       final sourceDur = m.duration?.inMilliseconds != null
           ? m.duration!.inMilliseconds / 1000.0
           : (_bgmPlayer.duration?.inMilliseconds ?? 60000) / 1000.0;
-      final clipEnd =
-          (m.clipEndSec ?? sourceDur).clamp(clipStart + 0.1, sourceDur);
+      final clipEnd = (m.clipEndSec ?? sourceDur).clamp(
+        clipStart + 0.1,
+        sourceDur,
+      );
       final clipLen = math.max(0.1, clipEnd - clipStart);
       final into = videoSec - tStart;
-      // Do not loop: once past the music clip, stay silent.
-      if (into >= clipLen - 0.02) {
-        await _pauseBgm();
-        return;
+      final target = (m.volume / 100.0).clamp(0.0, 1.0);
+      final window = (tEnd - tStart).clamp(0.1, 36000.0);
+      final fadeDur = math.min(1.5, window / 2);
+      var vol = target;
+      if (m.fadeIn && into < fadeDur) {
+        vol = target * (into / fadeDur).clamp(0.0, 1.0);
       }
-      final audioSec = clipStart + into;
+      final remain = tEnd - videoSec;
+      if (m.fadeOut && remain < fadeDur) {
+        vol = math.min(vol, target * (remain / fadeDur).clamp(0.0, 1.0));
+      }
+      await _bgmPlayer.setVolume(vol);
+      // Loop the source clip when the timeline window is longer (CapCut).
+      final audioSec = clipStart + (into % clipLen);
       if (forceSeek || !_bgmPlayer.playing) {
         await _bgmPlayer.seek(
           Duration(milliseconds: (audioSec * 1000).round()),
@@ -2400,9 +2481,11 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     if (draft != null) {
       final probed = await _probeMusicDurationSec(draft);
       if (!mounted) return;
-      final musicDur = (probed ??
-              (draft.duration?.inMilliseconds ?? 0) / 1000.0)
-          .clamp(0.5, 36000.0);
+      final musicDur =
+          (probed ?? (draft.duration?.inMilliseconds ?? 0) / 1000.0).clamp(
+            0.5,
+            36000.0,
+          );
       // From video start: lane length = min(music, video).
       final end = math.min(total, musicDur).toDouble();
       committed = draft.copyWith(
@@ -2422,6 +2505,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _tool = null;
       _musicToolsOpen = true;
       _musicVolumeOpen = false;
+      _musicEditOpen = false;
       _musicTrackSelected = committed != null;
       _effectsToolsOpen = false;
       _selectedClipIndex = null;
@@ -2433,6 +2517,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     setState(() {
       _musicToolsOpen = false;
       _musicVolumeOpen = false;
+      _musicEditOpen = false;
       _musicTrackSelected = false;
       _tool = null;
     });
@@ -2444,9 +2529,27 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _musicDraft = null;
       _musicTrackSelected = false;
       _musicVolumeOpen = false;
+      _musicEditOpen = false;
       _bgmPath = null;
     });
     await _stopBgm();
+  }
+
+  void _onMusicEditSaved(MusicTrack updated) {
+    final total = _totalDurationSec;
+    final clipLen = math.max(
+      0.5,
+      (updated.clipEndSec ?? (updated.duration?.inMilliseconds ?? 0) / 1000.0) -
+          updated.clipStartSec,
+    );
+    final start = updated.timelineStartSec.clamp(0.0, total);
+    final end = math.min(total, start + clipLen).toDouble();
+    setState(() {
+      _music = updated.copyWith(timelineStartSec: start, timelineEndSec: end);
+      _musicEditOpen = false;
+      _bgmPath = null;
+    });
+    unawaited(_stopBgm());
   }
 
   void _handleMusicToolTap(String id) {
@@ -2456,6 +2559,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       case 'replace':
         setState(() {
           _musicVolumeOpen = false;
+          _musicEditOpen = false;
           _musicToolsOpen = false;
           _musicDraft = _music;
           _tool = VideoEditorTool.music;
@@ -2463,12 +2567,17 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         unawaited(_pausePreview());
         return;
       case 'volume':
-        setState(() => _musicVolumeOpen = true);
+        setState(() {
+          _musicEditOpen = false;
+          _musicVolumeOpen = true;
+        });
         return;
       case 'edit':
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Music edit coming soon')),
-        );
+        unawaited(_pausePreview());
+        setState(() {
+          _musicVolumeOpen = false;
+          _musicEditOpen = true;
+        });
         return;
       case 'delete':
         unawaited(_clearCommittedMusic());
@@ -2596,21 +2705,59 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         ),
         SizedBox(
           width: rs.w(96),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Icon(
-                Icons.undo_rounded,
-                color: AppColors.textMuted,
-                size: rs.r(22),
-              ),
-              SizedBox(width: rs.w(12)),
-              Icon(
-                Icons.redo_rounded,
-                color: AppColors.textMuted,
-                size: rs.r(22),
-              ),
-            ],
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: () {
+              // Speed / Animation / picker / Volume / Music-edit: sheet has ✓.
+              if (_clipEditorSheetOpen ||
+                  _mediaToolSheetOpen ||
+                  _musicVolumeOpen ||
+                  _musicEditOpen) {
+                return const SizedBox.shrink();
+              }
+              // Music / Effects tools → Done ✓
+              if (_musicToolsOpen || _effectsToolsOpen) {
+                return IconButton(
+                  padding: EdgeInsets.zero,
+                  onPressed: _musicToolsOpen
+                      ? _closeMusicTools
+                      : _closeEffectsTools,
+                  icon: Icon(
+                    Icons.check,
+                    color: AppColors.primary,
+                    size: rs.r(24),
+                  ),
+                );
+              }
+              if (_selectedClipIndex != null) {
+                return IconButton(
+                  padding: EdgeInsets.zero,
+                  onPressed: _clearClipSelection,
+                  icon: Icon(
+                    Icons.check,
+                    color: AppColors.primary,
+                    size: rs.r(24),
+                  ),
+                );
+              }
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.undo_rounded,
+                    color: AppColors.textMuted,
+                    size: rs.r(22),
+                  ),
+                  SizedBox(width: rs.w(12)),
+                  Icon(
+                    Icons.redo_rounded,
+                    color: AppColors.textMuted,
+                    size: rs.r(22),
+                  ),
+                ],
+              );
+            }(),
           ),
         ),
       ],
@@ -2655,7 +2802,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             child: ListView(
               controller: _stripController,
               scrollDirection: Axis.horizontal,
-              physics: (_trimDragging)
+              physics: (_trimDragging || _musicTrimDragging)
                   ? const NeverScrollableScrollPhysics()
                   : const BouncingScrollPhysics(),
               padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
@@ -2706,13 +2853,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                             pps: pps,
                           ),
                         if (hasEffect && hasMusic) SizedBox(height: rs.h(2)),
-                        if (hasMusic)
-                          _musicTimelineLane(
-                            rs: rs,
-                            width: totalW,
-                            height: musicLaneH,
-                            pps: pps,
-                          ),
+                        // Music lane is overlaid outside ListView (handles need
+                        // priority over strip scroll — slideshow pattern).
+                        if (hasMusic) SizedBox(height: musicLaneH),
                       ],
                     ],
                   ),
@@ -2720,6 +2863,32 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               ],
             ),
           ),
+          // Music trim UI outside ListView so `<`/`>` drag is smooth.
+          if (hasMusic)
+            ListenableBuilder(
+              listenable: _stripController,
+              builder: (context, _) {
+                final musicTop =
+                    rulerH +
+                    gapH +
+                    thumbH +
+                    rs.h(4) +
+                    (hasEffect ? effectLaneH + rs.h(2) : 0.0);
+                return Positioned(
+                  left: 0,
+                  right: 0,
+                  top: musicTop,
+                  height: musicLaneH,
+                  child: _musicTimelineLane(
+                    rs: rs,
+                    width: totalW,
+                    height: musicLaneH,
+                    pps: pps,
+                    leftPad: leftPad,
+                  ),
+                );
+              },
+            ),
           // Selection chrome sits outside ListView (slideshow pattern) so
           // scroll is applied once via leftPad + startPx - scroll.
           if (_selectedClipIndex != null)
@@ -2957,6 +3126,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _musicToolsOpen = true;
       _musicTrackSelected = true;
       _musicVolumeOpen = false;
+      _musicEditOpen = false;
       _effectsToolsOpen = false;
       _effectsTrackSelected = false;
       _tool = null;
@@ -2964,123 +3134,31 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     });
   }
 
-  /// CapCut purple music bar — length = music window; tap selects like clip.
+  /// CapCut purple music bar — trim/move handles like slideshow.
   Widget _musicTimelineLane({
     required AppResponsive rs,
     required double width,
     required double height,
     required double pps,
+    required double leftPad,
   }) {
     final music = _music;
     if (music == null) return const SizedBox.shrink();
-    final (start, end) = _musicTimelineRange(music);
-    final left = start * pps;
-    final barW = math.max(48.0, (end - start) * pps);
-    final selected = _musicTrackSelected || _musicToolsOpen;
-    const handleW = 22.0;
-
-    Widget body() {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [Color(0xFF650CFF), Color(0xFF120799)],
-            ),
-          ),
-          child: height >= 24
-              ? Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    const CustomPaint(painter: _VideoMusicWavePainter()),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.music_note,
-                            color: Colors.white,
-                            size: 14,
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              music.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                fontSize: rs.sp(11),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              : const SizedBox.expand(),
-        ),
-      );
-    }
-
-    return SizedBox(
+    return _VideoMusicTimelineLane(
+      music: music,
+      videoDur: _totalDurationSec,
       width: width,
       height: height,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned(
-            left: selected ? left - handleW : left,
-            width: selected ? barW + handleW * 2 : barW,
-            top: 0,
-            bottom: 0,
-            child: GestureDetector(
-              onTap: _selectMusicTrack,
-              child: selected
-                  ? Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: AppColors.primary, width: 2),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x29000000),
-                            blurRadius: 3,
-                            offset: Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: handleW,
-                            child: const Icon(
-                              Icons.chevron_left,
-                              size: 16,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          Expanded(child: body()),
-                          SizedBox(
-                            width: handleW,
-                            child: const Icon(
-                              Icons.chevron_right,
-                              size: 16,
-                              color: Colors.black87,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : body(),
-            ),
-          ),
-        ],
-      ),
+      leftPad: leftPad,
+      stripController: _stripController,
+      pixelsPerSecond: pps,
+      selected: _musicTrackSelected || _musicToolsOpen,
+      labelSize: rs.sp(11),
+      onSelect: _selectMusicTrack,
+      onCommitRange: _commitMusicTimelineRange,
+      onScrollTimeline: _scrollStripByDx,
+      onDragStart: () => setState(() => _musicTrimDragging = true),
+      onDragEnd: () => setState(() => _musicTrimDragging = false),
     );
   }
 
@@ -3089,12 +3167,12 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final active = _musicTrackSelected;
     final actions =
         <({String id, String label, String? asset, IconData? icon})>[
-      (id: 'add', label: 'Add', asset: 'add_music.png', icon: null),
-      (id: 'replace', label: 'Replace', asset: 'replace.png', icon: null),
-      (id: 'edit', label: 'Edit', asset: 'edit.png', icon: null),
-      (id: 'volume', label: 'Volume', asset: 'volume.png', icon: null),
-      (id: 'delete', label: 'Delete', asset: 'delete.png', icon: null),
-    ];
+          (id: 'add', label: 'Add', asset: 'add_music.png', icon: null),
+          (id: 'replace', label: 'Replace', asset: 'replace.png', icon: null),
+          (id: 'edit', label: 'Edit', asset: 'edit.png', icon: null),
+          (id: 'volume', label: 'Volume', asset: 'volume.png', icon: null),
+          (id: 'delete', label: 'Delete', asset: 'delete.png', icon: null),
+        ];
     final color = active ? AppColors.textDark : AppColors.textMuted;
     return Container(
       height: rs.h(72),
@@ -3262,16 +3340,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                   onPressed: () => setState(() => _musicVolumeOpen = false),
                   icon: const Icon(Icons.chevron_left_rounded),
                 ),
-                const Expanded(
-                  child: Text(
-                    'Volume',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textDark,
-                    ),
-                  ),
-                ),
+                const Expanded(child: Center(child: SheetTitle('Volume'))),
                 IconButton(
                   onPressed: () => setState(() => _musicVolumeOpen = false),
                   icon: const Icon(Icons.check, color: AppColors.primary),
@@ -3376,8 +3445,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                         'clip_end' => canClipEnd,
                         _ => active,
                       };
-                      final color =
-                          enabled ? AppColors.textDark : AppColors.textMuted;
+                      final color = enabled
+                          ? AppColors.textDark
+                          : AppColors.textMuted;
                       return SizedBox(
                         width: 76,
                         child: InkWell(
@@ -3442,10 +3512,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     // Slot every ~0.5 timeline-sec so speed-scaled / short FX windows show
     // distinct frames (not two identical cells under the playhead).
     final visibleSec = math.max(0.1, width / pps);
-    final slots = math.min(
-      180,
-      math.max(1, (visibleSec * 2).ceil()),
-    );
+    final slots = math.min(180, math.max(1, (visibleSec * 2).ceil()));
     final inn = _trimIn(index);
     final speed = _speedFor(index);
     final span = _sourceSpan(index);
@@ -3494,11 +3561,14 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                           final t = slots <= 1
                               ? 0.0
                               : (s + 0.5) / slots * visibleSec;
-                          final srcTime =
-                              (inn + t * speed).clamp(inn, inn + span);
-                          final fi = (srcTime * _filmstripFps)
-                              .floor()
-                              .clamp(0, frames.length - 1);
+                          final srcTime = (inn + t * speed).clamp(
+                            inn,
+                            inn + span,
+                          );
+                          final fi = (srcTime * _filmstripFps).floor().clamp(
+                            0,
+                            frames.length - 1,
+                          );
                           return Image.file(
                             File(frames[fi]),
                             fit: BoxFit.cover,
@@ -3604,9 +3674,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final selectedId = sel == null
         ? null
         : (isOut
-              ? (sel < _clipOutRevealIds.length
-                    ? _clipOutRevealIds[sel]
-                    : null)
+              ? (sel < _clipOutRevealIds.length ? _clipOutRevealIds[sel] : null)
               : (sel < _clipRevealIds.length ? _clipRevealIds[sel] : null));
     final options = isOut
         ? VideoRevealAnim.outCatalog
@@ -4114,8 +4182,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final committed = (index >= 0 && index < _clipSpeeds.length)
         ? _clipSpeeds[index].clamp(_ClipSpeedLimits.minSpeed, maxS)
         : 1.0;
-    final pitch =
-        index < _clipChangePitch.length ? _clipChangePitch[index] : false;
+    final pitch = index < _clipChangePitch.length
+        ? _clipChangePitch[index]
+        : false;
     setState(() {
       _speedSheetOpen = true;
       _animSheetOpen = false;
@@ -4137,8 +4206,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     }
     final inn = _trimIn(_activeIndex);
     final local = (sourcePosSec - inn).clamp(0.0, _sourceSpan(_activeIndex));
-    return before +
-        local / speed.clamp(_ClipSpeedLimits.minSpeed, 100.0);
+    return before + local / speed.clamp(_ClipSpeedLimits.minSpeed, 100.0);
   }
 
   /// Loading → set rate → remap playhead → rebuild strip → ready (play enabled).
@@ -4151,10 +4219,11 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final next = speed.clamp(_ClipSpeedLimits.minSpeed, maxS);
     final c = _controller;
     final sourcePosSec =
-        (c?.value.position.inMilliseconds ?? _position.inMilliseconds) /
-        1000.0;
-    final fromSpeed = (previousSpeed ?? _speedDraft)
-        .clamp(_ClipSpeedLimits.minSpeed, maxS);
+        (c?.value.position.inMilliseconds ?? _position.inMilliseconds) / 1000.0;
+    final fromSpeed = (previousSpeed ?? _speedDraft).clamp(
+      _ClipSpeedLimits.minSpeed,
+      maxS,
+    );
     final keepGlobal = _globalForSourceAtSpeed(sourcePosSec, fromSpeed);
 
     if (mounted) {
@@ -4278,9 +4347,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         },
         // Finger up: stretch timeline + loading until preview ready.
         onSpeedChangeEnd: (speed, previousSpeed) {
-          unawaited(
-            _prepareSpeedPreview(speed, previousSpeed: previousSpeed),
-          );
+          unawaited(_prepareSpeedPreview(speed, previousSpeed: previousSpeed));
         },
       ),
     );
@@ -4400,7 +4467,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               assetPath: _toolAsset(t),
               icon: _toolIcon(t),
               label: _toolLabel(t),
-              selected: _tool == t ||
+              selected:
+                  _tool == t ||
                   (t == VideoEditorTool.text && _textToolsOpen) ||
                   (t == VideoEditorTool.music && _musicToolsOpen) ||
                   (t == VideoEditorTool.effects && _effectsToolsOpen),
@@ -4461,8 +4529,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         VideoEditorTool.edit ||
         VideoEditorTool.text ||
         VideoEditorTool.music ||
-        VideoEditorTool.effects =>
-          const SizedBox.shrink(),
+        VideoEditorTool.effects => const SizedBox.shrink(),
       },
     );
   }
@@ -4915,8 +4982,7 @@ class _SelectedVideoClipState extends State<_SelectedVideoClip> {
   double get _out => _liveOut ?? widget.sourceOut;
 
   /// Timeline seconds — includes CapCut speed stretch (parent passes this).
-  double get _timelineVisible =>
-      widget.durationSec.clamp(_minVisible, 36000.0);
+  double get _timelineVisible => widget.durationSec.clamp(_minVisible, 36000.0);
 
   void _begin() {
     if (_dragging) return;
@@ -5063,6 +5129,321 @@ class _SelectedVideoClipState extends State<_SelectedVideoClip> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Slideshow-parity music lane: `<`/`>` trim handles + hold-drag move.
+/// Positioned outside the filmstrip ListView (leftPad − scroll) so handle
+/// drags win the gesture arena and feel smooth.
+class _VideoMusicTimelineLane extends StatefulWidget {
+  const _VideoMusicTimelineLane({
+    required this.music,
+    required this.videoDur,
+    required this.width,
+    required this.height,
+    required this.leftPad,
+    required this.stripController,
+    required this.pixelsPerSecond,
+    required this.selected,
+    required this.labelSize,
+    required this.onSelect,
+    required this.onCommitRange,
+    required this.onScrollTimeline,
+    required this.onDragStart,
+    required this.onDragEnd,
+  });
+
+  final MusicTrack music;
+  final double videoDur;
+  final double width;
+  final double height;
+  final double leftPad;
+  final ScrollController stripController;
+  final double pixelsPerSecond;
+  final bool selected;
+  final double labelSize;
+  final VoidCallback onSelect;
+  final void Function(double start, double end) onCommitRange;
+  final void Function(double dx) onScrollTimeline;
+  final VoidCallback onDragStart;
+  final VoidCallback onDragEnd;
+
+  static const handleW = 28.0;
+
+  @override
+  State<_VideoMusicTimelineLane> createState() =>
+      _VideoMusicTimelineLaneState();
+}
+
+class _VideoMusicTimelineLaneState extends State<_VideoMusicTimelineLane> {
+  double? _liveStart;
+  double? _liveEnd;
+  bool _interacting = false;
+  double _holdOriginDx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.stripController.addListener(_onStrip);
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoMusicTimelineLane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stripController != widget.stripController) {
+      oldWidget.stripController.removeListener(_onStrip);
+      widget.stripController.addListener(_onStrip);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.stripController.removeListener(_onStrip);
+    super.dispose();
+  }
+
+  void _onStrip() {
+    if (mounted) setState(() {});
+  }
+
+  (double, double) _range() {
+    final videoDur = widget.videoDur;
+    final music = widget.music;
+    final start = (_liveStart ?? music.timelineStartSec).clamp(0.0, videoDur);
+    final end = (_liveEnd ?? music.timelineEndSec ?? videoDur).clamp(
+      start + 0.5,
+      videoDur,
+    );
+    return (start, end);
+  }
+
+  void _beginInteract() {
+    final (s, e) = _range();
+    _interacting = true;
+    _liveStart = s;
+    _liveEnd = e;
+    widget.onDragStart();
+  }
+
+  void _clampLive(double videoDur) {
+    const minLen = 0.5;
+    final s = (_liveStart ?? 0).clamp(0.0, videoDur - minLen);
+    final e = (_liveEnd ?? videoDur).clamp(s + minLen, videoDur);
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  void _trimByDx({required bool isStart, required double dxPx}) {
+    final videoDur = widget.videoDur;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    if (!_interacting) _beginInteract();
+    setState(() {
+      if (isStart) {
+        _liveStart = (_liveStart! + dSec).clamp(0.0, _liveEnd! - 0.5);
+      } else {
+        _liveEnd = (_liveEnd! + dSec).clamp(_liveStart! + 0.5, videoDur);
+      }
+      _clampLive(videoDur);
+    });
+  }
+
+  void _moveByDx(double dxPx) {
+    final videoDur = widget.videoDur;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    if (!_interacting) _beginInteract();
+    setState(() {
+      final len = _liveEnd! - _liveStart!;
+      final ns = (_liveStart! + dSec).clamp(0.0, videoDur - len);
+      _liveStart = ns;
+      _liveEnd = ns + len;
+    });
+  }
+
+  void _commitInteract() {
+    if (!_interacting || _liveStart == null || _liveEnd == null) {
+      widget.onDragEnd();
+      return;
+    }
+    widget.onCommitRange(_liveStart!, _liveEnd!);
+    _interacting = false;
+    _liveStart = null;
+    _liveEnd = null;
+    widget.onDragEnd();
+    if (mounted) setState(() {});
+  }
+
+  Widget _gradientTrack(MusicTrack track) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [Color(0xFF650CFF), Color(0xFF120799)],
+        ),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: widget.height >= 24
+          ? Stack(
+              fit: StackFit.expand,
+              children: [
+                const CustomPaint(painter: _VideoMusicWavePainter()),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.music_note,
+                        color: Colors.white,
+                        size: 14,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          track.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: widget.labelSize,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : const SizedBox.expand(),
+    );
+  }
+
+  Widget _handle({required bool isStart, required IconData icon}) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onHorizontalDragStart: (_) {
+        if (!widget.selected) widget.onSelect();
+        _beginInteract();
+      },
+      onHorizontalDragUpdate: (d) {
+        if (d.delta.dx == 0) return;
+        // Edge follows finger; strip pans the opposite way (slideshow).
+        _trimByDx(isStart: isStart, dxPx: d.delta.dx);
+        widget.onScrollTimeline(-d.delta.dx);
+      },
+      onHorizontalDragEnd: (_) => _commitInteract(),
+      onHorizontalDragCancel: _commitInteract,
+      child: SizedBox(
+        width: _VideoMusicTimelineLane.handleW,
+        height: double.infinity,
+        child: Icon(icon, size: 18, color: Colors.black87),
+      ),
+    );
+  }
+
+  Widget _body(MusicTrack track) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onTap: widget.onSelect,
+      onLongPressStart: (_) {
+        if (!widget.selected) widget.onSelect();
+        _beginInteract();
+        _holdOriginDx = 0;
+        HapticFeedback.selectionClick();
+      },
+      onLongPressMoveUpdate: (d) {
+        final dx = d.localOffsetFromOrigin.dx;
+        final delta = dx - _holdOriginDx;
+        _holdOriginDx = dx;
+        if (delta.abs() <= 0.01) return;
+        _moveByDx(delta);
+        widget.onScrollTimeline(-delta);
+      },
+      onLongPressEnd: (_) => _commitInteract(),
+      onLongPressCancel: _commitInteract,
+      onHorizontalDragUpdate: (d) {
+        if (_interacting && _liveStart != null) return;
+        widget.onScrollTimeline(d.delta.dx);
+      },
+      child: _gradientTrack(track),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final music = widget.music;
+    final offset = widget.stripController.positions.length == 1
+        ? widget.stripController.offset
+        : 0.0;
+    final (startSec, endSec) = _range();
+    final trackLeft = widget.leftPad - offset;
+    final trackWidth = math.max(widget.width, 120.0);
+    final barLeft = trackLeft + startSec * widget.pixelsPerSecond;
+    final barWidth = math.max(
+      48.0,
+      (endSec - startSec) * widget.pixelsPerSecond,
+    );
+    final selected = widget.selected;
+    final handleW = _VideoMusicTimelineLane.handleW;
+    final posLeft = barLeft - (selected ? handleW : 0);
+    final posWidth = barWidth + (selected ? handleW * 2 : 0);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: (d) {
+        if (_interacting) return;
+        widget.onScrollTimeline(d.delta.dx);
+      },
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: trackLeft,
+            width: trackWidth,
+            top: 2,
+            bottom: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0x33F8BBD0),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            left: posLeft,
+            width: posWidth,
+            top: 0,
+            bottom: 0,
+            child: selected
+                ? Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x29000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        _handle(isStart: true, icon: Icons.chevron_left),
+                        Expanded(child: _body(music)),
+                        _handle(isStart: false, icon: Icons.chevron_right),
+                      ],
+                    ),
+                  )
+                : _body(music),
+          ),
+        ],
       ),
     );
   }
@@ -5318,9 +5699,7 @@ class _SpeedSheetBodyState extends State<_SpeedSheetBody> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  _pitch
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_off,
+                  _pitch ? Icons.radio_button_checked : Icons.radio_button_off,
                   size: 20,
                   color: _pitch ? AppColors.primary : AppColors.textMuted,
                 ),
@@ -5398,8 +5777,10 @@ class _CapCutSpeedRulerState extends State<_CapCutSpeedRuler> {
   @override
   void initState() {
     super.initState();
-    _t = _CapCutSpeedRuler.speedToT(widget.speed, widget.marks)
-        .clamp(0.0, _tMax);
+    _t = _CapCutSpeedRuler.speedToT(
+      widget.speed,
+      widget.marks,
+    ).clamp(0.0, _tMax);
   }
 
   @override
@@ -5409,8 +5790,10 @@ class _CapCutSpeedRulerState extends State<_CapCutSpeedRuler> {
         (oldWidget.speed != widget.speed ||
             oldWidget.selectMax != widget.selectMax ||
             oldWidget.marks.length != widget.marks.length)) {
-      _t = _CapCutSpeedRuler.speedToT(widget.speed, widget.marks)
-          .clamp(0.0, _tMax);
+      _t = _CapCutSpeedRuler.speedToT(
+        widget.speed,
+        widget.marks,
+      ).clamp(0.0, _tMax);
     }
   }
 
@@ -5421,8 +5804,10 @@ class _CapCutSpeedRulerState extends State<_CapCutSpeedRuler> {
       _t = nx;
       _dragging = !ended;
     });
-    final speed = _CapCutSpeedRuler.tToSpeed(nx, widget.marks)
-        .clamp(_ClipSpeedLimits.minSpeed, widget.selectMax);
+    final speed = _CapCutSpeedRuler.tToSpeed(
+      nx,
+      widget.marks,
+    ).clamp(_ClipSpeedLimits.minSpeed, widget.selectMax);
     widget.onChanged(speed);
     if (ended) widget.onChangeEnd(speed);
   }
@@ -5452,9 +5837,10 @@ class _CapCutSpeedRulerState extends State<_CapCutSpeedRuler> {
                 onPointerUp: (e) =>
                     _updateFromDx(e.localPosition.dx, w, ended: true),
                 onPointerCancel: (_) {
-                  final speed =
-                      _CapCutSpeedRuler.tToSpeed(_t, marks)
-                          .clamp(_ClipSpeedLimits.minSpeed, widget.selectMax);
+                  final speed = _CapCutSpeedRuler.tToSpeed(
+                    _t,
+                    marks,
+                  ).clamp(_ClipSpeedLimits.minSpeed, widget.selectMax);
                   setState(() => _dragging = false);
                   widget.onChangeEnd(speed);
                 },
@@ -5548,7 +5934,11 @@ class _CapCutSpeedRulerPainter extends CustomPainter {
       11,
       Paint()..color = Colors.black.withValues(alpha: 0.12),
     );
-    canvas.drawCircle(Offset(thumbX, cy), 10, Paint()..color = AppColors.primary);
+    canvas.drawCircle(
+      Offset(thumbX, cy),
+      10,
+      Paint()..color = AppColors.primary,
+    );
     canvas.drawCircle(
       Offset(thumbX, cy),
       10,
@@ -5628,7 +6018,8 @@ class _VideoLiveEffectOverlayState extends State<_VideoLiveEffectOverlay> {
     _disposeFrames();
     if (mounted) setState(() {});
     try {
-      final (w, h) = EffectOverlayService.cappedSize(540, 960, maxSide: 360);
+      // 720p max — 360 looked soft/muddy when scaled to full preview.
+      final (w, h) = EffectOverlayService.cappedSize(720, 1280, maxSide: 720);
       final files = await EffectOverlayService.previewFrames(
         effect: effect,
         width: w,
@@ -5687,7 +6078,10 @@ class _VideoLiveEffectOverlayState extends State<_VideoLiveEffectOverlay> {
     final image = _frames[_frameIndex.clamp(0, _frames.length - 1)];
     return IgnorePointer(
       child: CustomPaint(
-        painter: _VideoScreenEffectPainter(image: image),
+        painter: _VideoScreenEffectPainter(
+          image: image,
+          blend: widget.effect.blend,
+        ),
         child: const SizedBox.expand(),
       ),
     );
@@ -5695,9 +6089,10 @@ class _VideoLiveEffectOverlayState extends State<_VideoLiveEffectOverlay> {
 }
 
 class _VideoScreenEffectPainter extends CustomPainter {
-  _VideoScreenEffectPainter({required this.image});
+  _VideoScreenEffectPainter({required this.image, required this.blend});
 
   final ui.Image image;
+  final OverlayBlendMode blend;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -5707,11 +6102,11 @@ class _VideoScreenEffectPainter extends CustomPainter {
       image: image,
       fit: BoxFit.cover,
       blendMode: BlendMode.screen,
-      filterQuality: FilterQuality.low,
+      filterQuality: FilterQuality.medium,
     );
   }
 
   @override
   bool shouldRepaint(covariant _VideoScreenEffectPainter oldDelegate) =>
-      oldDelegate.image != image;
+      oldDelegate.image != image || oldDelegate.blend != blend;
 }

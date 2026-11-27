@@ -1220,11 +1220,12 @@ class SlideshowProject extends ChangeNotifier implements TextOverlayHost {
 
   void setOverlaySourceDuration(double sec) {
     if (sec <= 0) return;
-    overlaySourceDurationSec = sec;
+    final prev = overlaySourceDurationSec;
     final end = overlayClipEndSec;
-    if (end != null && end > sec) {
-      overlayClipEndSec = sec;
-    }
+    final trimEnd = end != null && end > sec;
+    if (prev != null && (prev - sec).abs() < 0.001 && !trimEnd) return;
+    overlaySourceDurationSec = sec;
+    if (trimEnd) overlayClipEndSec = sec;
     notifyListeners();
   }
 

@@ -71,7 +71,7 @@ class EffectOverlayService {
     final outputDir = Directory(
       p.join(
         tmp.path,
-        'clipcraft_effect_frames_${effect.id}_${width}x${height}_v2',
+        'clipcraft_effect_frames_${effect.id}_${width}x${height}_v3',
       ),
     );
     if (await outputDir.exists()) {
@@ -85,8 +85,8 @@ class EffectOverlayService {
     final pattern = p.join(outputDir.path, 'effect_%05d.jpg');
     final command =
         '-y -i "${_escape(source)}" '
-        '-vf "fps=$previewFps,scale=$width:$height,setsar=1" '
-        '-q:v 4 -start_number 1 "${_escape(pattern)}"';
+        '-vf "fps=$previewFps,scale=$width:$height:flags=lanczos,setsar=1" '
+        '-q:v 2 -start_number 1 "${_escape(pattern)}"';
     final session = await FFmpegKit.execute(command);
     final returnCode = await session.getReturnCode();
     if (!ReturnCode.isSuccess(returnCode)) {
