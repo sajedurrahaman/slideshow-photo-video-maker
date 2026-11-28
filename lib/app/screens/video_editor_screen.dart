@@ -1583,10 +1583,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             : await _revealMatteFilePath(anim);
         final tmp = await getTemporaryDirectory();
         // Leaf Reveal pattern: color + alpha → RGBA PNG.
-        // v22: denser CapCut-like Portal Burst fire vortex.
+        // v30: Dollar Rain + Balloon Rise start fully covered from frame 0.
         final base = p.basenameWithoutExtension(anim.assetPath);
         final dir = Directory(
-          p.join(tmp.path, 'vreveal_frames_${anim.id}_${base}_v22_alpha'),
+          p.join(tmp.path, 'vreveal_frames_${anim.id}_${base}_v30_alpha'),
         );
         if (await dir.exists()) {
           final existing = await _listRevealFrames(dir, exts: {'.png'});
@@ -2096,18 +2096,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                               clipBehavior: Clip.hardEdge,
                               children: [
                                 _buildPlayer(filter),
-                                // CapCut In-anim — predecoded frames (no blink).
-                                if (_revealOverlayActive &&
-                                    _activeRevealId != null &&
-                                    (_revealImages[_activeRevealId]
-                                            ?.isNotEmpty ??
-                                        false))
-                                  Positioned.fill(
-                                    child: IgnorePointer(
-                                      child: _buildRevealOverlayLayer(),
-                                    ),
-                                  ),
-                                // CapCut live FX overlay (screen-blend frames).
+                                // Effects under In/Out reveal — screen-blend on
+                                // top of leaves caused the green/yellow glow.
                                 if (_overlayEffect != null)
                                   Positioned.fill(
                                     child: _VideoLiveEffectOverlay(
@@ -2128,6 +2118,18 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                                 if (_effectPreviewLoading)
                                   const Positioned.fill(
                                     child: PreparingPreviewOverlay(),
+                                  ),
+                                // CapCut In/Out reveal — above effects so opaque
+                                // FX pixels cover particles cleanly.
+                                if (_revealOverlayActive &&
+                                    _activeRevealId != null &&
+                                    (_revealImages[_activeRevealId]
+                                            ?.isNotEmpty ??
+                                        false))
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: _buildRevealOverlayLayer(),
+                                    ),
                                   ),
                                 // CapCut live text: move / rotate / scale handles.
                                 LiveTextOverlaysLayer(
