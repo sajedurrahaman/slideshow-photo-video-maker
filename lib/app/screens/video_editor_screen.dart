@@ -45,6 +45,91 @@ enum _ClipEditTool { volume, animation, delete, speed, crop, replace }
 
 enum _VideoAnimPhase { inAnimation, outAnimation }
 
+/// CapCut Background tools navbar: Color / Image / Blur.
+enum _VideoBgTool { color, image, blur }
+
+/// Tattoo sticker assets for CapCut-style Sticker sheet.
+class _VideoTattooSticker {
+  const _VideoTattooSticker({required this.id, required this.assetPath});
+  final String id;
+  final String assetPath;
+
+  static const catalog = <_VideoTattooSticker>[
+    _VideoTattooSticker(
+      id: 'star_dance',
+      assetPath: 'assets/images/editor/stickers/sticker_01_star_dance.png',
+    ),
+    _VideoTattooSticker(
+      id: 'whale',
+      assetPath: 'assets/images/editor/stickers/sticker_02_whale.png',
+    ),
+    _VideoTattooSticker(
+      id: 'cat_music',
+      assetPath: 'assets/images/editor/stickers/sticker_03_cat_music.png',
+    ),
+    _VideoTattooSticker(
+      id: 'smiley_flowers',
+      assetPath: 'assets/images/editor/stickers/sticker_04_smiley_flowers.png',
+    ),
+    _VideoTattooSticker(
+      id: 'star_hello',
+      assetPath: 'assets/images/editor/stickers/sticker_05_star_hello.png',
+    ),
+    _VideoTattooSticker(
+      id: 'pink_flowers',
+      assetPath: 'assets/images/editor/stickers/sticker_06_pink_flowers.png',
+    ),
+    _VideoTattooSticker(
+      id: 'fairy',
+      assetPath: 'assets/images/editor/stickers/sticker_07_fairy.png',
+    ),
+    _VideoTattooSticker(
+      id: 'party_bunny',
+      assetPath: 'assets/images/editor/stickers/sticker_08_party_bunny.png',
+    ),
+    _VideoTattooSticker(
+      id: 'cat_hearts',
+      assetPath: 'assets/images/editor/stickers/sticker_10_cat_hearts.png',
+    ),
+    _VideoTattooSticker(
+      id: 'thank_you_cat',
+      assetPath: 'assets/images/editor/stickers/sticker_11_thank_you_cat.png',
+    ),
+    _VideoTattooSticker(
+      id: 'butterflies',
+      assetPath: 'assets/images/editor/stickers/sticker_12_butterflies.png',
+    ),
+    _VideoTattooSticker(
+      id: 'bee',
+      assetPath: 'assets/images/editor/stickers/sticker_13_bee.png',
+    ),
+    _VideoTattooSticker(
+      id: 'sunflowers',
+      assetPath: 'assets/images/editor/stickers/sticker_14_sunflowers.png',
+    ),
+    _VideoTattooSticker(
+      id: 'butterflies_2',
+      assetPath: 'assets/images/editor/stickers/sticker_15_butterflies_2.png',
+    ),
+  ];
+}
+
+class _PlacedVideoSticker {
+  _PlacedVideoSticker({
+    required this.id,
+    required this.assetPath,
+    this.nx = 0.72,
+    this.ny = 0.22,
+    this.scale = 1,
+  });
+
+  final String id;
+  final String assetPath;
+  double nx;
+  double ny;
+  double scale;
+}
+
 /// CapCut-style opening reveal overlays (applied at clip start).
 class VideoRevealAnim {
   const VideoRevealAnim({
@@ -431,8 +516,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   /// True while dragging music trim handles (locks filmstrip scroll).
   bool _musicTrimDragging = false;
   bool _effectTrimDragging = false;
-  String? _stickerLabel;
   OverlayEffect? _overlayEffect;
+  final List<_PlacedVideoSticker> _placedStickers = [];
+  String? _selectedStickerId;
 
   /// Effect span on the project timeline (CapCut clip start/end).
   double _effectStartSec = 0;
@@ -441,6 +527,18 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   bool _effectsTrackSelected = false;
   bool _effectPreviewLoading = false;
   Color _bgColor = Colors.black;
+
+  /// CapCut Color sheet opacity (0–1) for canvas fill.
+  double _bgColorOpacity = 1.0;
+
+  /// CapCut Background tools (Back · Color · Image · Blur).
+  bool _bgToolsOpen = false;
+  _VideoBgTool? _bgToolSheet;
+
+  /// null = solid/image fill; else blur plate intensity index.
+  int? _bgBlurLevel;
+  String? _bgImagePath;
+  static const _bgBlurSigmas = <double>[0, 1.2, 2.4, 4, 6.5];
   late final TextEditingController _textFieldController;
   late final FocusNode _textFocusNode;
   final TextOverlayStore _textOverlays = TextOverlayStore();
@@ -453,8 +551,13 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   /// CapCut Ratio sheet — replaces filmstrip (green zone), Export stays visible.
   bool get _ratioSheetOpen => _tool == VideoEditorTool.aspectRatio;
 
+  /// CapCut Sticker sheet — tattoo stickers in filmstrip zone; navbar stays.
+  bool get _stickerSheetOpen => _tool == VideoEditorTool.sticker;
+
+  bool get _bgSheetOpen => _bgToolsOpen && _bgToolSheet != null;
+
   /// Clip Edit / Music / Effects / Text tools open — AppBar back + Export hide.
-  /// Ratio keeps Export (slideshow parity / screenshot).
+  /// Ratio / Background keep Export (CapCut canvas tools).
   bool get _navbarToolActive =>
       _selectedClipIndex != null ||
       _musicToolsOpen ||
@@ -1014,6 +1117,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _musicVolumeOpen = false;
       _musicEditOpen = false;
       _musicTrackSelected = false;
+      _bgToolsOpen = false;
+      _bgToolSheet = null;
       _textToolsOpen = false;
       _selectedTextOverlayId = null;
     });
@@ -1840,6 +1945,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         _musicVolumeOpen = false;
         _musicEditOpen = false;
         _effectsToolsOpen = false;
+        _bgToolsOpen = false;
+        _bgToolSheet = null;
         _animSheetOpen = false;
         _speedSheetOpen = false;
         _textToolsOpen = false;
@@ -1858,6 +1965,29 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         _effectsToolsOpen = true;
         _effectsTrackSelected = true;
         _musicToolsOpen = false;
+        _bgToolsOpen = false;
+        _bgToolSheet = null;
+        _animSheetOpen = false;
+        _speedSheetOpen = false;
+        _textToolsOpen = false;
+        _selectedClipIndex = null;
+      });
+      return;
+    }
+    // Background → CapCut navbar: Color / Image / Blur.
+    if (t == VideoEditorTool.background) {
+      if (_bgToolsOpen) {
+        _closeBgTools();
+        return;
+      }
+      setState(() {
+        _tool = null;
+        _bgToolsOpen = true;
+        _bgToolSheet = null;
+        _musicToolsOpen = false;
+        _musicVolumeOpen = false;
+        _musicEditOpen = false;
+        _effectsToolsOpen = false;
         _animSheetOpen = false;
         _speedSheetOpen = false;
         _textToolsOpen = false;
@@ -1873,6 +2003,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _textToolsOpen = false;
       _selectedTextOverlayId = null;
       _selectedClipIndex = null;
+      _bgToolsOpen = false;
+      _bgToolSheet = null;
       // Ratio / Filters / … replace Music/Effects tool chrome.
       if (!closing &&
           t != VideoEditorTool.music &&
@@ -1892,6 +2024,39 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       if (closing && t == VideoEditorTool.music) {
         _musicDraft = null;
       }
+    });
+  }
+
+  void _closeBgTools() {
+    setState(() {
+      _bgToolsOpen = false;
+      _bgToolSheet = null;
+      _tool = null;
+    });
+  }
+
+  void _handleBgToolTap(_VideoBgTool tool) {
+    unawaited(_pausePreview());
+    if (tool == _VideoBgTool.image) {
+      // CapCut Image: pick photo → canvas fill; sheet shows current + Replace.
+      unawaited(_pickBgImage());
+      setState(() => _bgToolSheet = _VideoBgTool.image);
+      return;
+    }
+    setState(() {
+      _bgToolSheet = _bgToolSheet == tool ? null : tool;
+    });
+  }
+
+  Future<void> _pickBgImage() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image);
+    if (!mounted || result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null || path.isEmpty) return;
+    setState(() {
+      _bgImagePath = path;
+      _bgBlurLevel = null;
+      _bgToolSheet = _VideoBgTool.image;
     });
   }
 
@@ -1982,6 +2147,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _musicToolsOpen = false;
       _musicVolumeOpen = false;
       _effectsToolsOpen = false;
+      _bgToolsOpen = false;
+      _bgToolSheet = null;
       _textToolsOpen = true;
       _selectedClipIndex = null;
     });
@@ -2064,7 +2231,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             children: [
               Expanded(
                 child: ColoredBox(
-                  color: _bgColor,
+                  color: Colors.black,
                   // CapCut: canvas = Ratio preset; video contain inside canvas.
                   child: LayoutBuilder(
                     builder: (context, constraints) {
@@ -2121,6 +2288,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                               fit: StackFit.expand,
                               clipBehavior: Clip.hardEdge,
                               children: [
+                                // CapCut canvas fill: Color / Image / Blur plate.
+                                Positioned.fill(child: _buildCanvasFill()),
                                 Center(
                                   child: SizedBox(
                                     width: videoW,
@@ -2194,17 +2363,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                                       _openTextTools(editOverlayId: id),
                                   editing: _textToolsOpen,
                                 ),
-                                if (_stickerLabel != null)
-                                  Align(
-                                    alignment: Alignment.topRight,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(20),
-                                      child: Text(
-                                        _stickerLabel!,
-                                        style: TextStyle(fontSize: rs.sp(36)),
-                                      ),
-                                    ),
-                                  ),
+                                // CapCut tattoo stickers on preview canvas.
+                                ..._buildPlacedStickerLayers(canvasW, canvasH),
                                 // Selection outline (teal — avoid FX green-screen).
                                 if (_selectedClipIndex != null)
                                   Positioned.fill(
@@ -2265,10 +2425,15 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                         key: const ValueKey('timeline_workspace'),
                         child: Column(
                           children: [
-                            // Ratio / Volume / Edit replace filmstrip; navbar stays.
+                            // Ratio / Sticker / BG / Volume replace filmstrip;
+                            // navbar stays.
                             Expanded(
                               child: _ratioSheetOpen
                                   ? _buildRatioToolSheet(rs)
+                                  : _stickerSheetOpen
+                                  ? _buildStickerToolSheet(rs)
+                                  : _bgSheetOpen
+                                  ? _buildBgToolSheet(rs)
                                   : _musicToolsOpen &&
                                         _musicEditOpen &&
                                         _music != null
@@ -2289,18 +2454,22 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                               _buildMusicEditorToolbar(rs)
                             else if (_effectsToolsOpen)
                               _buildEffectsEditorToolbar(rs)
+                            else if (_bgToolsOpen)
+                              _buildBackgroundEditorToolbar(rs)
                             else
                               _buildBottomTools(rs),
                           ],
                         ),
                       ),
               ),
-              // Filter/sticker/… panels stay below (optional extra chrome).
-              // Ratio uses green-zone SectionSheet — not an extra panel.
+              // Filter panels stay below (optional extra chrome).
+              // Ratio / Sticker / Background use green-zone sheets.
               if (_selectedClipIndex == null &&
                   _tool != null &&
                   !_mediaToolSheetOpen &&
                   !_ratioSheetOpen &&
+                  !_stickerSheetOpen &&
+                  !_bgToolsOpen &&
                   !_textToolsOpen &&
                   !_clipEditorSheetOpen)
                 _buildToolPanel(rs),
@@ -2769,21 +2938,25 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           child: Align(
             alignment: Alignment.centerRight,
             child: () {
-              // Speed / Animation / Ratio / picker / Volume / Music-edit: sheet has ✓.
+              // Speed / Animation / Ratio / Sticker / BG / picker / Volume: sheet has ✓.
               if (_clipEditorSheetOpen ||
                   _mediaToolSheetOpen ||
                   _ratioSheetOpen ||
+                  _stickerSheetOpen ||
+                  _bgSheetOpen ||
                   _musicVolumeOpen ||
                   _musicEditOpen) {
                 return const SizedBox.shrink();
               }
-              // Music / Effects tools → Done ✓
-              if (_musicToolsOpen || _effectsToolsOpen) {
+              // Music / Effects / Background tools → Done ✓
+              if (_musicToolsOpen || _effectsToolsOpen || _bgToolsOpen) {
                 return IconButton(
                   padding: EdgeInsets.zero,
                   onPressed: _musicToolsOpen
                       ? _closeMusicTools
-                      : _closeEffectsTools,
+                      : _effectsToolsOpen
+                      ? _closeEffectsTools
+                      : _closeBgTools,
                   icon: Icon(
                     Icons.check,
                     color: AppColors.primary,
@@ -2864,9 +3037,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             child: ListView(
               controller: _stripController,
               scrollDirection: Axis.horizontal,
-              physics: (_trimDragging ||
-                      _musicTrimDragging ||
-                      _effectTrimDragging)
+              physics:
+                  (_trimDragging || _musicTrimDragging || _effectTrimDragging)
                   ? const NeverScrollableScrollPhysics()
                   : const BouncingScrollPhysics(),
               padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
@@ -4515,7 +4687,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                   _tool == t ||
                   (t == VideoEditorTool.text && _textToolsOpen) ||
                   (t == VideoEditorTool.music && _musicToolsOpen) ||
-                  (t == VideoEditorTool.effects && _effectsToolsOpen),
+                  (t == VideoEditorTool.effects && _effectsToolsOpen) ||
+                  (t == VideoEditorTool.background && _bgToolsOpen),
               onTap: () => _selectTool(t),
             ),
         ],
@@ -4557,7 +4730,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   };
 
   Widget _buildToolPanel(AppResponsive rs) {
-    // Text / Music / Effects / Ratio use green-area sheets (slideshow parity).
+    // Text / Music / Effects / Ratio / Sticker / Background use green-area sheets.
     return Container(
       height: rs.h(150),
       width: double.infinity,
@@ -4567,13 +4740,509 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       ),
       child: switch (_tool!) {
         VideoEditorTool.filters => _filtersPanel(rs),
-        VideoEditorTool.sticker => _stickerPanel(rs),
-        VideoEditorTool.background => _bgPanel(rs),
+        VideoEditorTool.sticker ||
+        VideoEditorTool.background ||
         VideoEditorTool.aspectRatio ||
         VideoEditorTool.edit ||
         VideoEditorTool.text ||
         VideoEditorTool.music ||
         VideoEditorTool.effects => const SizedBox.shrink(),
+      },
+    );
+  }
+
+  /// CapCut Sticker sheet — tattoo grid in filmstrip zone; navbar stays.
+  Widget _buildStickerToolSheet(AppResponsive rs) {
+    final sheetH = _timelinePanelH - _timelineHeaderH;
+    return SectionSheet(
+      title: 'Sticker',
+      height: sheetH,
+      compactHeader: true,
+      showTopDivider: false,
+      onClose: () => setState(() {
+        _tool = null;
+        _selectedStickerId = null;
+      }),
+      onConfirm: () => setState(() {
+        _tool = null;
+        _selectedStickerId = null;
+      }),
+      child: _stickerChoiceRow(rs),
+    );
+  }
+
+  Widget _stickerChoiceRow(AppResponsive rs) {
+    final items = _VideoTattooSticker.catalog;
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.fromLTRB(rs.w(12), rs.h(10), rs.w(12), rs.h(12)),
+      itemCount: items.length + 1,
+      separatorBuilder: (_, _) => SizedBox(width: rs.w(8)),
+      itemBuilder: (context, i) {
+        if (i == 0) {
+          return GestureDetector(
+            onTap: () => setState(() {
+              _placedStickers.clear();
+              _selectedStickerId = null;
+            }),
+            child: Container(
+              width: rs.w(64),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F3F3),
+                borderRadius: BorderRadius.circular(rs.r(10)),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.not_interested_rounded),
+                  Text(
+                    'None',
+                    style: TextStyle(
+                      fontSize: rs.sp(12),
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        final s = items[i - 1];
+        return GestureDetector(
+          onTap: () => _addTattooSticker(s),
+          child: Container(
+            width: rs.w(72),
+            height: rs.w(68),
+            padding: EdgeInsets.all(rs.w(6)),
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(rs.r(10)),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Image.asset(
+              s.assetPath,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+              filterQuality: FilterQuality.medium,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _addTattooSticker(_VideoTattooSticker sticker) {
+    final n = _placedStickers.length;
+    final placed = _PlacedVideoSticker(
+      id: 'sticker_${DateTime.now().millisecondsSinceEpoch}_$n',
+      assetPath: sticker.assetPath,
+      nx: (0.55 + (n % 4) * 0.08).clamp(0.12, 0.88),
+      ny: (0.22 + (n % 3) * 0.14).clamp(0.12, 0.88),
+      scale: 1,
+    );
+    setState(() {
+      _placedStickers.add(placed);
+      _selectedStickerId = placed.id;
+    });
+  }
+
+  List<Widget> _buildPlacedStickerLayers(double canvasW, double canvasH) {
+    if (_placedStickers.isEmpty) return const [];
+    final base = math.min(canvasW, canvasH) * 0.28;
+    return [
+      for (final s in _placedStickers)
+        Positioned(
+          left: s.nx * canvasW - (base * s.scale) / 2,
+          top: s.ny * canvasH - (base * s.scale) / 2,
+          width: base * s.scale,
+          height: base * s.scale,
+          child: GestureDetector(
+            onTap: () => setState(() => _selectedStickerId = s.id),
+            onPanUpdate: (d) {
+              setState(() {
+                _selectedStickerId = s.id;
+                s.nx = (s.nx + d.delta.dx / canvasW).clamp(0.05, 0.95);
+                s.ny = (s.ny + d.delta.dy / canvasH).clamp(0.05, 0.95);
+              });
+            },
+            child: DecoratedBox(
+              decoration: _selectedStickerId == s.id
+                  ? BoxDecoration(
+                      border: Border.all(color: AppColors.primary, width: 1.5),
+                      borderRadius: BorderRadius.circular(6),
+                    )
+                  : const BoxDecoration(),
+              child: Image.asset(
+                s.assetPath,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  /// CapCut canvas fill behind contained video (Color / Image / Blur).
+  Widget _buildCanvasFill() {
+    final blur = _bgBlurLevel;
+    if (blur != null && blur > 0) {
+      final sigma = _bgBlurSigmas[blur.clamp(0, _bgBlurSigmas.length - 1)];
+      final path = _clips.isEmpty
+          ? null
+          : (_filmstripFrames[_clips[_activeIndex.clamp(0, _clips.length - 1)]]
+                ?.firstOrNull);
+      if (path != null && File(path).existsSync()) {
+        return ImageFiltered(
+          imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+          child: Image.file(
+            File(path),
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            gaplessPlayback: true,
+          ),
+        );
+      }
+    }
+    final imagePath = _bgImagePath;
+    if (imagePath != null && File(imagePath).existsSync()) {
+      return Image.file(
+        File(imagePath),
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        gaplessPlayback: true,
+      );
+    }
+    return ColoredBox(
+      color: _bgColor.withValues(alpha: _bgColorOpacity.clamp(0.0, 1.0)),
+    );
+  }
+
+  /// CapCut Background navbar: Back · Color · Image · Blur.
+  Widget _buildBackgroundEditorToolbar(AppResponsive rs) {
+    final actions = <({_VideoBgTool id, String label, IconData icon})>[
+      (id: _VideoBgTool.color, label: 'Color', icon: Icons.format_color_fill),
+      (id: _VideoBgTool.image, label: 'Image', icon: Icons.image_outlined),
+      (id: _VideoBgTool.blur, label: 'Blur', icon: Icons.water_drop_outlined),
+    ];
+    return Container(
+      height: rs.h(72),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(left: 54, right: 6),
+              children: [
+                for (final a in actions)
+                  SizedBox(
+                    width: 72,
+                    child: InkWell(
+                      onTap: () => _handleBgToolTap(a.id),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            a.icon,
+                            size: 26,
+                            color: _bgToolSheet == a.id
+                                ? AppColors.primary
+                                : AppColors.textMuted,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            a.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: _bgToolSheet == a.id
+                                  ? AppColors.primary
+                                  : AppColors.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Positioned(
+            left: 10,
+            top: 10,
+            bottom: 10,
+            child: Material(
+              color: AppColors.surfaceAlt,
+              elevation: 3,
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 38,
+                child: IconButton(
+                  tooltip: 'Back to editor tools',
+                  onPressed: _clearClipSelection,
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Color / Image / Blur sheet over filmstrip (navbar stays below).
+  Widget _buildBgToolSheet(AppResponsive rs) {
+    final sheetH = _timelinePanelH - _timelineHeaderH;
+    final title = switch (_bgToolSheet!) {
+      _VideoBgTool.color => 'Color',
+      _VideoBgTool.image => 'Image',
+      _VideoBgTool.blur => 'Blur',
+    };
+    return SectionSheet(
+      title: title,
+      height: sheetH,
+      compactHeader: true,
+      showTopDivider: false,
+      onClose: () => setState(() => _bgToolSheet = null),
+      onConfirm: () => setState(() => _bgToolSheet = null),
+      child: switch (_bgToolSheet!) {
+        _VideoBgTool.color => _bgColorBody(rs),
+        _VideoBgTool.image => _bgImageBody(rs),
+        _VideoBgTool.blur => _bgBlurBody(rs),
+      },
+    );
+  }
+
+  Widget _bgColorBody(AppResponsive rs) {
+    final colors = [for (final o in BgOption.all) Color(o.argb)];
+    final opacityPct = (_bgColorOpacity * 100).round().clamp(0, 100);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: rs.h(56),
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.fromLTRB(rs.w(14), rs.h(4), rs.w(14), 0),
+            itemCount: colors.length,
+            separatorBuilder: (_, _) => SizedBox(width: rs.w(10)),
+            itemBuilder: (context, i) {
+              final c = colors[i];
+              final selected =
+                  _bgBlurLevel == null &&
+                  _bgImagePath == null &&
+                  _bgColor.withValues(alpha: 1).toARGB32() ==
+                      c.withValues(alpha: 1).toARGB32();
+              return GestureDetector(
+                onTap: () => setState(() {
+                  _bgColor = c.withValues(alpha: 1);
+                  _bgBlurLevel = null;
+                  _bgImagePath = null;
+                }),
+                child: SizedBox(
+                  width: rs.w(44),
+                  height: rs.w(44),
+                  child: PrimarySelectedBorder(
+                    selected: selected,
+                    shape: BoxShape.circle,
+                    width: 3,
+                    backgroundColor: c,
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        // CapCut: opacity slider under color swatches.
+        Padding(
+          padding: EdgeInsets.fromLTRB(rs.w(14), rs.h(2), rs.w(8), 0),
+          child: Row(
+            children: [
+              Text(
+                'Opacity',
+                style: TextStyle(
+                  fontSize: rs.sp(12),
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textDark,
+                ),
+              ),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 14,
+                    ),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 8,
+                    ),
+                  ),
+                  child: Slider(
+                    value: opacityPct.toDouble(),
+                    min: 0,
+                    max: 100,
+                    divisions: 100,
+                    activeColor: AppColors.primary,
+                    onChanged: (v) => setState(() {
+                      _bgColorOpacity = (v / 100).clamp(0.0, 1.0);
+                      _bgBlurLevel = null;
+                      _bgImagePath = null;
+                    }),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: rs.w(36),
+                child: Text(
+                  '$opacityPct',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontSize: rs.sp(12),
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _bgImageBody(AppResponsive rs) {
+    final path = _bgImagePath;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(rs.w(14), rs.h(4), rs.w(14), rs.h(8)),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => unawaited(_pickBgImage()),
+            child: Container(
+              width: rs.w(72),
+              height: rs.w(72),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F3F3),
+                borderRadius: BorderRadius.circular(rs.r(10)),
+                border: Border.all(color: AppColors.border),
+                image: path != null && File(path).existsSync()
+                    ? DecorationImage(
+                        image: FileImage(File(path)),
+                        fit: BoxFit.cover,
+                      )
+                    : null,
+              ),
+              child: path == null
+                  ? Icon(
+                      Icons.add_photo_alternate_outlined,
+                      color: AppColors.textMuted,
+                      size: rs.r(28),
+                    )
+                  : null,
+            ),
+          ),
+          SizedBox(width: rs.w(12)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  path == null ? 'Add background image' : 'Background image',
+                  style: TextStyle(
+                    fontSize: rs.sp(13),
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                SizedBox(height: rs.h(6)),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => unawaited(_pickBgImage()),
+                      child: Text(path == null ? 'Choose' : 'Replace'),
+                    ),
+                    if (path != null)
+                      TextButton(
+                        onPressed: () => setState(() => _bgImagePath = null),
+                        child: const Text('Remove'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bgBlurBody(AppResponsive rs) {
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.fromLTRB(rs.w(14), rs.h(12), rs.w(14), rs.h(12)),
+      itemCount: _bgBlurSigmas.length,
+      separatorBuilder: (_, _) => SizedBox(width: rs.w(8)),
+      itemBuilder: (context, level) {
+        final sigma = _bgBlurSigmas[level];
+        final selected = _bgBlurLevel == level;
+        final path = _clips.isEmpty
+            ? null
+            : (_filmstripFrames[_clips[_activeIndex.clamp(
+                    0,
+                    _clips.length - 1,
+                  )]]
+                  ?.firstOrNull);
+        Widget thumb = path != null && File(path).existsSync()
+            ? Image.file(File(path), fit: BoxFit.cover, gaplessPlayback: true)
+            : Image.asset(
+                'assets/images/editor/animation_thumb.png',
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              );
+        if (sigma > 0.4) {
+          thumb = ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: thumb,
+          );
+        }
+        return GestureDetector(
+          onTap: () => setState(() {
+            if (level == 0) {
+              _bgBlurLevel = null;
+            } else {
+              _bgBlurLevel = level;
+              _bgImagePath = null;
+            }
+          }),
+          child: SizedBox(
+            width: rs.w(68),
+            height: rs.w(56),
+            child: PrimarySelectedBorder(
+              selected: selected || (level == 0 && _bgBlurLevel == null),
+              borderRadius: 8,
+              width: 2,
+              unselectedColor: const Color(0xFFBDBDBD),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: thumb,
+              ),
+            ),
+          ),
+        );
       },
     );
   }
@@ -4895,113 +5564,6 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                       ),
                     ),
                   ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _stickerPanel(AppResponsive rs) {
-    const stickers = ['😀', '🔥', '⭐', '❤️', '🎉', '✨', '👍', '🎵'];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _panelHeader(rs, 'Sticker'),
-        Expanded(
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: rs.w(14)),
-            itemCount: stickers.length + 1,
-            separatorBuilder: (_, _) => SizedBox(width: rs.w(10)),
-            itemBuilder: (context, i) {
-              if (i == 0) {
-                return GestureDetector(
-                  onTap: () => setState(() => _stickerLabel = null),
-                  child: Column(
-                    children: [
-                      Container(
-                        width: rs.w(56),
-                        height: rs.w(56),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: AppColors.surfaceAlt,
-                          borderRadius: BorderRadius.circular(rs.r(10)),
-                          border: Border.all(color: AppColors.border),
-                        ),
-                        child: Text(
-                          'None',
-                          style: TextStyle(fontSize: rs.sp(11)),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }
-              final s = stickers[i - 1];
-              final selected = _stickerLabel == s;
-              return GestureDetector(
-                onTap: () => setState(() => _stickerLabel = s),
-                child: Container(
-                  width: rs.w(56),
-                  height: rs.w(56),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceAlt,
-                    borderRadius: BorderRadius.circular(rs.r(10)),
-                    border: Border.all(
-                      color: selected ? AppColors.primary : AppColors.border,
-                      width: selected ? 2 : 1,
-                    ),
-                  ),
-                  child: Text(s, style: TextStyle(fontSize: rs.sp(26))),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _bgPanel(AppResponsive rs) {
-    final colors = [
-      Colors.black,
-      Colors.white,
-      const Color(0xFF1A237E),
-      const Color(0xFF212121),
-      const Color(0xFF26EBD7),
-      const Color(0xFF33B5F1),
-      const Color(0xFFFF7043),
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _panelHeader(rs, 'Background'),
-        Expanded(
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: rs.w(14)),
-            itemCount: colors.length,
-            separatorBuilder: (_, _) => SizedBox(width: rs.w(10)),
-            itemBuilder: (context, i) {
-              final c = colors[i];
-              final selected = _bgColor == c;
-              return GestureDetector(
-                onTap: () => setState(() => _bgColor = c),
-                child: Container(
-                  width: rs.w(48),
-                  height: rs.w(48),
-                  decoration: BoxDecoration(
-                    color: c,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: selected ? AppColors.primary : AppColors.border,
-                      width: selected ? 3 : 1,
-                    ),
-                  ),
                 ),
               );
             },

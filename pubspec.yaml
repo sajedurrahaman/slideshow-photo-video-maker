@@ -73,5 +73,6 @@ flutter:
     - assets/images/editor/
     - assets/images/editor/photo_tools/
     - assets/images/editor/music_tools/
+    - assets/images/editor/stickers/
     - assets/images/editor/transitions/
     - assets/lottie/
