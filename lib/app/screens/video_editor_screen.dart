@@ -429,6 +429,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   /// True while dragging music trim handles (locks filmstrip scroll).
   bool _musicTrimDragging = false;
+  bool _effectTrimDragging = false;
   String? _stickerLabel;
   OverlayEffect? _overlayEffect;
 
@@ -2589,6 +2590,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   /// Fills the already-sized video frame (native aspect, CapCut contain).
   /// Applies per-clip Resize (crop + rotate) when set.
+  ///
+  /// Parent [SizedBox] already uses the crop-window aspect ratio. Position the
+  /// full video so the selected crop rect exactly fills that frame — no
+  /// FittedBox.cover (over-zoom) and no Transform.scale (layout-size bug).
   Widget _buildPlayer(ColorFilter? filter) {
     Widget player = VideoPlayer(_controller!);
     if (filter != null) {
@@ -2597,39 +2602,49 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final crop = _cropFor(_activeIndex);
     if (crop == null || crop.isIdentity) return player;
 
+    final vs = _controller!.value.size;
+    final vw = vs.width <= 0 ? 1.0 : vs.width;
+    final vh = vs.height <= 0 ? 1.0 : vs.height;
     final rad = crop.degrees * math.pi / 180;
-    final cover = () {
+    final cw = crop.width.clamp(0.05, 4.0);
+    final ch = crop.height.clamp(0.05, 4.0);
+
+    // Slight expand when rotated so corners aren't clipped early.
+    final rotPad = () {
+      if (crop.degrees.abs() < 0.5) return 1.0;
       final a = crop.degrees.abs() * math.pi / 180;
-      final c = math.cos(a);
-      final s = math.sin(a);
-      final vs = _controller?.value.size;
-      final w = (vs != null && vs.width > 0) ? vs.width : 1.0;
-      final h = (vs != null && vs.height > 0) ? vs.height : 1.0;
-      return math.max((w * c + h * s) / w, (w * s + h * c) / h);
+      final c = math.cos(a).abs();
+      final s = math.sin(a).abs();
+      return math.max((cw * c + ch * s) / cw, (cw * s + ch * c) / ch);
     }();
 
-    // Align crop window center; scale so crop rect fills the preview frame.
-    final cx = (crop.left + crop.width / 2).clamp(0.0, 1.0);
-    final cy = (crop.top + crop.height / 2).clamp(0.0, 1.0);
-    final align = Alignment(cx * 2 - 1, cy * 2 - 1);
-    final zoom = math.max(1.0 / crop.width, 1.0 / crop.height) * cover;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final frameW = constraints.maxWidth;
+        // Crop window → frame: display full video at a size where crop fills.
+        final scale = (frameW / (cw * vw)) * rotPad;
+        final displayW = vw * scale;
+        final displayH = vh * scale;
+        final left = -crop.left * displayW;
+        final top = -crop.top * displayH;
 
-    return ClipRect(
-      child: Transform.rotate(
-        angle: rad,
-        child: FittedBox(
-          fit: BoxFit.cover,
-          alignment: align,
-          child: Transform.scale(
-            scale: zoom / cover,
-            child: SizedBox(
-              width: _controller!.value.size.width,
-              height: _controller!.value.size.height,
+        Widget content = Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Positioned(
+              left: left,
+              top: top,
+              width: displayW,
+              height: displayH,
               child: player,
             ),
-          ),
-        ),
-      ),
+          ],
+        );
+        if (crop.degrees.abs() >= 0.5) {
+          content = Transform.rotate(angle: rad, child: content);
+        }
+        return ClipRect(child: content);
+      },
     );
   }
 
@@ -2804,7 +2819,9 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
             child: ListView(
               controller: _stripController,
               scrollDirection: Axis.horizontal,
-              physics: (_trimDragging || _musicTrimDragging)
+              physics: (_trimDragging ||
+                      _musicTrimDragging ||
+                      _effectTrimDragging)
                   ? const NeverScrollableScrollPhysics()
                   : const BouncingScrollPhysics(),
               padding: EdgeInsets.fromLTRB(leftPad, 0, playheadX, 0),
@@ -2847,16 +2864,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                       ),
                       if (underH > 0) ...[
                         SizedBox(height: rs.h(4)),
-                        if (hasEffect)
-                          _effectTimelineLane(
-                            rs: rs,
-                            width: totalW,
-                            height: effectLaneH,
-                            pps: pps,
-                          ),
+                        // Effect/music lanes overlaid outside ListView so
+                        // trim/move handles beat strip scroll (slideshow).
+                        if (hasEffect) SizedBox(height: effectLaneH),
                         if (hasEffect && hasMusic) SizedBox(height: rs.h(2)),
-                        // Music lane is overlaid outside ListView (handles need
-                        // priority over strip scroll — slideshow pattern).
                         if (hasMusic) SizedBox(height: musicLaneH),
                       ],
                     ],
@@ -2865,6 +2876,27 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               ],
             ),
           ),
+          // Effect trim/move UI outside ListView (slideshow effect lane).
+          if (hasEffect)
+            ListenableBuilder(
+              listenable: _stripController,
+              builder: (context, _) {
+                final effectTop = rulerH + gapH + thumbH + rs.h(4);
+                return Positioned(
+                  left: 0,
+                  right: 0,
+                  top: effectTop,
+                  height: effectLaneH,
+                  child: _effectTimelineLane(
+                    rs: rs,
+                    width: totalW,
+                    height: effectLaneH,
+                    pps: pps,
+                    leftPad: leftPad,
+                  ),
+                );
+              },
+            ),
           // Music trim UI outside ListView so `<`/`>` drag is smooth.
           if (hasMusic)
             ListenableBuilder(
@@ -3034,92 +3066,57 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     );
   }
 
-  /// CapCut purple effect bar under filmstrip (thumb + name).
+  void _selectEffectTrack() {
+    setState(() {
+      _effectsToolsOpen = true;
+      _effectsTrackSelected = true;
+      _musicToolsOpen = false;
+      _musicTrackSelected = false;
+      _musicVolumeOpen = false;
+      _musicEditOpen = false;
+      _tool = null;
+      _selectedClipIndex = null;
+    });
+  }
+
+  void _commitEffectTimelineRange(double start, double end) {
+    final total = _totalDurationSec;
+    const minLen = 0.5;
+    final s = start.clamp(0.0, math.max(0.0, total - minLen)).toDouble();
+    final e = end.clamp(s + minLen, total).toDouble();
+    setState(() {
+      _effectStartSec = s;
+      _effectEndSec = (e - total).abs() < 0.05 ? null : e;
+    });
+  }
+
+  /// CapCut purple effect bar — select + trim/move like slideshow.
   Widget _effectTimelineLane({
     required AppResponsive rs,
     required double width,
     required double height,
     required double pps,
+    required double leftPad,
   }) {
     final effect = _overlayEffect;
     if (effect == null) return const SizedBox.shrink();
-    final total = _totalDurationSec;
-    final start = _effectStartSec.clamp(0.0, total);
-    final end = (_effectEndSec ?? total).clamp(start + 0.1, total);
-    final left = start * pps;
-    final barW = math.max(48.0, (end - start) * pps);
-    final selected = _effectsTrackSelected || _effectsToolsOpen;
-
-    return SizedBox(
+    return _VideoEffectTimelineLane(
+      effect: effect,
+      videoDur: _totalDurationSec,
+      startSec: _effectStartSec,
+      endSec: _effectEndSec,
       width: width,
       height: height,
-      child: Stack(
-        children: [
-          Positioned(
-            left: left,
-            width: barW,
-            top: 0,
-            bottom: 0,
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _effectsToolsOpen = true;
-                  _effectsTrackSelected = true;
-                  _tool = null;
-                  _selectedClipIndex = null;
-                });
-              },
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF7C4DFF),
-                  borderRadius: BorderRadius.circular(4),
-                  border: selected
-                      ? Border.all(color: AppColors.primary, width: 2)
-                      : null,
-                ),
-                child: height >= 24
-                    ? Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(3),
-                              child: Image.asset(
-                                effect.thumbPath,
-                                width: height - 8,
-                                height: height - 8,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => ColoredBox(
-                                  color: Colors.black26,
-                                  child: SizedBox(
-                                    width: height - 8,
-                                    height: height - 8,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                effect.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: rs.sp(11),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : const SizedBox.expand(),
-              ),
-            ),
-          ),
-        ],
-      ),
+      leftPad: leftPad,
+      stripController: _stripController,
+      pixelsPerSecond: pps,
+      selected: _effectsTrackSelected || _effectsToolsOpen,
+      labelSize: rs.sp(11),
+      onSelect: _selectEffectTrack,
+      onCommitRange: _commitEffectTimelineRange,
+      onScrollTimeline: _scrollStripByDx,
+      onDragStart: () => setState(() => _effectTrimDragging = true),
+      onDragEnd: () => setState(() => _effectTrimDragging = false),
     );
   }
 
@@ -5139,6 +5136,323 @@ class _SelectedVideoClipState extends State<_SelectedVideoClip> {
 /// Slideshow-parity music lane: `<`/`>` trim handles + hold-drag move.
 /// Positioned outside the filmstrip ListView (leftPad − scroll) so handle
 /// drags win the gesture arena and feel smooth.
+/// Effect timeline lane — select, trim handles, hold-move (slideshow parity).
+class _VideoEffectTimelineLane extends StatefulWidget {
+  const _VideoEffectTimelineLane({
+    required this.effect,
+    required this.videoDur,
+    required this.startSec,
+    required this.endSec,
+    required this.width,
+    required this.height,
+    required this.leftPad,
+    required this.stripController,
+    required this.pixelsPerSecond,
+    required this.selected,
+    required this.labelSize,
+    required this.onSelect,
+    required this.onCommitRange,
+    required this.onScrollTimeline,
+    required this.onDragStart,
+    required this.onDragEnd,
+  });
+
+  final OverlayEffect effect;
+  final double videoDur;
+  final double startSec;
+  final double? endSec;
+  final double width;
+  final double height;
+  final double leftPad;
+  final ScrollController stripController;
+  final double pixelsPerSecond;
+  final bool selected;
+  final double labelSize;
+  final VoidCallback onSelect;
+  final void Function(double start, double end) onCommitRange;
+  final void Function(double dx) onScrollTimeline;
+  final VoidCallback onDragStart;
+  final VoidCallback onDragEnd;
+
+  static const handleW = 28.0;
+
+  @override
+  State<_VideoEffectTimelineLane> createState() =>
+      _VideoEffectTimelineLaneState();
+}
+
+class _VideoEffectTimelineLaneState extends State<_VideoEffectTimelineLane> {
+  double? _liveStart;
+  double? _liveEnd;
+  bool _interacting = false;
+  double _holdOriginDx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.stripController.addListener(_onStrip);
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoEffectTimelineLane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stripController != widget.stripController) {
+      oldWidget.stripController.removeListener(_onStrip);
+      widget.stripController.addListener(_onStrip);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.stripController.removeListener(_onStrip);
+    super.dispose();
+  }
+
+  void _onStrip() {
+    if (mounted) setState(() {});
+  }
+
+  (double, double) _range() {
+    final videoDur = widget.videoDur;
+    final start = (_liveStart ?? widget.startSec).clamp(0.0, videoDur);
+    final end = (_liveEnd ?? widget.endSec ?? videoDur).clamp(
+      start + 0.5,
+      videoDur,
+    );
+    return (start, end);
+  }
+
+  void _beginInteract() {
+    final (s, e) = _range();
+    _interacting = true;
+    _liveStart = s;
+    _liveEnd = e;
+    widget.onDragStart();
+  }
+
+  void _clampLive(double videoDur) {
+    const minLen = 0.5;
+    final s = (_liveStart ?? 0).clamp(0.0, videoDur - minLen);
+    final e = (_liveEnd ?? videoDur).clamp(s + minLen, videoDur);
+    _liveStart = s;
+    _liveEnd = e;
+  }
+
+  void _trimByDx({required bool isStart, required double dxPx}) {
+    final videoDur = widget.videoDur;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    if (!_interacting) _beginInteract();
+    setState(() {
+      if (isStart) {
+        _liveStart = (_liveStart! + dSec).clamp(0.0, _liveEnd! - 0.5);
+      } else {
+        _liveEnd = (_liveEnd! + dSec).clamp(_liveStart! + 0.5, videoDur);
+      }
+      _clampLive(videoDur);
+    });
+  }
+
+  void _moveByDx(double dxPx) {
+    final videoDur = widget.videoDur;
+    final dSec = dxPx / widget.pixelsPerSecond;
+    if (!_interacting) _beginInteract();
+    setState(() {
+      final len = _liveEnd! - _liveStart!;
+      final ns = (_liveStart! + dSec).clamp(0.0, videoDur - len);
+      _liveStart = ns;
+      _liveEnd = ns + len;
+    });
+  }
+
+  void _commitInteract() {
+    if (!_interacting || _liveStart == null || _liveEnd == null) {
+      widget.onDragEnd();
+      return;
+    }
+    widget.onCommitRange(_liveStart!, _liveEnd!);
+    _interacting = false;
+    _liveStart = null;
+    _liveEnd = null;
+    widget.onDragEnd();
+    if (mounted) setState(() {});
+  }
+
+  Widget _bar(OverlayEffect effect) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [Color(0xFF7B2FFF), Color(0xFF3A0CA3)],
+        ),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: widget.height >= 24
+          ? Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Image.asset(
+                      effect.thumbPath,
+                      width: 22,
+                      height: 22,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const ColoredBox(
+                        color: Colors.black26,
+                        child: SizedBox(width: 22, height: 22),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      effect.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: widget.labelSize,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : const SizedBox.expand(),
+    );
+  }
+
+  Widget _handle({required bool isStart, required IconData icon}) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onHorizontalDragStart: (_) {
+        if (!widget.selected) widget.onSelect();
+        _beginInteract();
+      },
+      onHorizontalDragUpdate: (d) {
+        if (d.delta.dx == 0) return;
+        _trimByDx(isStart: isStart, dxPx: d.delta.dx);
+        widget.onScrollTimeline(-d.delta.dx);
+      },
+      onHorizontalDragEnd: (_) => _commitInteract(),
+      onHorizontalDragCancel: _commitInteract,
+      child: SizedBox(
+        width: _VideoEffectTimelineLane.handleW,
+        height: double.infinity,
+        child: Icon(icon, size: 18, color: Colors.black87),
+      ),
+    );
+  }
+
+  Widget _body(OverlayEffect effect) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onTap: widget.onSelect,
+      onLongPressStart: (_) {
+        if (!widget.selected) widget.onSelect();
+        _beginInteract();
+        _holdOriginDx = 0;
+        HapticFeedback.selectionClick();
+      },
+      onLongPressMoveUpdate: (d) {
+        final dx = d.localOffsetFromOrigin.dx;
+        final delta = dx - _holdOriginDx;
+        _holdOriginDx = dx;
+        if (delta.abs() <= 0.01) return;
+        _moveByDx(delta);
+        widget.onScrollTimeline(-delta);
+      },
+      onLongPressEnd: (_) => _commitInteract(),
+      onLongPressCancel: _commitInteract,
+      onHorizontalDragUpdate: (d) {
+        if (_interacting && _liveStart != null) return;
+        widget.onScrollTimeline(d.delta.dx);
+      },
+      child: _bar(effect),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effect = widget.effect;
+    final offset = widget.stripController.positions.length == 1
+        ? widget.stripController.offset
+        : 0.0;
+    final (startSec, endSec) = _range();
+    final trackLeft = widget.leftPad - offset;
+    final trackWidth = math.max(widget.width, 120.0);
+    final barLeft = trackLeft + startSec * widget.pixelsPerSecond;
+    final barWidth = math.max(
+      48.0,
+      (endSec - startSec) * widget.pixelsPerSecond,
+    );
+    final selected = widget.selected;
+    final handleW = _VideoEffectTimelineLane.handleW;
+    final posLeft = barLeft - (selected ? handleW : 0);
+    final posWidth = barWidth + (selected ? handleW * 2 : 0);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: (d) {
+        if (_interacting) return;
+        widget.onScrollTimeline(d.delta.dx);
+      },
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: trackLeft,
+            width: trackWidth,
+            top: 2,
+            bottom: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0x337B2FFF),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            left: posLeft,
+            width: posWidth,
+            top: 0,
+            bottom: 0,
+            child: selected
+                ? Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x29000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        _handle(isStart: true, icon: Icons.chevron_left),
+                        Expanded(child: _body(effect)),
+                        _handle(isStart: false, icon: Icons.chevron_right),
+                      ],
+                    ),
+                  )
+                : _body(effect),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _VideoMusicTimelineLane extends StatefulWidget {
   const _VideoMusicTimelineLane({
     required this.music,
@@ -6104,7 +6418,7 @@ class _VideoScreenEffectPainter extends CustomPainter {
       image: image,
       fit: BoxFit.cover,
       blendMode: BlendMode.screen,
-      filterQuality: FilterQuality.medium,
+      filterQuality: FilterQuality.high,
     );
   }
 
