@@ -48,7 +48,10 @@ enum _VideoAnimPhase { inAnimation, outAnimation }
 /// CapCut Background tools navbar: Color / Image / Blur.
 enum _VideoBgTool { color, image, blur }
 
-/// Tattoo sticker assets for CapCut-style Sticker sheet.
+/// CapCut Sticker sheet tabs: tattoo stickers + emoji faces.
+enum _VideoStickerSheetTab { sticker, emoji }
+
+/// Tattoo sticker / emoji assets for CapCut-style Sticker sheet.
 class _VideoTattooSticker {
   const _VideoTattooSticker({required this.id, required this.assetPath});
   final String id;
@@ -110,6 +113,125 @@ class _VideoTattooSticker {
     _VideoTattooSticker(
       id: 'butterflies_2',
       assetPath: 'assets/images/editor/stickers/sticker_15_butterflies_2.png',
+    ),
+  ];
+
+  static const emojiCatalog = <_VideoTattooSticker>[
+    _VideoTattooSticker(
+      id: 'emoji_01',
+      assetPath: 'assets/images/editor/emojis/emoji_01.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_02',
+      assetPath: 'assets/images/editor/emojis/emoji_02.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_03',
+      assetPath: 'assets/images/editor/emojis/emoji_03.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_04',
+      assetPath: 'assets/images/editor/emojis/emoji_04.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_05',
+      assetPath: 'assets/images/editor/emojis/emoji_05.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_06',
+      assetPath: 'assets/images/editor/emojis/emoji_06.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_07',
+      assetPath: 'assets/images/editor/emojis/emoji_07.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_08',
+      assetPath: 'assets/images/editor/emojis/emoji_08.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_09',
+      assetPath: 'assets/images/editor/emojis/emoji_09.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_10',
+      assetPath: 'assets/images/editor/emojis/emoji_10.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_11',
+      assetPath: 'assets/images/editor/emojis/emoji_11.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_12',
+      assetPath: 'assets/images/editor/emojis/emoji_12.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_13',
+      assetPath: 'assets/images/editor/emojis/emoji_13.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_14',
+      assetPath: 'assets/images/editor/emojis/emoji_14.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_15',
+      assetPath: 'assets/images/editor/emojis/emoji_15.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_16',
+      assetPath: 'assets/images/editor/emojis/emoji_16.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_17',
+      assetPath: 'assets/images/editor/emojis/emoji_17.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_18',
+      assetPath: 'assets/images/editor/emojis/emoji_18.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_19',
+      assetPath: 'assets/images/editor/emojis/emoji_19.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_20',
+      assetPath: 'assets/images/editor/emojis/emoji_20.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_21',
+      assetPath: 'assets/images/editor/emojis/emoji_21.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_22',
+      assetPath: 'assets/images/editor/emojis/emoji_22.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_23',
+      assetPath: 'assets/images/editor/emojis/emoji_23.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_24',
+      assetPath: 'assets/images/editor/emojis/emoji_24.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_25',
+      assetPath: 'assets/images/editor/emojis/emoji_25.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_26',
+      assetPath: 'assets/images/editor/emojis/emoji_26.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_27',
+      assetPath: 'assets/images/editor/emojis/emoji_27.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_28',
+      assetPath: 'assets/images/editor/emojis/emoji_28.png',
+    ),
+    _VideoTattooSticker(
+      id: 'emoji_29',
+      assetPath: 'assets/images/editor/emojis/emoji_29.png',
     ),
   ];
 }
@@ -519,6 +641,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   OverlayEffect? _overlayEffect;
   final List<_PlacedVideoSticker> _placedStickers = [];
   String? _selectedStickerId;
+  _VideoStickerSheetTab _stickerSheetTab = _VideoStickerSheetTab.sticker;
 
   /// Effect span on the project timeline (CapCut clip start/end).
   double _effectStartSec = 0;
@@ -4751,7 +4874,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     );
   }
 
-  /// CapCut Sticker sheet — tattoo grid in filmstrip zone; navbar stays.
+  /// CapCut Sticker sheet — Sticker | Emoji tabs; navbar stays.
   Widget _buildStickerToolSheet(AppResponsive rs) {
     final sheetH = _timelinePanelH - _timelineHeaderH;
     return SectionSheet(
@@ -4759,20 +4882,71 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       height: sheetH,
       compactHeader: true,
       showTopDivider: false,
+      center: _stickerSheetTabHeader(rs),
       onClose: () => setState(() {
         _tool = null;
         _selectedStickerId = null;
+        _stickerSheetTab = _VideoStickerSheetTab.sticker;
       }),
       onConfirm: () => setState(() {
         _tool = null;
         _selectedStickerId = null;
+        _stickerSheetTab = _VideoStickerSheetTab.sticker;
       }),
       child: _stickerChoiceRow(rs),
     );
   }
 
+  Widget _stickerSheetTabHeader(AppResponsive rs) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final tab in _VideoStickerSheetTab.values)
+          InkWell(
+            onTap: () => setState(() => _stickerSheetTab = tab),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: rs.w(10)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    tab == _VideoStickerSheetTab.sticker ? 'Sticker' : 'Emoji',
+                    style: TextStyle(
+                      fontSize: rs.sp(14),
+                      fontWeight: FontWeight.w600,
+                      color: _stickerSheetTab == tab
+                          ? AppColors.textDark
+                          : AppColors.textMuted,
+                    ),
+                  ),
+                  SizedBox(height: rs.h(2)),
+                  Container(
+                    width: tab == _VideoStickerSheetTab.sticker
+                        ? rs.w(36)
+                        : rs.w(32),
+                    height: 2.5,
+                    decoration: BoxDecoration(
+                      gradient: _stickerSheetTab == tab
+                          ? AppColors.primaryGradient
+                          : null,
+                      color: _stickerSheetTab == tab
+                          ? null
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _stickerChoiceRow(AppResponsive rs) {
-    final items = _VideoTattooSticker.catalog;
+    final items = _stickerSheetTab == _VideoStickerSheetTab.emoji
+        ? _VideoTattooSticker.emojiCatalog
+        : _VideoTattooSticker.catalog;
     return ListView.separated(
       scrollDirection: Axis.horizontal,
       padding: EdgeInsets.fromLTRB(rs.w(12), rs.h(10), rs.w(12), rs.h(12)),
@@ -4796,7 +4970,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.not_interested_rounded),
+                  const Icon(Icons.not_interested_rounded),
                   Text(
                     'None',
                     style: TextStyle(
