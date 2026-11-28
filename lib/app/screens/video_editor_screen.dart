@@ -16,6 +16,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../core/constants/app_constants.dart';
 import '../core/responsive/app_responsive.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
@@ -449,7 +450,11 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   bool get _mediaToolSheetOpen =>
       _tool == VideoEditorTool.music || _tool == VideoEditorTool.effects;
 
+  /// CapCut Ratio sheet — replaces filmstrip (green zone), Export stays visible.
+  bool get _ratioSheetOpen => _tool == VideoEditorTool.aspectRatio;
+
   /// Clip Edit / Music / Effects / Text tools open — AppBar back + Export hide.
+  /// Ratio keeps Export (slideshow parity / screenshot).
   bool get _navbarToolActive =>
       _selectedClipIndex != null ||
       _musicToolsOpen ||
@@ -1868,6 +1873,15 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _textToolsOpen = false;
       _selectedTextOverlayId = null;
       _selectedClipIndex = null;
+      // Ratio / Filters / … replace Music/Effects tool chrome.
+      if (!closing &&
+          t != VideoEditorTool.music &&
+          t != VideoEditorTool.effects) {
+        _musicToolsOpen = false;
+        _musicVolumeOpen = false;
+        _musicEditOpen = false;
+        _effectsToolsOpen = false;
+      }
       if (t == VideoEditorTool.effects && !closing) {
         _effectsToolsOpen = false;
       }
@@ -2051,8 +2065,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               Expanded(
                 child: ColoredBox(
                   color: _bgColor,
-                  // CapCut-style: full preview is canvas; video keeps native
-                  // aspect (contain). In-anim / overlays clip to video rect only.
+                  // CapCut: canvas = Ratio preset; video contain inside canvas.
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       if (!_ready || _controller == null) {
@@ -2060,11 +2073,14 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                       }
 
                       final videoSize = _controller!.value.size;
+                      final canvasAr = (_aspectH > 0)
+                          ? (_aspectW / _aspectH)
+                          : (9 / 16);
                       final nativeAr =
                           (videoSize.width > 0 && videoSize.height > 0)
                           ? videoSize.width / videoSize.height
-                          : (_aspectW / _aspectH);
-                      // After Resize, preview frame follows crop window aspect.
+                          : canvasAr;
+                      // After Resize, video rect follows crop window aspect.
                       final crop = _cropFor(_activeIndex);
                       final videoAr =
                           (crop != null &&
@@ -2077,61 +2093,86 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                           : nativeAr;
                       final maxW = constraints.maxWidth;
                       final maxH = constraints.maxHeight;
-                      late final double frameW;
-                      late final double frameH;
-                      if (maxW / maxH > videoAr) {
-                        frameH = maxH;
-                        frameW = frameH * videoAr;
+                      late final double canvasW;
+                      late final double canvasH;
+                      if (maxW / maxH > canvasAr) {
+                        canvasH = maxH;
+                        canvasW = canvasH * canvasAr;
                       } else {
-                        frameW = maxW;
-                        frameH = frameW / videoAr;
+                        canvasW = maxW;
+                        canvasH = canvasW / canvasAr;
+                      }
+                      late final double videoW;
+                      late final double videoH;
+                      if (canvasW / canvasH > videoAr) {
+                        videoH = canvasH;
+                        videoW = videoH * videoAr;
+                      } else {
+                        videoW = canvasW;
+                        videoH = videoW / videoAr;
                       }
 
                       return Center(
                         child: SizedBox(
-                          width: frameW,
-                          height: frameH,
+                          width: canvasW,
+                          height: canvasH,
                           child: ClipRect(
                             child: Stack(
                               fit: StackFit.expand,
                               clipBehavior: Clip.hardEdge,
                               children: [
-                                _buildPlayer(filter),
-                                // Effects under In/Out reveal — screen-blend on
-                                // top of leaves caused the green/yellow glow.
-                                if (_overlayEffect != null)
-                                  Positioned.fill(
-                                    child: _VideoLiveEffectOverlay(
-                                      effect: _overlayEffect!,
-                                      positionSec: _globalPositionSec,
-                                      startSec: _effectStartSec,
-                                      endSec:
-                                          _effectEndSec ?? _totalDurationSec,
-                                      onFramesReady: (_) {
-                                        if (_effectPreviewLoading && mounted) {
-                                          setState(
-                                            () => _effectPreviewLoading = false,
-                                          );
-                                        }
-                                      },
+                                Center(
+                                  child: SizedBox(
+                                    width: videoW,
+                                    height: videoH,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      clipBehavior: Clip.hardEdge,
+                                      children: [
+                                        _buildPlayer(filter),
+                                        // Effects under In/Out reveal — screen-blend
+                                        // on top of leaves caused green/yellow glow.
+                                        if (_overlayEffect != null)
+                                          Positioned.fill(
+                                            child: _VideoLiveEffectOverlay(
+                                              effect: _overlayEffect!,
+                                              positionSec: _globalPositionSec,
+                                              startSec: _effectStartSec,
+                                              endSec:
+                                                  _effectEndSec ??
+                                                  _totalDurationSec,
+                                              onFramesReady: (_) {
+                                                if (_effectPreviewLoading &&
+                                                    mounted) {
+                                                  setState(
+                                                    () =>
+                                                        _effectPreviewLoading =
+                                                            false,
+                                                  );
+                                                }
+                                              },
+                                            ),
+                                          ),
+                                        if (_effectPreviewLoading)
+                                          const Positioned.fill(
+                                            child: PreparingPreviewOverlay(),
+                                          ),
+                                        // CapCut In/Out reveal — above effects so
+                                        // opaque FX pixels cover particles cleanly.
+                                        if (_revealOverlayActive &&
+                                            _activeRevealId != null &&
+                                            (_revealImages[_activeRevealId]
+                                                    ?.isNotEmpty ??
+                                                false))
+                                          Positioned.fill(
+                                            child: IgnorePointer(
+                                              child: _buildRevealOverlayLayer(),
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ),
-                                if (_effectPreviewLoading)
-                                  const Positioned.fill(
-                                    child: PreparingPreviewOverlay(),
-                                  ),
-                                // CapCut In/Out reveal — above effects so opaque
-                                // FX pixels cover particles cleanly.
-                                if (_revealOverlayActive &&
-                                    _activeRevealId != null &&
-                                    (_revealImages[_activeRevealId]
-                                            ?.isNotEmpty ??
-                                        false))
-                                  Positioned.fill(
-                                    child: IgnorePointer(
-                                      child: _buildRevealOverlayLayer(),
-                                    ),
-                                  ),
+                                ),
                                 // CapCut live text: move / rotate / scale handles.
                                 LiveTextOverlaysLayer(
                                   project: _textOverlays,
@@ -2164,7 +2205,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                                       ),
                                     ),
                                   ),
-                                // Selection outline (teal — avoid FX green-screen color).
+                                // Selection outline (teal — avoid FX green-screen).
                                 if (_selectedClipIndex != null)
                                   Positioned.fill(
                                     child: IgnorePointer(
@@ -2224,12 +2265,13 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                         key: const ValueKey('timeline_workspace'),
                         child: Column(
                           children: [
-                            // Volume / Edit replace the timeline area; navbar stays.
+                            // Ratio / Volume / Edit replace filmstrip; navbar stays.
                             Expanded(
-                              child:
-                                  _musicToolsOpen &&
-                                      _musicEditOpen &&
-                                      _music != null
+                              child: _ratioSheetOpen
+                                  ? _buildRatioToolSheet(rs)
+                                  : _musicToolsOpen &&
+                                        _musicEditOpen &&
+                                        _music != null
                                   ? MusicEditSheet(
                                       music: _music!,
                                       onClose: () => setState(
@@ -2254,9 +2296,11 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                       ),
               ),
               // Filter/sticker/… panels stay below (optional extra chrome).
+              // Ratio uses green-zone SectionSheet — not an extra panel.
               if (_selectedClipIndex == null &&
                   _tool != null &&
                   !_mediaToolSheetOpen &&
+                  !_ratioSheetOpen &&
                   !_textToolsOpen &&
                   !_clipEditorSheetOpen)
                 _buildToolPanel(rs),
@@ -2725,9 +2769,10 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
           child: Align(
             alignment: Alignment.centerRight,
             child: () {
-              // Speed / Animation / picker / Volume / Music-edit: sheet has ✓.
+              // Speed / Animation / Ratio / picker / Volume / Music-edit: sheet has ✓.
               if (_clipEditorSheetOpen ||
                   _mediaToolSheetOpen ||
+                  _ratioSheetOpen ||
                   _musicVolumeOpen ||
                   _musicEditOpen) {
                 return const SizedBox.shrink();
@@ -4485,7 +4530,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     VideoEditorTool.effects => 'Effects',
     VideoEditorTool.filters => 'Filters',
     VideoEditorTool.sticker => 'Sticker',
-    VideoEditorTool.aspectRatio => 'Aspect Ratio',
+    VideoEditorTool.aspectRatio => 'Ratio',
     VideoEditorTool.background => 'Background',
   };
 
@@ -4512,7 +4557,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   };
 
   Widget _buildToolPanel(AppResponsive rs) {
-    // Text / Music / Effects use fullscreen green-area sheets (slideshow parity).
+    // Text / Music / Effects / Ratio use green-area sheets (slideshow parity).
     return Container(
       height: rs.h(150),
       width: double.infinity,
@@ -4523,13 +4568,107 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       child: switch (_tool!) {
         VideoEditorTool.filters => _filtersPanel(rs),
         VideoEditorTool.sticker => _stickerPanel(rs),
-        VideoEditorTool.aspectRatio => _ratioPanel(rs),
         VideoEditorTool.background => _bgPanel(rs),
+        VideoEditorTool.aspectRatio ||
         VideoEditorTool.edit ||
         VideoEditorTool.text ||
         VideoEditorTool.music ||
         VideoEditorTool.effects => const SizedBox.shrink(),
       },
+    );
+  }
+
+  /// CapCut Ratio sheet — replaces filmstrip only; bottom navbar stays below.
+  Widget _buildRatioToolSheet(AppResponsive rs) {
+    // Filmstrip slot only (`_bottomWorkspaceH` − navbar 72).
+    final sheetH = _timelinePanelH - _timelineHeaderH;
+    return SectionSheet(
+      title: 'Ratio',
+      height: sheetH,
+      compactHeader: true,
+      showTopDivider: false,
+      onClose: () => setState(() => _tool = null),
+      onConfirm: () => setState(() => _tool = null),
+      child: _ratioChoiceRow(rs),
+    );
+  }
+
+  Widget _ratioChoiceRow(AppResponsive rs) {
+    final canvasAr = _aspectH > 0 ? _aspectW / _aspectH : 9 / 16;
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.fromLTRB(rs.w(12), rs.h(4), rs.w(12), rs.h(8)),
+      itemCount: AspectPreset.values.length,
+      separatorBuilder: (_, _) => SizedBox(width: rs.w(10)),
+      itemBuilder: (context, i) {
+        final preset = AspectPreset.values[i];
+        final isSelected = (canvasAr - preset.ratio).abs() < 0.001;
+        return GestureDetector(
+          onTap: () => setState(() {
+            final parts = preset.label.split(':');
+            if (parts.length == 2) {
+              _aspectW = double.tryParse(parts[0]) ?? preset.ratio;
+              _aspectH = double.tryParse(parts[1]) ?? 1;
+            } else {
+              _aspectW = preset.ratio;
+              _aspectH = 1;
+            }
+          }),
+          child: SizedBox(
+            width: rs.w(64),
+            child: Column(
+              children: [
+                SizedBox(
+                  width: rs.w(58),
+                  height: rs.w(58),
+                  child: PrimarySelectedBorder(
+                    selected: isSelected,
+                    borderRadius: 10,
+                    width: 2,
+                    unselectedColor: const Color(0xFFE0E0E0),
+                    backgroundColor: const Color(0xFFF3F3F3),
+                    child: Center(child: _ratioGlyph(preset.ratio)),
+                  ),
+                ),
+                SizedBox(height: rs.h(4)),
+                isSelected
+                    ? PrimaryGradientMask(
+                        child: Text(
+                          preset.label,
+                          style: TextStyle(
+                            fontSize: rs.sp(11),
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      )
+                    : Text(
+                        preset.label,
+                        style: TextStyle(
+                          fontSize: rs.sp(11),
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textDark,
+                        ),
+                      ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _ratioGlyph(double ratio) {
+    const box = 28.0;
+    final width = ratio >= 1 ? box : box * ratio;
+    final height = ratio >= 1 ? box / ratio : box;
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(color: const Color(0xFF9E9E9E), width: 1.4),
+      ),
     );
   }
 
@@ -4818,62 +4957,6 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
                     ),
                   ),
                   child: Text(s, style: TextStyle(fontSize: rs.sp(26))),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _ratioPanel(AppResponsive rs) {
-    final ratios = <(String, double, double)>[
-      ('9:16', 9, 16),
-      ('16:9', 16, 9),
-      ('1:1', 1, 1),
-      ('4:5', 4, 5),
-      ('4:3', 4, 3),
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _panelHeader(rs, 'Aspect Ratio'),
-        Expanded(
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.symmetric(horizontal: rs.w(14)),
-            itemCount: ratios.length,
-            separatorBuilder: (_, _) => SizedBox(width: rs.w(10)),
-            itemBuilder: (context, i) {
-              final r = ratios[i];
-              final selected = _aspectW == r.$2 && _aspectH == r.$3;
-              return GestureDetector(
-                onTap: () => setState(() {
-                  _aspectW = r.$2;
-                  _aspectH = r.$3;
-                }),
-                child: Container(
-                  width: rs.w(72),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(rs.r(10)),
-                    border: Border.all(
-                      color: selected ? AppColors.primary : AppColors.border,
-                      width: selected ? 2 : 1,
-                    ),
-                    color: selected
-                        ? AppColors.primarySoft
-                        : AppColors.surfaceAlt,
-                  ),
-                  child: Text(
-                    r.$1,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textDark,
-                      fontSize: rs.sp(13),
-                    ),
-                  ),
                 ),
               );
             },
